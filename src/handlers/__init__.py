@@ -10,8 +10,10 @@ from .agents import register_agent_commands
 from .base import CommandContext, HandlerDependencies
 from .basic import register_basic_commands
 from .budget import register_budget_commands
+from .claude_cli import register_claude_cli_commands
 from .parallel import register_parallel_commands
 from .pty import register_pty_commands
+from .queue import register_queue_commands
 
 
 def register_commands(
@@ -39,6 +41,8 @@ def register_commands(
 
     register_basic_commands(app, deps)
     register_parallel_commands(app, deps)
+    register_queue_commands(app, deps)
+    register_claude_cli_commands(app, deps)
     register_agent_commands(app, deps)
     register_budget_commands(app, deps)
     register_pty_commands(app, deps)

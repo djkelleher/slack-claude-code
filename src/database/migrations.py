@@ -140,6 +140,23 @@ CREATE TABLE IF NOT EXISTS hook_events (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Queue items for FIFO command queue
+CREATE TABLE IF NOT EXISTS queue_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    channel_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    output TEXT,
+    error_message TEXT,
+    position INTEGER NOT NULL,
+    message_ts TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
 CREATE INDEX IF NOT EXISTS idx_history_session ON command_history(session_id);
@@ -152,6 +169,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_agent_tasks_channel ON agent_tasks(channel_id);
 CREATE INDEX IF NOT EXISTS idx_permission_requests_status ON permission_requests(status);
 CREATE INDEX IF NOT EXISTS idx_hook_events_type ON hook_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_queue_items_status ON queue_items(status);
+CREATE INDEX IF NOT EXISTS idx_queue_items_channel ON queue_items(channel_id);
+CREATE INDEX IF NOT EXISTS idx_queue_items_position ON queue_items(channel_id, position);
 """
 
 

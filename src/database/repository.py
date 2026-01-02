@@ -4,7 +4,7 @@ import aiosqlite
 import json
 from datetime import datetime
 from typing import Optional
-from .models import Session, CommandHistory, ParallelJob
+from .models import Session, CommandHistory, ParallelJob, QueueItem
 
 # Default timeout for database operations (seconds)
 DB_TIMEOUT = 30.0
@@ -258,3 +258,110 @@ class DatabaseRepository:
             )
             await db.commit()
             return cursor.rowcount > 0
+
+    # Queue operations
+    async def add_to_queue(
+        self, session_id: int, channel_id: str, prompt: str
+    ) -> QueueItem:
+        """Add a command to the FIFO queue."""
+        async with self._get_connection() as db:
+            # Get next position for this channel
+            cursor = await db.execute(
+                """SELECT COALESCE(MAX(position), 0) + 1
+                   FROM queue_items WHERE channel_id = ?""",
+                (channel_id,),
+            )
+            position = (await cursor.fetchone())[0]
+
+            cursor = await db.execute(
+                """INSERT INTO queue_items
+                   (session_id, channel_id, prompt, position, status)
+                   VALUES (?, ?, ?, ?, 'pending')""",
+                (session_id, channel_id, prompt, position),
+            )
+            await db.commit()
+
+            cursor = await db.execute(
+                "SELECT * FROM queue_items WHERE id = ?", (cursor.lastrowid,)
+            )
+            row = await cursor.fetchone()
+            return QueueItem.from_row(row)
+
+    async def get_pending_queue_items(self, channel_id: str) -> list[QueueItem]:
+        """Get all pending queue items for a channel, ordered by position."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """SELECT * FROM queue_items
+                   WHERE channel_id = ? AND status = 'pending'
+                   ORDER BY position ASC""",
+                (channel_id,),
+            )
+            rows = await cursor.fetchall()
+            return [QueueItem.from_row(row) for row in rows]
+
+    async def get_queue_item(self, item_id: int) -> Optional[QueueItem]:
+        """Get a queue item by ID."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "SELECT * FROM queue_items WHERE id = ?", (item_id,)
+            )
+            row = await cursor.fetchone()
+            return QueueItem.from_row(row) if row else None
+
+    async def update_queue_item_status(
+        self,
+        item_id: int,
+        status: str,
+        output: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Update queue item status."""
+        async with self._get_connection() as db:
+            if status == "running":
+                await db.execute(
+                    "UPDATE queue_items SET status = ?, started_at = ? WHERE id = ?",
+                    (status, datetime.now().isoformat(), item_id),
+                )
+            elif status in ("completed", "failed", "cancelled"):
+                await db.execute(
+                    """UPDATE queue_items
+                       SET status = ?, output = ?, error_message = ?, completed_at = ?
+                       WHERE id = ?""",
+                    (status, output, error_message, datetime.now().isoformat(), item_id),
+                )
+            else:
+                await db.execute(
+                    "UPDATE queue_items SET status = ? WHERE id = ?",
+                    (status, item_id),
+                )
+            await db.commit()
+
+    async def remove_queue_item(self, item_id: int) -> bool:
+        """Remove a queue item (only if pending)."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "DELETE FROM queue_items WHERE id = ? AND status = 'pending'",
+                (item_id,),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def clear_queue(self, channel_id: str) -> int:
+        """Clear all pending queue items for a channel."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "DELETE FROM queue_items WHERE channel_id = ? AND status = 'pending'",
+                (channel_id,),
+            )
+            await db.commit()
+            return cursor.rowcount
+
+    async def get_running_queue_item(self, channel_id: str) -> Optional[QueueItem]:
+        """Get the currently running queue item for a channel."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "SELECT * FROM queue_items WHERE channel_id = ? AND status = 'running'",
+                (channel_id,),
+            )
+            row = await cursor.fetchone()
+            return QueueItem.from_row(row) if row else None

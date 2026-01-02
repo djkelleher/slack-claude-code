@@ -423,3 +423,144 @@ class SlackFormatter:
 
         file_title = f"claude_response_{command_id}.txt"
         return blocks, output, file_title
+
+    @classmethod
+    def queue_status(cls, pending: list, running) -> list[dict]:
+        """Format queue status for /qv command."""
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": ":inbox_tray: Command Queue",
+                    "emoji": True,
+                },
+            },
+            {"type": "divider"},
+        ]
+
+        if running:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":arrow_forward: *Running:* #{running.id}\n> {cls._escape_markdown(running.prompt[:100])}{'...' if len(running.prompt) > 100 else ''}",
+                    },
+                }
+            )
+            blocks.append({"type": "divider"})
+
+        if not pending:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "_Queue is empty_"},
+                }
+            )
+        else:
+            for item in pending[:10]:
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*#{item.id}* (pos {item.position})\n> {cls._escape_markdown(item.prompt[:100])}{'...' if len(item.prompt) > 100 else ''}",
+                        },
+                    }
+                )
+
+            if len(pending) > 10:
+                blocks.append(
+                    {
+                        "type": "context",
+                        "elements": [
+                            {"type": "mrkdwn", "text": f"_... and {len(pending) - 10} more_"}
+                        ],
+                    }
+                )
+
+        return blocks
+
+    @classmethod
+    def queue_item_running(cls, item) -> list[dict]:
+        """Format running queue item status."""
+        return [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":arrow_forward: *Processing Queue Item #{item.id}*\n> {cls._escape_markdown(item.prompt[:200])}{'...' if len(item.prompt) > 200 else ''}",
+                },
+            },
+        ]
+
+    @classmethod
+    def queue_item_complete(cls, item, result) -> list[dict]:
+        """Format completed queue item."""
+        status = ":white_check_mark:" if result.success else ":x:"
+        output = result.output or result.error or "No output"
+        if len(output) > 2500:
+            output = output[:2500] + "\n\n... (truncated)"
+
+        return [
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"{status} Queue Item #{item.id}"},
+                ],
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"> {cls._escape_markdown(item.prompt[:100])}{'...' if len(item.prompt) > 100 else ''}",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": output},
+            },
+        ]
+
+    @classmethod
+    def directory_listing(cls, path: str, entries: list[tuple[str, bool]]) -> list[dict]:
+        """Format directory listing for /ls command.
+
+        Parameters
+        ----------
+        path : str
+            The directory path being listed.
+        entries : list[tuple[str, bool]]
+            List of (name, is_directory) tuples.
+        """
+        if not entries:
+            output = "_Directory is empty_"
+        else:
+            lines = []
+            for name, is_dir in entries:
+                if is_dir:
+                    lines.append(f":file_folder: {name}/")
+                else:
+                    lines.append(f":page_facing_up: {name}")
+
+            if len(lines) > 50:
+                output = "\n".join(lines[:50]) + f"\n\n_... and {len(lines) - 50} more_"
+            else:
+                output = "\n".join(lines)
+
+        return [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":open_file_folder: *{path}*",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": output},
+            },
+        ]

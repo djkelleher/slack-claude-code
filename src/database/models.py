@@ -79,3 +79,38 @@ class ParallelJob:
             created_at=datetime.fromisoformat(row[9]) if row[9] else datetime.now(),
             completed_at=datetime.fromisoformat(row[10]) if row[10] else None,
         )
+
+
+@dataclass
+class QueueItem:
+    """Item in the FIFO command queue."""
+
+    id: Optional[int] = None
+    session_id: int = 0
+    channel_id: str = ""
+    prompt: str = ""
+    status: str = "pending"  # pending, running, completed, failed, cancelled
+    output: Optional[str] = None
+    error_message: Optional[str] = None
+    position: int = 0
+    message_ts: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "QueueItem":
+        return cls(
+            id=row[0],
+            session_id=row[1],
+            channel_id=row[2],
+            prompt=row[3],
+            status=row[4],
+            output=row[5],
+            error_message=row[6],
+            position=row[7],
+            message_ts=row[8],
+            created_at=datetime.fromisoformat(row[9]) if row[9] else datetime.now(),
+            started_at=datetime.fromisoformat(row[10]) if row[10] else None,
+            completed_at=datetime.fromisoformat(row[11]) if row[11] else None,
+        )

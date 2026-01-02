@@ -1,4 +1,2 @@
-from .models import Session, CommandHistory, ParallelJob
+from .models import Session, CommandHistory, ParallelJob, QueueItem
 from .repository import DatabaseRepository
-
-__all__ = ["Session", "CommandHistory", "ParallelJob", "DatabaseRepository"]

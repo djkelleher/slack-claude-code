@@ -1,0 +1,266 @@
+"""Queue command handlers: /q, /qv, /qc, /qr."""
+
+import asyncio
+import logging
+
+from slack_bolt.async_app import AsyncApp
+
+from src.config import config
+from src.utils.formatting import SlackFormatter
+
+from .base import CommandContext, HandlerDependencies, slack_command
+
+logger = logging.getLogger(__name__)
+
+# Track queue processors per channel to prevent duplicate processors
+_queue_processors: dict[str, asyncio.Task] = {}
+
+
+def _create_queue_task(coro, channel_id: str, task_logger=None) -> asyncio.Task:
+    """Create a queue processor task with proper tracking.
+
+    Prevents duplicate processors by storing references per channel.
+    """
+    task = asyncio.create_task(coro)
+    _queue_processors[channel_id] = task
+
+    def done_callback(t: asyncio.Task) -> None:
+        # Remove from tracking when done
+        if _queue_processors.get(channel_id) is t:
+            del _queue_processors[channel_id]
+        if not t.cancelled():
+            exc = t.exception()
+            if exc:
+                log = task_logger or logger
+                log.error(f"Queue processor failed: {exc}", exc_info=exc)
+
+    task.add_done_callback(done_callback)
+    return task
+
+
+def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
+    """Register queue command handlers.
+
+    Parameters
+    ----------
+    app : AsyncApp
+        The Slack Bolt async app.
+    deps : HandlerDependencies
+        Shared handler dependencies.
+    """
+
+    @app.command("/q")
+    @slack_command(require_text=True, usage_hint="Usage: /q <prompt>")
+    async def handle_queue_add(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /q <prompt> command - add command to FIFO queue."""
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id, config.DEFAULT_WORKING_DIR
+        )
+
+        # Add to queue
+        queue_item = await deps.db.add_to_queue(
+            session_id=session.id,
+            channel_id=ctx.channel_id,
+            prompt=ctx.text,
+        )
+
+        # Get current queue state
+        pending = await deps.db.get_pending_queue_items(ctx.channel_id)
+        running = await deps.db.get_running_queue_item(ctx.channel_id)
+
+        # Confirm to user
+        position = len(pending)
+        if running:
+            position += 1  # Account for currently running item
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            text=f"Added to queue (position {position}): {ctx.text[:100]}...",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":inbox_tray: Added to queue (position #{position})\n"
+                        f"> {SlackFormatter._escape_markdown(ctx.text[:200])}"
+                        f"{'...' if len(ctx.text) > 200 else ''}",
+                    },
+                },
+            ],
+        )
+
+        # Start queue processor if not already running
+        if ctx.channel_id not in _queue_processors:
+            _create_queue_task(
+                _process_queue(ctx.channel_id, deps, ctx.client, ctx.logger),
+                ctx.channel_id,
+                ctx.logger,
+            )
+
+    @app.command("/qv")
+    @slack_command()
+    async def handle_queue_view(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /qv command - view queue status."""
+        pending = await deps.db.get_pending_queue_items(ctx.channel_id)
+        running = await deps.db.get_running_queue_item(ctx.channel_id)
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            text="Queue status",
+            blocks=SlackFormatter.queue_status(pending, running),
+        )
+
+    @app.command("/qc")
+    @slack_command()
+    async def handle_queue_clear(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /qc command - clear pending queue items."""
+        cleared = await deps.db.clear_queue(ctx.channel_id)
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            text=f"Cleared {cleared} item(s) from queue",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":wastebasket: Cleared {cleared} pending item(s) from queue.",
+                    },
+                },
+            ],
+        )
+
+    @app.command("/qr")
+    @slack_command(require_text=True, usage_hint="Usage: /qr <item_id>")
+    async def handle_queue_remove(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /qr <id> command - remove specific queue item."""
+        try:
+            item_id = int(ctx.text)
+        except ValueError:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text="Invalid item ID",
+                blocks=SlackFormatter.error_message("Invalid item ID. Usage: /qr <item_id>"),
+            )
+            return
+
+        removed = await deps.db.remove_queue_item(item_id)
+
+        if removed:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Removed item #{item_id} from queue",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f":wastebasket: Removed item #{item_id} from queue.",
+                        },
+                    },
+                ],
+            )
+        else:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Item #{item_id} not found or not pending",
+                blocks=SlackFormatter.error_message(
+                    f"Item #{item_id} not found or is already running/completed."
+                ),
+            )
+
+
+async def _process_queue(
+    channel_id: str,
+    deps: HandlerDependencies,
+    client,
+    task_logger,
+) -> None:
+    """Process queue items for a channel sequentially.
+
+    Maintains Claude session continuity across queue items.
+
+    Parameters
+    ----------
+    channel_id : str
+        Slack channel ID.
+    deps : HandlerDependencies
+        Handler dependencies.
+    client
+        Slack client for API calls.
+    task_logger
+        Logger instance.
+    """
+    log = task_logger or logger
+
+    while True:
+        # Get next pending item
+        pending = await deps.db.get_pending_queue_items(channel_id)
+        if not pending:
+            log.info(f"Queue empty for channel {channel_id}, stopping processor")
+            break
+
+        item = pending[0]
+
+        # Mark as running
+        await deps.db.update_queue_item_status(item.id, "running")
+
+        # Notify channel
+        response = await client.chat_postMessage(
+            channel=channel_id,
+            text=f"Processing queue item #{item.id}",
+            blocks=SlackFormatter.queue_item_running(item),
+        )
+        message_ts = response["ts"]
+
+        try:
+            # Get session for working directory and claude session continuity
+            session = await deps.db.get_or_create_session(
+                channel_id, config.DEFAULT_WORKING_DIR
+            )
+
+            # Execute with session resume for continuity
+            result = await deps.executor.execute(
+                prompt=item.prompt,
+                working_directory=session.working_directory,
+                session_id=channel_id,
+                resume_session_id=session.claude_session_id,
+                execution_id=f"queue_{item.id}",
+            )
+
+            # Update Claude session for next item
+            if result.session_id:
+                await deps.db.update_session_claude_id(channel_id, result.session_id)
+
+            # Update queue item
+            if result.success:
+                await deps.db.update_queue_item_status(
+                    item.id, "completed", output=result.output
+                )
+            else:
+                await deps.db.update_queue_item_status(
+                    item.id, "failed", output=result.output, error_message=result.error
+                )
+
+            # Update Slack message with result
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=f"Completed queue item #{item.id}",
+                blocks=SlackFormatter.queue_item_complete(item, result),
+            )
+
+        except Exception as e:
+            log.error(f"Queue item {item.id} failed: {e}")
+            await deps.db.update_queue_item_status(
+                item.id, "failed", error_message=str(e)
+            )
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=f"Queue item #{item.id} failed",
+                blocks=SlackFormatter.error_message(f"Queue item failed: {e}"),
+            )
+
+        # Small delay between items to avoid rate limits
+        await asyncio.sleep(0.5)

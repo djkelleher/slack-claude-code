@@ -1,7 +1,9 @@
-"""Basic command handlers: /cwd, /c."""
+"""Basic command handlers: /cwd, /cd, /ls, /c."""
 
 import asyncio
+import os
 import uuid
+from pathlib import Path
 
 from slack_bolt.async_app import AsyncApp
 
@@ -52,6 +54,106 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             channel=ctx.channel_id,
             text=f"Working directory updated to: {result}",
             blocks=SlackFormatter.cwd_updated(str(result)),
+        )
+
+    @app.command("/ls")
+    @slack_command()
+    async def handle_ls(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /ls [path] command - list directory contents."""
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id, config.DEFAULT_WORKING_DIR
+        )
+        base_path = Path(session.working_directory).expanduser()
+
+        # Resolve target path (relative or absolute)
+        if ctx.text:
+            target_path = (base_path / ctx.text).resolve()
+        else:
+            target_path = base_path.resolve()
+
+        # Validate path exists and is a directory
+        if not target_path.exists():
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Error: Path does not exist: {target_path}",
+                blocks=SlackFormatter.error_message(f"Path does not exist: {target_path}"),
+            )
+            return
+
+        if not target_path.is_dir():
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Error: Not a directory: {target_path}",
+                blocks=SlackFormatter.error_message(f"Not a directory: {target_path}"),
+            )
+            return
+
+        # List directory contents
+        try:
+            entries = list(target_path.iterdir())
+            # Sort: directories first, then files, alphabetically
+            dirs = sorted([e for e in entries if e.is_dir()], key=lambda x: x.name.lower())
+            files = sorted([e for e in entries if e.is_file()], key=lambda x: x.name.lower())
+            sorted_entries = dirs + files
+
+            # Convert to (name, is_dir) tuples for formatter
+            entry_tuples = [(e.name, e.is_dir()) for e in sorted_entries]
+
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Contents of {target_path}",
+                blocks=SlackFormatter.directory_listing(str(target_path), entry_tuples),
+            )
+        except PermissionError:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Error: Permission denied: {target_path}",
+                blocks=SlackFormatter.error_message(f"Permission denied: {target_path}"),
+            )
+
+    @app.command("/cd")
+    @slack_command()
+    async def handle_cd(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /cd [path] command - change working directory with relative path support."""
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id, config.DEFAULT_WORKING_DIR
+        )
+
+        if not ctx.text:
+            # No argument - show current directory
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f":file_folder: Current working directory: `{session.working_directory}`",
+            )
+            return
+
+        # Resolve path relative to current working directory
+        base_path = Path(session.working_directory).expanduser()
+        target_path = (base_path / ctx.text).resolve()
+
+        # Validate path exists and is a directory
+        if not target_path.exists():
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Error: Path does not exist: {target_path}",
+                blocks=SlackFormatter.error_message(f"Path does not exist: {target_path}"),
+            )
+            return
+
+        if not target_path.is_dir():
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Error: Not a directory: {target_path}",
+                blocks=SlackFormatter.error_message(f"Not a directory: {target_path}"),
+            )
+            return
+
+        # Update working directory
+        await deps.db.update_session_cwd(ctx.channel_id, str(target_path))
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            text=f"Working directory updated to: {target_path}",
+            blocks=SlackFormatter.cwd_updated(str(target_path)),
         )
 
     @app.command("/c")

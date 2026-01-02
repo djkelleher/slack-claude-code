@@ -10,8 +10,9 @@ A Slack app that allows you to run Claude Code CLI commands from Slack. Each cha
 - **Usage Budgeting**: Time-aware usage thresholds (day/night) with automatic pausing
 - **Permission Approval**: Handle MCP tool permissions via Slack buttons
 - **Command History**: Commands are stored in the database and can be rerun via buttons
-- **Parallel Execution**: Run the same prompt in N terminals simultaneously, then aggregate results
-- **Sequential Loops**: Execute an array of commands in sequence, optionally looping N times
+- **FIFO Queue**: Queue multiple commands for sequential execution
+- **Filesystem Navigation**: Navigate directories with `/ls` and `/cd` commands
+- **Claude CLI Passthrough**: Access Claude Code CLI commands directly from Slack
 - **Streaming Output**: See Claude's responses as they're generated
 - **Hook System**: Event-driven architecture for session events
 
@@ -60,10 +61,13 @@ poetry install
    | Command | Description |
    |---------|-------------|
    | `/c` | Run a Claude Code command |
-   | `/cwd` | Set working directory |
-   | `/g` | Gather: run prompt in N terminals, then aggregate |
-   | `/s` | Run array of commands sequentially |
-   | `/l` | Run command array N times |
+   | `/cwd` | Show or set working directory |
+   | `/ls` | List directory contents |
+   | `/cd` | Change working directory (supports relative paths) |
+   | `/q` | Add command to FIFO queue |
+   | `/qv` | View queue status |
+   | `/qc` | Clear pending queue items |
+   | `/qr` | Remove specific queue item |
    | `/st` | View active jobs |
    | `/cc` | Cancel running jobs |
    | `/task` | Start multi-agent workflow task |
@@ -72,6 +76,13 @@ poetry install
    | `/usage` | Show Claude Pro usage |
    | `/budget` | Configure usage thresholds |
    | `/pty` | Show PTY session status |
+   | `/clear` | Reset Claude conversation |
+   | `/add-dir` | Add directory to Claude context |
+   | `/compact` | Compact conversation |
+   | `/cost` | Show session cost |
+   | `/claude-help` | Show Claude Code help |
+   | `/doctor` | Run Claude Code diagnostics |
+   | `/claude-config` | Show Claude Code config |
 
 6. **Install to Workspace**:
 
@@ -181,33 +192,73 @@ Shows PTY session status for the current channel:
 
 Includes a "Restart Session" button to force-restart the session.
 
-### Gather (Parallel + Aggregate)
+### Filesystem Navigation
 
 ```
-/g 3 Analyze this codebase and identify potential bugs
+/ls
 ```
 
-Runs the prompt in 3 separate Claude terminals simultaneously. When all complete, gathers the outputs and sends them to a new Claude session with:
-
-> "Aggregate these analyses and create a plan: [outputs]"
-
-This is useful for getting multiple independent perspectives on the same problem, then synthesizing them into a coherent plan.
-
-### Sequential Commands
+Lists contents of the current working directory.
 
 ```
-/s ["Read the README", "List the main files", "Explain the architecture"]
+/ls src/handlers
 ```
 
-Executes commands in order, posting each result as a threaded reply.
-
-### Looping Commands
+Lists contents of a specific directory (relative or absolute path).
 
 ```
-/l 5 ["Run the tests", "Fix any failures"]
+/cd ..
 ```
 
-Runs the command array 5 times in sequence. Useful for iterative development.
+Changes to the parent directory.
+
+```
+/cd src/handlers
+```
+
+Changes to a subdirectory (supports relative paths).
+
+### Command Queue
+
+```
+/q Explain the main entry point
+/q List all API endpoints
+/q Write tests for the user service
+```
+
+Adds commands to a FIFO queue. Commands execute one at a time in order, maintaining Claude session continuity.
+
+```
+/qv
+```
+
+Shows the current queue status (pending items and running item).
+
+```
+/qc
+```
+
+Clears all pending items from the queue.
+
+```
+/qr 42
+```
+
+Removes a specific queue item by ID.
+
+### Claude CLI Commands
+
+Access Claude Code CLI commands directly from Slack:
+
+```
+/clear              # Reset conversation
+/add-dir ./lib      # Add directory to context
+/compact            # Compact conversation
+/cost               # Show session cost
+/claude-help        # Show Claude Code help
+/doctor             # Run diagnostics
+/claude-config      # Show config
+```
 
 ### Job Management
 
@@ -262,10 +313,12 @@ slack-claude-code/
 │   │   └── slack_ui.py     # Approval button blocks
 │   ├── handlers/           # Slack event handlers
 │   │   ├── base.py         # Command decorator and context
-│   │   ├── basic.py        # /c and /cwd commands
+│   │   ├── basic.py        # /c, /cwd, /ls, /cd commands
+│   │   ├── queue.py        # /q, /qv, /qc, /qr commands
+│   │   ├── claude_cli.py   # Claude CLI passthrough commands
 │   │   ├── agents.py       # /task, /tasks, /task-cancel
 │   │   ├── budget.py       # /usage and /budget commands
-│   │   ├── parallel.py     # /g, /s, /l, /st, /cc commands
+│   │   ├── parallel.py     # /st, /cc commands
 │   │   ├── pty.py          # /pty command
 │   │   └── actions.py      # Button interactions
 │   └── utils/              # Helpers
@@ -352,6 +405,9 @@ AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP  # Comma-separated
 - **Timeouts**: Default 5-minute timeout. Set `COMMAND_TIMEOUT` to adjust.
 - **Multi-agent tasks**: Use `/task` for complex work that benefits from planning and evaluation.
 - **Night mode**: Higher usage thresholds at night allow more intensive work during off-hours.
+- **Command queue**: Use `/q` to queue multiple commands that will execute sequentially.
+- **Filesystem**: Use `/ls` and `/cd` to navigate directories without running Claude commands.
+- **Session management**: Use `/clear` to reset conversation, `/compact` to reduce context size.
 
 ## Troubleshooting
 
