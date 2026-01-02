@@ -1,6 +1,7 @@
 """Parallel and sequential execution command handlers: /g, /s, /l, /st, /cc."""
 
 import asyncio
+import logging
 
 from slack_bolt.async_app import AsyncApp
 
@@ -9,6 +10,34 @@ from src.utils.formatting import SlackFormatter
 from src.utils.validators import parse_parallel_args, parse_loop_args, validate_json_commands
 
 from .base import CommandContext, HandlerDependencies, slack_command
+
+logger = logging.getLogger(__name__)
+
+# Track background tasks to prevent orphaned coroutines
+_background_tasks: set[asyncio.Task] = set()
+
+# Maximum concurrent jobs per channel to prevent resource exhaustion
+MAX_CONCURRENT_JOBS_PER_CHANNEL = 3
+
+
+def _create_tracked_task(coro, task_logger=None) -> asyncio.Task:
+    """Create a background task with proper tracking and error handling.
+
+    Prevents orphaned tasks by storing references and logging exceptions.
+    """
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def done_callback(t: asyncio.Task) -> None:
+        _background_tasks.discard(t)
+        if not t.cancelled():
+            exc = t.exception()
+            if exc:
+                log = task_logger or logger
+                log.error(f"Background task failed: {exc}", exc_info=exc)
+
+    task.add_done_callback(done_callback)
+    return task
 
 
 def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
@@ -42,6 +71,19 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
             return
 
         n, prompt = result
+
+        # Rate limiting: check active jobs for this channel
+        active_jobs = await deps.db.get_active_jobs(channel_id)
+        if len(active_jobs) >= MAX_CONCURRENT_JOBS_PER_CHANNEL:
+            await client.chat_postMessage(
+                channel=channel_id,
+                blocks=SlackFormatter.error_message(
+                    f"Maximum {MAX_CONCURRENT_JOBS_PER_CHANNEL} concurrent jobs allowed. "
+                    "Wait for existing jobs to complete or cancel them with /cc."
+                ),
+            )
+            return
+
         session = await deps.db.get_or_create_session(
             channel_id, config.DEFAULT_WORKING_DIR
         )
@@ -62,7 +104,7 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
         await deps.db.update_parallel_job(job.id, message_ts=response["ts"])
 
         # Run parallel execution in background
-        asyncio.create_task(
+        _create_tracked_task(
             _run_parallel_execution(
                 job_id=job.id,
                 n=n,
@@ -73,7 +115,8 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
                 deps=deps,
                 client=client,
                 logger=logger,
-            )
+            ),
+            task_logger=logger,
         )
 
     @app.command("/s")
@@ -96,6 +139,19 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
             return
 
         commands_list = result
+
+        # Rate limiting: check active jobs for this channel
+        active_jobs = await deps.db.get_active_jobs(channel_id)
+        if len(active_jobs) >= MAX_CONCURRENT_JOBS_PER_CHANNEL:
+            await client.chat_postMessage(
+                channel=channel_id,
+                blocks=SlackFormatter.error_message(
+                    f"Maximum {MAX_CONCURRENT_JOBS_PER_CHANNEL} concurrent jobs allowed. "
+                    "Wait for existing jobs to complete or cancel them with /cc."
+                ),
+            )
+            return
+
         session = await deps.db.get_or_create_session(
             channel_id, config.DEFAULT_WORKING_DIR
         )
@@ -116,7 +172,7 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
         await deps.db.update_parallel_job(job.id, message_ts=response["ts"])
 
         # Run sequential execution in background
-        asyncio.create_task(
+        _create_tracked_task(
             _run_sequential_execution(
                 job_id=job.id,
                 commands=commands_list,
@@ -127,7 +183,8 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
                 deps=deps,
                 client=client,
                 logger=logger,
-            )
+            ),
+            task_logger=logger,
         )
 
     @app.command("/l")
@@ -150,6 +207,19 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
             return
 
         loop_count, commands_list = result
+
+        # Rate limiting: check active jobs for this channel
+        active_jobs = await deps.db.get_active_jobs(channel_id)
+        if len(active_jobs) >= MAX_CONCURRENT_JOBS_PER_CHANNEL:
+            await client.chat_postMessage(
+                channel=channel_id,
+                blocks=SlackFormatter.error_message(
+                    f"Maximum {MAX_CONCURRENT_JOBS_PER_CHANNEL} concurrent jobs allowed. "
+                    "Wait for existing jobs to complete or cancel them with /cc."
+                ),
+            )
+            return
+
         session = await deps.db.get_or_create_session(
             channel_id, config.DEFAULT_WORKING_DIR
         )
@@ -170,7 +240,7 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
         await deps.db.update_parallel_job(job.id, message_ts=response["ts"])
 
         # Run sequential execution in background
-        asyncio.create_task(
+        _create_tracked_task(
             _run_sequential_execution(
                 job_id=job.id,
                 commands=commands_list,
@@ -181,7 +251,8 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
                 deps=deps,
                 client=client,
                 logger=logger,
-            )
+            ),
+            task_logger=logger,
         )
 
     @app.command("/st")
@@ -275,6 +346,25 @@ async def _run_parallel_execution(
     logger
         Logger instance.
     """
+    cancel_event = asyncio.Event()
+    execution_tasks: list[asyncio.Task] = []
+
+    async def check_cancelled() -> None:
+        """Periodically check if job was cancelled and cancel running tasks."""
+        while not cancel_event.is_set():
+            try:
+                job = await deps.db.get_parallel_job(job_id)
+                if job.status == "cancelled":
+                    cancel_event.set()
+                    # Cancel all running execution tasks
+                    for task in execution_tasks:
+                        if not task.done():
+                            task.cancel()
+                    return
+            except Exception as e:
+                logger.warning(f"Error checking cancellation: {e}")
+            await asyncio.sleep(1)
+
     try:
         await deps.db.update_parallel_job(job_id, status="running")
 
@@ -286,24 +376,43 @@ async def _run_parallel_execution(
             blocks=SlackFormatter.parallel_job_status(job),
         )
 
+        # Start cancellation checker
+        checker_task = asyncio.create_task(check_cancelled())
+
         # Run n parallel executions - each gets its own fresh session
-        tasks = []
         for i in range(n):
             execution_id = f"parallel_{job_id}_{i}"
-            task = deps.executor.execute(
+            task = asyncio.create_task(deps.executor.execute(
                 prompt=prompt,
                 working_directory=working_directory,
                 execution_id=execution_id,
-            )
-            tasks.append(task)
+            ))
+            execution_tasks.append(task)
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Wait for all tasks to complete
+        results = await asyncio.gather(*execution_tasks, return_exceptions=True)
+
+        # Stop cancellation checker
+        cancel_event.set()
+        checker_task.cancel()
+        try:
+            await checker_task
+        except asyncio.CancelledError:
+            pass
+
+        # Check if job was cancelled before processing
+        job = await deps.db.get_parallel_job(job_id)
+        if job.status == "cancelled":
+            return
 
         # Process results
         processed_results = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                processed_results.append({"terminal": i + 1, "error": str(result)})
+                if isinstance(result, asyncio.CancelledError):
+                    processed_results.append({"terminal": i + 1, "error": "Cancelled"})
+                else:
+                    processed_results.append({"terminal": i + 1, "error": str(result)})
             else:
                 processed_results.append({
                     "terminal": i + 1,
@@ -313,11 +422,6 @@ async def _run_parallel_execution(
                 })
 
         await deps.db.update_parallel_job(job_id, results=processed_results)
-
-        # Check if job was cancelled
-        job = await deps.db.get_parallel_job(job_id)
-        if job.status == "cancelled":
-            return
 
         # Create aggregation prompt
         outputs_text = "\n\n".join(
@@ -438,7 +542,7 @@ async def _run_sequential_execution(
                 result = await deps.executor.execute(
                     prompt=cmd,
                     working_directory=working_directory,
-                    session_id=job_session_id,
+                    resume_session_id=job_session_id,
                     execution_id=execution_id,
                 )
 

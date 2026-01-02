@@ -125,6 +125,7 @@ class SubprocessExecutor:
                 except asyncio.TimeoutError:
                     logger.warning(f"Timeout waiting for Claude output")
                     process.terminate()
+                    await process.wait()  # Prevent zombie process
                     return ExecutionResult(
                         success=False,
                         output=accumulated_output,
@@ -198,6 +199,7 @@ class SubprocessExecutor:
 
         except asyncio.CancelledError:
             process.terminate()
+            await process.wait()  # Prevent zombie process
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
@@ -208,6 +210,7 @@ class SubprocessExecutor:
         except Exception as e:
             logger.error(f"Error during execution: {e}")
             process.terminate()
+            await process.wait()  # Prevent zombie process
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,

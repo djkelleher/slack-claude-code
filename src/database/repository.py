@@ -1,42 +1,49 @@
+import asyncio
+
 import aiosqlite
 import json
 from datetime import datetime
 from typing import Optional
 from .models import Session, CommandHistory, ParallelJob
 
+# Default timeout for database operations (seconds)
+DB_TIMEOUT = 30.0
+
 
 class DatabaseRepository:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, timeout: float = DB_TIMEOUT):
         self.db_path = db_path
+        self.timeout = timeout
 
     def _get_connection(self) -> aiosqlite.Connection:
         return aiosqlite.connect(self.db_path)
 
+    async def _with_timeout(self, coro, timeout: float = None):
+        """Wrap a coroutine with a timeout to prevent hanging operations."""
+        return await asyncio.wait_for(coro, timeout=timeout or self.timeout)
+
     # Session operations
     async def get_or_create_session(self, channel_id: str, default_cwd: str = "~") -> Session:
-        """Get existing session for channel or create a new one."""
+        """Get existing session for channel or create a new one.
+
+        Uses INSERT OR IGNORE to avoid race conditions when multiple
+        concurrent requests try to create the same session.
+        """
         async with self._get_connection() as db:
-            cursor = await db.execute(
-                "SELECT * FROM sessions WHERE channel_id = ?", (channel_id,)
-            )
-            row = await cursor.fetchone()
-
-            if row:
-                # Update last_active
-                await db.execute(
-                    "UPDATE sessions SET last_active = ? WHERE channel_id = ?",
-                    (datetime.now().isoformat(), channel_id),
-                )
-                await db.commit()
-                return Session.from_row(row)
-
-            # Create new session
+            # Atomic insert-or-ignore (UNIQUE constraint on channel_id handles duplicates)
             await db.execute(
-                "INSERT INTO sessions (channel_id, working_directory) VALUES (?, ?)",
+                """INSERT OR IGNORE INTO sessions (channel_id, working_directory)
+                   VALUES (?, ?)""",
                 (channel_id, default_cwd),
+            )
+            # Update last_active timestamp
+            await db.execute(
+                "UPDATE sessions SET last_active = ? WHERE channel_id = ?",
+                (datetime.now().isoformat(), channel_id),
             )
             await db.commit()
 
+            # Fetch the session (guaranteed to exist now)
             cursor = await db.execute(
                 "SELECT * FROM sessions WHERE channel_id = ?", (channel_id,)
             )

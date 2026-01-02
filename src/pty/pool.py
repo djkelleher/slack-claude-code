@@ -4,6 +4,7 @@ Uses a simple dict-based registry with async-safe operations.
 """
 
 import asyncio
+import threading
 from datetime import datetime, timedelta
 from typing import Callable, Awaitable, Optional
 
@@ -21,12 +22,19 @@ class PTYSessionPool:
     _sessions: dict[str, PTYSession] = {}
     _lock: Optional[asyncio.Lock] = None
     _cleanup_task: Optional[asyncio.Task] = None
+    _init_lock: threading.Lock = threading.Lock()  # Thread-safe lock initialization
 
     @classmethod
     def _get_lock(cls) -> asyncio.Lock:
-        """Get or create the async lock (must be called from async context)."""
+        """Get or create the async lock (must be called from async context).
+
+        Uses double-checked locking pattern with a threading.Lock to ensure
+        thread-safe initialization of the asyncio.Lock.
+        """
         if cls._lock is None:
-            cls._lock = asyncio.Lock()
+            with cls._init_lock:
+                if cls._lock is None:  # Double-check after acquiring lock
+                    cls._lock = asyncio.Lock()
         return cls._lock
 
     @classmethod

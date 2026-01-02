@@ -161,7 +161,9 @@ class UsageChecker:
                 pass
 
         logger.warning(f"Could not parse usage from: {output[:100]}")
-        return 0.0
+        # Return 100% to be safe - assume near limit when parsing fails
+        # This prevents bypassing budget limits due to parsing errors
+        return 100.0
 
     def _parse_reset_time(self, output: str) -> Optional[datetime]:
         """Parse reset time from output.

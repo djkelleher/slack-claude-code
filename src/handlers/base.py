@@ -6,6 +6,9 @@ from typing import Any, Callable
 
 from src.utils.formatting import SlackFormatter
 
+# Maximum length for command input to prevent resource exhaustion
+MAX_PROMPT_LENGTH = 50000
+
 
 @dataclass
 class CommandContext:
@@ -92,13 +95,18 @@ class HandlerDependencies:
         return self._budget_scheduler
 
 
-def slack_command(require_text: bool = False, usage_hint: str = "") -> Callable:
+def slack_command(
+    require_text: bool = False,
+    usage_hint: str = "",
+    max_length: int = MAX_PROMPT_LENGTH,
+) -> Callable:
     """Decorator for Slack command handlers.
 
     Handles common boilerplate:
     - Automatic ack() call
     - CommandContext creation
     - Optional text validation
+    - Input length validation
     - Exception handling with error message formatting
 
     Parameters
@@ -107,6 +115,8 @@ def slack_command(require_text: bool = False, usage_hint: str = "") -> Callable:
         If True, validates that command text is not empty.
     usage_hint : str
         Usage hint shown when text validation fails.
+    max_length : int
+        Maximum allowed length for input text.
 
     Returns
     -------
@@ -135,6 +145,17 @@ def slack_command(require_text: bool = False, usage_hint: str = "") -> Callable:
                     channel=ctx.channel_id,
                     blocks=SlackFormatter.error_message(
                         f"Please provide input. {usage_hint}"
+                    ),
+                )
+                return
+
+            # Validate input length to prevent resource exhaustion
+            if len(ctx.text) > max_length:
+                await client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    blocks=SlackFormatter.error_message(
+                        f"Input too long ({len(ctx.text):,} chars). "
+                        f"Maximum is {max_length:,} characters."
                     ),
                 )
                 return

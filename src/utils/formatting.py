@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import Optional
 from src.database.models import ParallelJob
@@ -236,14 +237,36 @@ class SlackFormatter:
         return blocks
 
     @classmethod
+    def _sanitize_error(cls, error: str) -> str:
+        """Sanitize error message to remove sensitive information."""
+        # Redact home directory paths
+        sanitized = re.sub(r'/home/[^/\s]+', '/home/***', error)
+        # Redact common sensitive values
+        sanitized = re.sub(
+            r'(password|secret|token|key|api_key|apikey|auth)=[^\s&"\']+',
+            r'\1=***',
+            sanitized,
+            flags=re.IGNORECASE,
+        )
+        # Redact environment variable values that might contain secrets
+        sanitized = re.sub(
+            r'(SLACK_BOT_TOKEN|SLACK_APP_TOKEN|SLACK_SIGNING_SECRET|DATABASE_PATH)=[^\s]+',
+            r'\1=***',
+            sanitized,
+            flags=re.IGNORECASE,
+        )
+        return sanitized[:2500]
+
+    @classmethod
     def error_message(cls, error: str) -> list[dict]:
-        """Format an error message."""
+        """Format an error message with sensitive information redacted."""
+        sanitized = cls._sanitize_error(error)
         return [
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f":x: *Error*\n```{cls._escape_markdown(error[:2500])}```",
+                    "text": f":x: *Error*\n```{cls._escape_markdown(sanitized)}```",
                 },
             }
         ]

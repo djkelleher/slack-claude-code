@@ -1,6 +1,12 @@
 import json
+import logging
 from dataclasses import dataclass
 from typing import Optional, Iterator
+
+logger = logging.getLogger(__name__)
+
+# Maximum size for buffered incomplete JSON to prevent memory exhaustion
+MAX_BUFFER_SIZE = 10000
 
 
 @dataclass
@@ -39,6 +45,11 @@ class StreamParser:
         except json.JSONDecodeError:
             # Might be partial JSON, buffer it
             self.buffer += line
+            # Prevent unbounded buffer growth
+            if len(self.buffer) > MAX_BUFFER_SIZE:
+                logger.warning("Stream buffer overflow, resetting")
+                self.buffer = ""
+                return None
             try:
                 data = json.loads(self.buffer)
                 self.buffer = ""
