@@ -1,10 +1,9 @@
 """PTY session pool for managing multiple concurrent sessions.
 
-Uses a simple dict-based registry with thread-safe operations.
+Uses a simple dict-based registry with async-safe operations.
 """
 
 import asyncio
-import threading
 from datetime import datetime, timedelta
 from typing import Callable, Awaitable, Optional
 
@@ -16,12 +15,19 @@ class PTYSessionPool:
     """Manages PTY sessions per Slack channel.
 
     Simple dict-based registry following project conventions.
-    Thread-safe with RLock.
+    Async-safe with asyncio.Lock.
     """
 
     _sessions: dict[str, PTYSession] = {}
-    _lock = threading.RLock()
+    _lock: Optional[asyncio.Lock] = None
     _cleanup_task: Optional[asyncio.Task] = None
+
+    @classmethod
+    def _get_lock(cls) -> asyncio.Lock:
+        """Get or create the async lock (must be called from async context)."""
+        if cls._lock is None:
+            cls._lock = asyncio.Lock()
+        return cls._lock
 
     @classmethod
     async def get_or_create(
@@ -42,41 +48,44 @@ class PTYSessionPool:
         Returns:
             PTYSession instance
         """
-        with cls._lock:
+        lock = cls._get_lock()
+        async with lock:
             if session_id in cls._sessions:
                 session = cls._sessions[session_id]
-                if session.state == SessionState.IDLE and session.is_alive():
-                    return session
-                elif session.state in (SessionState.STOPPED, SessionState.ERROR):
-                    # Clean up dead session
-                    await cls.remove(session_id)
+                if session.is_alive():
+                    # Return existing session regardless of state (IDLE, BUSY, etc.)
+                    # The session's internal lock will serialize access
+                    if session.state in (SessionState.IDLE, SessionState.BUSY,
+                                        SessionState.AWAITING_APPROVAL, SessionState.STARTING):
+                        return session
+                # Clean up dead/stopped/error sessions
+                await session.stop()
+                del cls._sessions[session_id]
 
-        # Create new session
-        config = PTYSessionConfig(working_directory=working_directory)
+            # Create new session
+            session_config = PTYSessionConfig(working_directory=working_directory)
 
-        async def state_callback(state: SessionState) -> None:
-            if on_state_change:
-                await on_state_change(session_id, state)
+            async def state_callback(state: SessionState) -> None:
+                if on_state_change:
+                    await on_state_change(session_id, state)
 
-        async def output_callback(data: str) -> None:
-            if on_output:
-                await on_output(session_id, data)
+            async def output_callback(data: str) -> None:
+                if on_output:
+                    await on_output(session_id, data)
 
-        session = PTYSession(
-            session_id=session_id,
-            config=config,
-            on_state_change=state_callback,
-            on_output=output_callback,
-        )
+            session = PTYSession(
+                session_id=session_id,
+                config=session_config,
+                on_state_change=state_callback,
+                on_output=output_callback,
+            )
 
-        success = await session.start()
-        if not success:
-            raise RuntimeError(f"Failed to start PTY session for {session_id}")
+            success = await session.start()
+            if not success:
+                raise RuntimeError(f"Failed to start PTY session for {session_id}")
 
-        with cls._lock:
             cls._sessions[session_id] = session
-
-        return session
+            return session
 
     @classmethod
     async def get(cls, session_id: str) -> Optional[PTYSession]:
@@ -84,7 +93,8 @@ class PTYSessionPool:
 
         Returns None if session doesn't exist or is dead.
         """
-        with cls._lock:
+        lock = cls._get_lock()
+        async with lock:
             session = cls._sessions.get(session_id)
             if session and session.is_alive():
                 return session
@@ -96,7 +106,8 @@ class PTYSessionPool:
 
         Returns True if session was found and removed.
         """
-        with cls._lock:
+        lock = cls._get_lock()
+        async with lock:
             session = cls._sessions.pop(session_id, None)
 
         if session:
@@ -107,8 +118,8 @@ class PTYSessionPool:
     @classmethod
     def list_sessions(cls) -> list[str]:
         """List all session IDs."""
-        with cls._lock:
-            return list(cls._sessions.keys())
+        # Safe to read without lock - just returns a snapshot
+        return list(cls._sessions.keys())
 
     @classmethod
     def get_session_info(cls, session_id: Optional[str] = None) -> Optional[dict] | list[dict]:
@@ -122,22 +133,22 @@ class PTYSessionPool:
             If session_id provided: dict with session info, or None if not found.
             If no session_id: list of dicts for all sessions.
         """
-        with cls._lock:
-            if session_id is not None:
-                session = cls._sessions.get(session_id)
-                if session:
-                    return {
-                        "session_id": session.session_id,
-                        "state": session.state.value,
-                        "working_directory": session.config.working_directory,
-                        "created_at": session.created_at.isoformat(),
-                        "last_activity": session.last_activity.isoformat(),
-                        "is_alive": session.is_alive(),
-                        "pid": session.pid,
-                    }
-                return None
+        # Safe to read without lock - just returns a snapshot
+        if session_id is not None:
+            session = cls._sessions.get(session_id)
+            if session:
+                return {
+                    "session_id": session.session_id,
+                    "state": session.state.value,
+                    "working_directory": session.config.working_directory,
+                    "created_at": session.created_at.isoformat(),
+                    "last_activity": session.last_activity.isoformat(),
+                    "is_alive": session.is_alive(),
+                    "pid": session.pid,
+                }
+            return None
 
-            sessions = list(cls._sessions.values())
+        sessions = list(cls._sessions.values())
 
         return [
             {
@@ -155,8 +166,7 @@ class PTYSessionPool:
     @classmethod
     async def cleanup_all(cls) -> None:
         """Stop all sessions (for shutdown)."""
-        with cls._lock:
-            session_ids = list(cls._sessions.keys())
+        session_ids = list(cls._sessions.keys())
 
         for session_id in session_ids:
             await cls.remove(session_id)
@@ -184,13 +194,10 @@ class PTYSessionPool:
     async def _cleanup_idle_sessions(cls) -> None:
         """Remove sessions that have been idle too long."""
         now = datetime.now()
-
-        with cls._lock:
-            session_ids = list(cls._sessions.keys())
+        session_ids = list(cls._sessions.keys())
 
         for session_id in session_ids:
-            with cls._lock:
-                session = cls._sessions.get(session_id)
+            session = cls._sessions.get(session_id)
 
             if not session:
                 continue
@@ -210,8 +217,7 @@ class PTYSessionPool:
     @classmethod
     def count(cls) -> int:
         """Get number of active sessions."""
-        with cls._lock:
-            return len(cls._sessions)
+        return len(cls._sessions)
 
     @classmethod
     async def send_to_session(

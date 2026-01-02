@@ -10,6 +10,7 @@ import asyncio
 import logging
 import signal
 import sys
+import traceback
 import uuid
 
 from slack_bolt.async_app import AsyncApp
@@ -18,9 +19,8 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from src.config import config
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
-from src.claude.executor import ClaudeExecutor
+from src.claude.subprocess_executor import SubprocessExecutor
 from src.handlers import register_commands, register_actions
-from src.pty import PTYSessionPool
 from src.utils.formatting import SlackFormatter
 
 # Configure logging
@@ -31,11 +31,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def shutdown(executor: ClaudeExecutor) -> None:
-    """Graceful shutdown: cleanup PTY sessions."""
-    logger.info("Shutting down - cleaning up PTY sessions...")
+async def shutdown(executor: SubprocessExecutor) -> None:
+    """Graceful shutdown: cleanup active processes."""
+    logger.info("Shutting down - cleaning up active processes...")
     await executor.shutdown()
-    logger.info("All PTY sessions terminated")
+    logger.info("All processes terminated")
 
 
 async def main():
@@ -54,7 +54,7 @@ async def main():
 
     # Create app components
     db = DatabaseRepository(config.DATABASE_PATH)
-    executor = ClaudeExecutor()  # Uses config.timeouts.execution.command
+    executor = SubprocessExecutor()  # Uses config.timeouts.execution.command
 
     # Create Slack app
     app = AsyncApp(
@@ -70,23 +70,25 @@ async def main():
     @app.event("app_mention")
     async def handle_mention(event, say, logger):
         """Respond to @mentions."""
-        session_count = PTYSessionPool.count()
         await say(
-            text=f"Hi! I'm Claude Code Bot. Just send me a message to run commands. "
-            f"Active sessions: {session_count}"
+            text="Hi! I'm Claude Code Bot. Just send me a message to run commands."
         )
 
     @app.event("message")
     async def handle_message(event, client, logger):
         """Handle messages and pipe them to Claude Code."""
+        logger.info(f"Message event received: {event.get('text', '')[:50]}...")
+
         # Ignore bot messages to avoid responding to ourselves
         if event.get("bot_id") or event.get("subtype"):
+            logger.debug(f"Ignoring bot/subtype message: bot_id={event.get('bot_id')}, subtype={event.get('subtype')}")
             return
 
         channel_id = event.get("channel")
         prompt = event.get("text", "").strip()
 
         if not prompt:
+            logger.debug("Empty prompt, ignoring")
             return
 
         # Get or create session
@@ -101,6 +103,7 @@ async def main():
         # Send initial processing message
         response = await client.chat_postMessage(
             channel=channel_id,
+            text=f"Processing: {prompt[:100]}...",  # Fallback for notifications
             blocks=SlackFormatter.processing_message(prompt),
         )
         message_ts = response["ts"]
@@ -124,6 +127,7 @@ async def main():
                         await client.chat_update(
                             channel=channel_id,
                             ts=message_ts,
+                            text=accumulated_output[:100] + "..." if len(accumulated_output) > 100 else accumulated_output,
                             blocks=SlackFormatter.streaming_update(
                                 prompt, accumulated_output
                             ),
@@ -135,7 +139,8 @@ async def main():
             result = await executor.execute(
                 prompt=prompt,
                 working_directory=session.working_directory,
-                session_id=session.claude_session_id,
+                session_id=channel_id,
+                resume_session_id=session.claude_session_id,  # Resume previous session if exists
                 execution_id=execution_id,
                 on_chunk=on_chunk,
             )
@@ -155,27 +160,56 @@ async def main():
                 )
 
             # Send final response
-            await client.chat_update(
-                channel=channel_id,
-                ts=message_ts,
-                blocks=SlackFormatter.command_response(
+            output = result.output or result.error or "No output"
+
+            if SlackFormatter.should_attach_file(output):
+                # Large response - attach as file
+                blocks, file_content, file_title = SlackFormatter.command_response_with_file(
                     prompt=prompt,
-                    output=result.output or result.error or "No output",
+                    output=output,
                     command_id=cmd_history.id,
                     duration_ms=result.duration_ms,
                     cost_usd=result.cost_usd,
                     is_error=not result.success,
-                ),
-            )
+                )
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text=output[:100] + "..." if len(output) > 100 else output,
+                    blocks=blocks,
+                )
+                # Upload file
+                await client.files_upload_v2(
+                    channel=channel_id,
+                    content=file_content,
+                    filename=file_title,
+                    title=file_title,
+                    thread_ts=message_ts,
+                )
+            else:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text=output[:100] + "..." if len(output) > 100 else output,
+                    blocks=SlackFormatter.command_response(
+                        prompt=prompt,
+                        output=output,
+                        command_id=cmd_history.id,
+                        duration_ms=result.duration_ms,
+                        cost_usd=result.cost_usd,
+                        is_error=not result.success,
+                    ),
+                )
 
         except Exception as e:
-            logger.error(f"Error executing command: {e}")
+            logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")
             await deps.db.update_command_status(
                 cmd_history.id, "failed", error_message=str(e)
             )
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
+                text=f"Error: {str(e)}",
                 blocks=SlackFormatter.error_message(str(e)),
             )
 

@@ -62,9 +62,12 @@ class TerminalOutputParser:
     # Carriage return for progress updates (line overwrites)
     CR_OVERWRITE = re.compile(r"[^\n]*\r(?!\n)")
 
-    # Claude prompt patterns
+    # Claude prompt patterns - match the input prompt line
+    # Claude Code shows: > Try "create a util..." or just >
     PROMPT_PATTERNS = [
-        re.compile(r"^>\s*$", re.MULTILINE),
+        re.compile(r"^>\s*$", re.MULTILINE),  # Just >
+        re.compile(r"^> Try ", re.MULTILINE),  # > Try "suggestion..."
+        re.compile(r"^> [A-Z]", re.MULTILINE),  # > followed by capital letter (user input area)
         re.compile(r"^\?\s*$", re.MULTILINE),
         re.compile(r"^claude\s*>\s*$", re.MULTILINE),
         re.compile(r"^\[.*?\]\s*>\s*$", re.MULTILINE),
@@ -89,6 +92,33 @@ class TerminalOutputParser:
         (re.compile(r"^Globbing:\s*(.+)$", re.MULTILINE), "glob"),
     ]
 
+    # Claude Code UI noise patterns to remove
+    UI_NOISE_PATTERNS = [
+        # Horizontal line separators (box drawing chars) - be more inclusive
+        re.compile(r"^[\s─━═\-─]{10,}$", re.MULTILINE),
+        # Status bar hints - generalize to match any "Try ..." line
+        re.compile(r"^\s*Try \".*\".*$", re.MULTILINE),
+        re.compile(r"^\s*\? for shortcuts.*$", re.MULTILINE),
+        re.compile(r"^\s*◯ /\w+.*$", re.MULTILINE),
+        # Output truncation notice
+        re.compile(r"^\s*\.+\s*\(earlier output truncated\).*$", re.MULTILINE),
+        # Failed marketplace install and other status messages
+        re.compile(r"^\s*Failed to install.*$", re.MULTILINE),
+        re.compile(r"^\s*Will retry on next startup.*$", re.MULTILINE),
+        # ASCII art logo lines - match lines with block chars
+        re.compile(r"^[*\s▐▛▜▌▝▘█▀▄░▒▓]+$", re.MULTILINE),
+        re.compile(r"^\s*\*[^*]+\*\s*$", re.MULTILINE),
+        # Version/model info line from startup
+        re.compile(r"^\s*Claude Code v[\d.]+.*$", re.MULTILINE),
+        re.compile(r"^\s*(Opus|Sonnet|Haiku).*Claude.*$", re.MULTILINE),
+        # Working directory indicator from startup (just tilde paths on their own line)
+        re.compile(r"^\s*~/?[\w\-/]*\s*$", re.MULTILINE),
+        # Empty box drawing lines
+        re.compile(r"^\s*[│┃|]\s*[│┃|]?\s*$", re.MULTILINE),
+        # Spinner/progress indicators
+        re.compile(r"^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◑◒◓]+\s*$", re.MULTILINE),
+    ]
+
     def __init__(self) -> None:
         self.buffer = ""
         self._last_was_prompt = False
@@ -99,6 +129,24 @@ class TerminalOutputParser:
         text = self.ANSI_ESCAPE.sub("", text)
         text = self.CONTROL_CHARS.sub("", text)
         text = self.CR_OVERWRITE.sub("", text)
+        return text
+
+    def clean_ui_noise(self, text: str) -> str:
+        """Remove Claude Code UI elements (borders, hints, logo, etc.)."""
+        for pattern in self.UI_NOISE_PATTERNS:
+            text = pattern.sub("", text)
+        # Collapse multiple blank lines into single
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        # Strip leading/trailing whitespace from each line while preserving structure
+        lines = text.split("\n")
+        lines = [line.rstrip() for line in lines]
+        text = "\n".join(lines)
+        return text.strip()
+
+    def clean_for_slack(self, text: str) -> str:
+        """Full cleaning pipeline for Slack output."""
+        text = self.strip_ansi(text)
+        text = self.clean_ui_noise(text)
         return text
 
     def detect_prompt(self, text: str) -> bool:

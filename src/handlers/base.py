@@ -1,7 +1,7 @@
 """Base infrastructure for Slack command handlers."""
 
+import traceback
 from dataclasses import dataclass, field
-from functools import wraps
 from typing import Any, Callable
 
 from src.utils.formatting import SlackFormatter
@@ -125,7 +125,6 @@ def slack_command(require_text: bool = False, usage_hint: str = "") -> Callable:
     """
 
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
         async def wrapper(ack, command, client, logger, **kwargs):
             await ack()
 
@@ -143,7 +142,7 @@ def slack_command(require_text: bool = False, usage_hint: str = "") -> Callable:
             try:
                 await func(ctx, **kwargs)
             except Exception as e:
-                logger.error(f"Error in {ctx.command_name}: {e}")
+                logger.error(f"Error in {ctx.command_name}: {e}\n{traceback.format_exc()}")
                 await client.chat_postMessage(
                     channel=ctx.channel_id,
                     blocks=SlackFormatter.error_message(str(e)),

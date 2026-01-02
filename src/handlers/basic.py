@@ -1,4 +1,7 @@
-"""Basic command handlers: /cwd."""
+"""Basic command handlers: /cwd, /c."""
+
+import asyncio
+import uuid
 
 from slack_bolt.async_app import AsyncApp
 
@@ -39,6 +42,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         if not valid:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
+                text=f"Error: {result}",
                 blocks=SlackFormatter.error_message(result),
             )
             return
@@ -46,5 +50,134 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         await deps.db.update_session_cwd(ctx.channel_id, str(result))
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
+            text=f"Working directory updated to: {result}",
             blocks=SlackFormatter.cwd_updated(str(result)),
         )
+
+    @app.command("/c")
+    @slack_command(require_text=True, usage_hint="Usage: /c <prompt>")
+    async def handle_claude(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /c <prompt> command - send prompt to Claude Code."""
+        prompt = ctx.text
+
+        # Get or create session
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id, config.DEFAULT_WORKING_DIR
+        )
+
+        # Create command history entry
+        cmd_history = await deps.db.add_command(session.id, prompt)
+        await deps.db.update_command_status(cmd_history.id, "running")
+
+        # Send initial processing message
+        response = await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            text=f"Processing: {prompt[:100]}...",
+            blocks=SlackFormatter.processing_message(prompt),
+        )
+        message_ts = response["ts"]
+
+        # Execute command with streaming updates
+        accumulated_output = ""
+        last_update_time = 0
+        execution_id = str(uuid.uuid4())
+
+        async def on_chunk(msg):
+            nonlocal accumulated_output, last_update_time
+
+            if msg.type == "assistant" and msg.content:
+                accumulated_output += msg.content
+
+                # Rate limit updates to avoid Slack API limits
+                current_time = asyncio.get_event_loop().time()
+                if current_time - last_update_time > config.timeouts.slack.message_update_throttle:
+                    last_update_time = current_time
+                    try:
+                        await ctx.client.chat_update(
+                            channel=ctx.channel_id,
+                            ts=message_ts,
+                            text=accumulated_output[:100] + "..." if len(accumulated_output) > 100 else accumulated_output,
+                            blocks=SlackFormatter.streaming_update(
+                                prompt, accumulated_output
+                            ),
+                        )
+                    except Exception as e:
+                        ctx.logger.warning(f"Failed to update message: {e}")
+
+        try:
+            result = await deps.executor.execute(
+                prompt=prompt,
+                working_directory=session.working_directory,
+                session_id=ctx.channel_id,
+                resume_session_id=session.claude_session_id,  # Resume previous session if exists
+                execution_id=execution_id,
+                on_chunk=on_chunk,
+            )
+
+            # Update session with Claude session ID for resume
+            if result.session_id:
+                await deps.db.update_session_claude_id(ctx.channel_id, result.session_id)
+
+            # Update command history
+            if result.success:
+                await deps.db.update_command_status(
+                    cmd_history.id, "completed", result.output
+                )
+            else:
+                await deps.db.update_command_status(
+                    cmd_history.id, "failed", result.output, result.error
+                )
+
+            # Send final response
+            output = result.output or result.error or "No output"
+
+            if SlackFormatter.should_attach_file(output):
+                # Large response - attach as file
+                blocks, file_content, file_title = SlackFormatter.command_response_with_file(
+                    prompt=prompt,
+                    output=output,
+                    command_id=cmd_history.id,
+                    duration_ms=result.duration_ms,
+                    cost_usd=result.cost_usd,
+                    is_error=not result.success,
+                )
+                await ctx.client.chat_update(
+                    channel=ctx.channel_id,
+                    ts=message_ts,
+                    text=output[:100] + "..." if len(output) > 100 else output,
+                    blocks=blocks,
+                )
+                # Upload file
+                await ctx.client.files_upload_v2(
+                    channel=ctx.channel_id,
+                    content=file_content,
+                    filename=file_title,
+                    title=file_title,
+                    thread_ts=message_ts,
+                )
+            else:
+                await ctx.client.chat_update(
+                    channel=ctx.channel_id,
+                    ts=message_ts,
+                    text=output[:100] + "..." if len(output) > 100 else output,
+                    blocks=SlackFormatter.command_response(
+                        prompt=prompt,
+                        output=output,
+                        command_id=cmd_history.id,
+                        duration_ms=result.duration_ms,
+                        cost_usd=result.cost_usd,
+                        is_error=not result.success,
+                    ),
+                )
+
+        except Exception as e:
+            ctx.logger.error(f"Error executing command: {e}")
+            await deps.db.update_command_status(
+                cmd_history.id, "failed", error_message=str(e)
+            )
+            await ctx.client.chat_update(
+                channel=ctx.channel_id,
+                ts=message_ts,
+                text=f"Error: {str(e)}",
+                blocks=SlackFormatter.error_message(str(e)),
+            )

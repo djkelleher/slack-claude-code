@@ -4,6 +4,7 @@ Uses pexpect to maintain a long-running Claude Code process with PTY interaction
 """
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,6 +14,8 @@ from typing import Callable, Awaitable, Optional
 
 import pexpect
 import pexpect.popen_spawn
+
+logger = logging.getLogger(__name__)
 
 from ..config import config
 from ..hooks import HookRegistry, HookEvent, HookEventType, create_context
@@ -131,7 +134,23 @@ class PTYSession:
             )
 
             # Wait for initial prompt
-            await self._wait_for_prompt()
+            prompt_found = await self._wait_for_prompt()
+            if not prompt_found:
+                await self._set_state(SessionState.ERROR)
+                return False
+
+            # Consume any remaining startup output to clear the buffer
+            await asyncio.sleep(0.5)
+            try:
+                while True:
+                    remaining = self.child.read_nonblocking(size=4096, timeout=0.1)
+                    if remaining:
+                        logger.info(f"Flushed {len(remaining)} chars of startup output")
+            except pexpect.TIMEOUT:
+                pass  # No more output, good
+            except pexpect.EOF:
+                pass
+
             await self._set_state(SessionState.IDLE)
 
             # Emit SESSION_START hook
@@ -186,8 +205,24 @@ class PTYSession:
             self.last_activity = datetime.now()
 
             try:
-                # Send the prompt
-                self.child.sendline(prompt)
+                # Small delay to ensure Claude Code is ready for input
+                await asyncio.sleep(0.5)
+
+                # Send the prompt - use send with \r for TUI compatibility
+                logger.info(f"Sending prompt to Claude: {prompt[:50]}...")
+                self.child.send(prompt + "\r")
+
+                # Give Claude a moment to start processing
+                await asyncio.sleep(0.2)
+
+                # Check if there's immediate output indicating the prompt was received
+                try:
+                    immediate = self.child.read_nonblocking(size=1024, timeout=0.5)
+                    if immediate:
+                        logger.info(f"Immediate output after prompt ({len(immediate)} chars)")
+                        self.accumulated_output = immediate
+                except pexpect.TIMEOUT:
+                    logger.info("No immediate output after prompt")
 
                 # Collect output until prompt returns or timeout
                 response = await self._read_until_prompt(
@@ -286,30 +321,46 @@ class PTYSession:
             return self.child.pid
         return None
 
-    async def _wait_for_prompt(self) -> None:
-        """Wait for the initial Claude prompt to appear."""
+    async def _wait_for_prompt(self) -> bool:
+        """Wait for the initial Claude prompt to appear.
+
+        Returns:
+            True if prompt was found, False otherwise.
+        """
         loop = asyncio.get_event_loop()
 
         def read_until_prompt():
-            # Look for common prompt patterns
+            # Claude Code shows > prompt after startup banner
+            # The pattern needs to account for ANSI codes that may follow
+            # Also match the input prompt which might just be waiting for input
             patterns = [
-                r">\s*$",
-                r"\?\s*$",
-                r"claude\s*>\s*$",
+                r">\s*(?:\x1b\[[0-9;]*[a-zA-Z])*\s*$",  # > with possible ANSI codes
+                r">\s*$",  # Simple > at end
+                r"\?\s*$",  # ? prompt
+                r"claude.*>\s*$",  # claude > prompt
             ]
 
-            for pattern in patterns:
-                try:
-                    self.child.expect(pattern, timeout=self.config.startup_timeout)
-                    return True
-                except pexpect.TIMEOUT:
-                    continue
-                except pexpect.EOF:
-                    return False
+            try:
+                # First try to match prompt patterns
+                index = self.child.expect(patterns, timeout=self.config.startup_timeout)
+                logger.info(f"Prompt matched pattern {index}")
+                return True
+            except pexpect.TIMEOUT:
+                # If timeout, check if we got any output at all
+                # Claude Code might be ready even without matching our patterns
+                if self.child.before:
+                    before_text = self.child.before if isinstance(self.child.before, str) else self.child.before.decode('utf-8', errors='replace')
+                    logger.info(f"No prompt match but got output ({len(before_text)} chars), assuming ready")
+                    # Check if we see typical Claude startup indicators
+                    if "Claude" in before_text or ">" in before_text or "help" in before_text:
+                        return True
+                logger.warning("Startup timeout with no recognizable output")
+                return False
+            except pexpect.EOF:
+                logger.error("EOF during startup - Claude process died")
+                return False
 
-            return False
-
-        await loop.run_in_executor(None, read_until_prompt)
+        return await loop.run_in_executor(None, read_until_prompt)
 
     async def _read_until_prompt(
         self,
@@ -359,6 +410,9 @@ class PTYSession:
                 last_output_time = current_time
                 self.accumulated_output += data
 
+                # Print raw output to terminal for monitoring
+                print(data, end='', flush=True)
+
                 if self.on_output:
                     await self.on_output(data)
 
@@ -391,8 +445,8 @@ class PTYSession:
             # Small delay to prevent busy loop
             await asyncio.sleep(0.01)
 
-        # Clean up the accumulated output (strip ANSI, etc.)
-        clean_output = self.parser.strip_ansi(self.accumulated_output)
+        # Clean up the accumulated output (strip ANSI and UI noise)
+        clean_output = self.parser.clean_for_slack(self.accumulated_output)
 
         return SessionResponse(
             output=clean_output.strip(),

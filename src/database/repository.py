@@ -9,13 +9,13 @@ class DatabaseRepository:
     def __init__(self, db_path: str):
         self.db_path = db_path
 
-    async def _get_connection(self) -> aiosqlite.Connection:
-        return await aiosqlite.connect(self.db_path)
+    def _get_connection(self) -> aiosqlite.Connection:
+        return aiosqlite.connect(self.db_path)
 
     # Session operations
     async def get_or_create_session(self, channel_id: str, default_cwd: str = "~") -> Session:
         """Get existing session for channel or create a new one."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             cursor = await db.execute(
                 "SELECT * FROM sessions WHERE channel_id = ?", (channel_id,)
             )
@@ -45,7 +45,7 @@ class DatabaseRepository:
 
     async def update_session_cwd(self, channel_id: str, cwd: str) -> None:
         """Update the working directory for a session."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             await db.execute(
                 "UPDATE sessions SET working_directory = ?, last_active = ? WHERE channel_id = ?",
                 (cwd, datetime.now().isoformat(), channel_id),
@@ -54,7 +54,7 @@ class DatabaseRepository:
 
     async def update_session_claude_id(self, channel_id: str, claude_session_id: str) -> None:
         """Update the Claude session ID for resume functionality."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             await db.execute(
                 "UPDATE sessions SET claude_session_id = ?, last_active = ? WHERE channel_id = ?",
                 (claude_session_id, datetime.now().isoformat(), channel_id),
@@ -64,7 +64,7 @@ class DatabaseRepository:
     # Command history operations
     async def add_command(self, session_id: int, command: str) -> CommandHistory:
         """Add a new command to history."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             cursor = await db.execute(
                 "INSERT INTO command_history (session_id, command, status) VALUES (?, ?, 'pending')",
                 (session_id, command),
@@ -85,7 +85,7 @@ class DatabaseRepository:
         error_message: Optional[str] = None,
     ) -> None:
         """Update command status and optionally output."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             if status in ("completed", "failed", "cancelled"):
                 await db.execute(
                     """UPDATE command_history
@@ -102,7 +102,7 @@ class DatabaseRepository:
 
     async def append_command_output(self, command_id: int, output_chunk: str) -> None:
         """Append output chunk to command (for streaming)."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             cursor = await db.execute(
                 "SELECT output FROM command_history WHERE id = ?", (command_id,)
             )
@@ -119,7 +119,7 @@ class DatabaseRepository:
         self, session_id: int, limit: int = 10, offset: int = 0
     ) -> tuple[list[CommandHistory], int]:
         """Get paginated command history for a session."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             # Get total count
             cursor = await db.execute(
                 "SELECT COUNT(*) FROM command_history WHERE session_id = ?",
@@ -140,7 +140,7 @@ class DatabaseRepository:
 
     async def get_command_by_id(self, command_id: int) -> Optional[CommandHistory]:
         """Get a specific command by ID."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             cursor = await db.execute(
                 "SELECT * FROM command_history WHERE id = ?", (command_id,)
             )
@@ -157,7 +157,7 @@ class DatabaseRepository:
         message_ts: Optional[str] = None,
     ) -> ParallelJob:
         """Create a new parallel job."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             cursor = await db.execute(
                 """INSERT INTO parallel_jobs
                    (session_id, channel_id, job_type, config, results, message_ts, status)
@@ -181,7 +181,7 @@ class DatabaseRepository:
         message_ts: Optional[str] = None,
     ) -> None:
         """Update parallel job fields."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             updates = []
             params = []
 
@@ -214,7 +214,7 @@ class DatabaseRepository:
 
     async def get_parallel_job(self, job_id: int) -> Optional[ParallelJob]:
         """Get a parallel job by ID."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             cursor = await db.execute(
                 "SELECT * FROM parallel_jobs WHERE id = ?", (job_id,)
             )
@@ -223,7 +223,7 @@ class DatabaseRepository:
 
     async def get_active_jobs(self, channel_id: Optional[str] = None) -> list[ParallelJob]:
         """Get all active (pending/running) jobs, optionally filtered by channel."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             if channel_id:
                 cursor = await db.execute(
                     """SELECT * FROM parallel_jobs
@@ -242,7 +242,7 @@ class DatabaseRepository:
 
     async def cancel_job(self, job_id: int) -> bool:
         """Cancel a job if it's still active."""
-        async with await self._get_connection() as db:
+        async with self._get_connection() as db:
             cursor = await db.execute(
                 """UPDATE parallel_jobs
                    SET status = 'cancelled', completed_at = ?

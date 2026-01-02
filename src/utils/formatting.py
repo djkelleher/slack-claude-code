@@ -7,6 +7,7 @@ class SlackFormatter:
     """Formats messages for Slack using Block Kit."""
 
     MAX_TEXT_LENGTH = 2900  # Leave room for formatting
+    FILE_THRESHOLD = 2000  # Attach as file if longer than this
 
     @classmethod
     def command_response(
@@ -23,17 +24,7 @@ class SlackFormatter:
         if len(output) > cls.MAX_TEXT_LENGTH:
             output = output[: cls.MAX_TEXT_LENGTH - 50] + "\n\n... (output truncated)"
 
-        status_emoji = "x" if is_error else "white_check_mark"
-
         blocks = [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": f":{status_emoji}: Claude Code Response",
-                    "emoji": True,
-                },
-            },
             {
                 "type": "context",
                 "elements": [
@@ -339,3 +330,73 @@ class SlackFormatter:
         else:
             days = int(seconds / 86400)
             return f"{days} day{'s' if days != 1 else ''} ago"
+
+    @classmethod
+    def should_attach_file(cls, output: str) -> bool:
+        """Check if output is large enough to warrant a file attachment."""
+        return len(output) > cls.FILE_THRESHOLD
+
+    @classmethod
+    def command_response_with_file(
+        cls,
+        prompt: str,
+        output: str,
+        command_id: int,
+        duration_ms: Optional[int] = None,
+        cost_usd: Optional[float] = None,
+        is_error: bool = False,
+    ) -> tuple[list[dict], str, str]:
+        """Format response with file attachment for large outputs.
+
+        Returns:
+            Tuple of (blocks, file_content, file_title)
+        """
+        # Extract a preview (first meaningful content)
+        lines = output.strip().split("\n")
+        preview_lines = []
+        char_count = 0
+        for line in lines:
+            if char_count + len(line) > 500:
+                break
+            preview_lines.append(line)
+            char_count += len(line)
+
+        preview = "\n".join(preview_lines)
+        if len(output) > len(preview):
+            preview += "\n\n_... (see attached file for full response)_"
+
+        blocks = [
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"> {cls._escape_markdown(prompt[:200])}{'...' if len(prompt) > 200 else ''}",
+                    }
+                ],
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": preview or "_No output_"},
+            },
+        ]
+
+        # Add footer with metadata
+        footer_parts = [f":page_facing_up: Full response attached ({len(output):,} chars)"]
+        if duration_ms:
+            footer_parts.append(f":stopwatch: {duration_ms / 1000:.1f}s")
+        if cost_usd:
+            footer_parts.append(f":moneybag: ${cost_usd:.4f}")
+        footer_parts.append(f":memo: History #{command_id}")
+
+        blocks.append({"type": "divider"})
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": " | ".join(footer_parts)}],
+            }
+        )
+
+        file_title = f"claude_response_{command_id}.txt"
+        return blocks, output, file_title
