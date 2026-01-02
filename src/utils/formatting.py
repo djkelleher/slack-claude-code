@@ -1,0 +1,341 @@
+from datetime import datetime
+from typing import Optional
+from src.database.models import ParallelJob
+
+
+class SlackFormatter:
+    """Formats messages for Slack using Block Kit."""
+
+    MAX_TEXT_LENGTH = 2900  # Leave room for formatting
+
+    @classmethod
+    def command_response(
+        cls,
+        prompt: str,
+        output: str,
+        command_id: int,
+        duration_ms: Optional[int] = None,
+        cost_usd: Optional[float] = None,
+        is_error: bool = False,
+    ) -> list[dict]:
+        """Format a command response."""
+        # Truncate output if needed
+        if len(output) > cls.MAX_TEXT_LENGTH:
+            output = output[: cls.MAX_TEXT_LENGTH - 50] + "\n\n... (output truncated)"
+
+        status_emoji = "x" if is_error else "white_check_mark"
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f":{status_emoji}: Claude Code Response",
+                    "emoji": True,
+                },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"> {cls._escape_markdown(prompt[:200])}{'...' if len(prompt) > 200 else ''}",
+                    }
+                ],
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": output or "_No output_"},
+            },
+        ]
+
+        # Add footer with metadata
+        footer_parts = []
+        if duration_ms:
+            footer_parts.append(f":stopwatch: {duration_ms / 1000:.1f}s")
+        if cost_usd:
+            footer_parts.append(f":moneybag: ${cost_usd:.4f}")
+        footer_parts.append(f":memo: History #{command_id}")
+
+        blocks.append({"type": "divider"})
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": " | ".join(footer_parts)}],
+            }
+        )
+
+        return blocks
+
+    @classmethod
+    def processing_message(cls, prompt: str) -> list[dict]:
+        """Format a 'processing' placeholder message."""
+        return [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":hourglass_flowing_sand: *Processing...*\n> {cls._escape_markdown(prompt[:100])}{'...' if len(prompt) > 100 else ''}",
+                },
+            }
+        ]
+
+    @classmethod
+    def streaming_update(cls, prompt: str, current_output: str, is_complete: bool = False) -> list[dict]:
+        """Format a streaming update message."""
+        status = ":white_check_mark: Complete" if is_complete else ":arrows_counterclockwise: Streaming..."
+
+        if len(current_output) > cls.MAX_TEXT_LENGTH:
+            current_output = current_output[-cls.MAX_TEXT_LENGTH + 50:]
+            current_output = "... (earlier output truncated)\n\n" + current_output
+
+        return [
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"{status}\n> {cls._escape_markdown(prompt[:100])}{'...' if len(prompt) > 100 else ''}",
+                    }
+                ],
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": current_output or "_Waiting for response..._"},
+            },
+        ]
+
+    @classmethod
+    def parallel_job_status(cls, job: ParallelJob) -> list[dict]:
+        """Format parallel job status."""
+        config = job.config
+        n_terminals = config.get("n_instances", 0)
+        results = job.results or []
+
+        status_text = {
+            "pending": ":hourglass: Pending",
+            "running": ":arrows_counterclockwise: Running",
+            "completed": ":white_check_mark: Completed",
+            "failed": ":x: Failed",
+            "cancelled": ":no_entry: Cancelled",
+        }.get(job.status, job.status)
+
+        # Build terminal status list
+        terminal_statuses = []
+        for i in range(n_terminals):
+            if i < len(results):
+                result = results[i]
+                if result.get("error"):
+                    terminal_statuses.append(f"Terminal {i + 1}: :x: Failed")
+                else:
+                    terminal_statuses.append(f"Terminal {i + 1}: :white_check_mark: Complete")
+            elif job.status == "running":
+                terminal_statuses.append(f"Terminal {i + 1}: :arrows_counterclockwise: Running...")
+            else:
+                terminal_statuses.append(f"Terminal {i + 1}: :hourglass: Pending")
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f":gear: Parallel Analysis ({n_terminals} terminals)",
+                    "emoji": True,
+                },
+            },
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": status_text}],
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "\n".join(terminal_statuses)},
+            },
+        ]
+
+        # Add action buttons
+        action_elements = []
+        if job.status == "completed" and results:
+            action_elements.append(
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "View Results", "emoji": True},
+                    "action_id": "view_parallel_results",
+                    "value": str(job.id),
+                }
+            )
+        if job.status in ("pending", "running"):
+            action_elements.append(
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Cancel", "emoji": True},
+                    "action_id": "cancel_job",
+                    "value": str(job.id),
+                    "style": "danger",
+                }
+            )
+
+        if action_elements:
+            blocks.append({"type": "actions", "elements": action_elements})
+
+        return blocks
+
+    @classmethod
+    def sequential_job_status(cls, job: ParallelJob) -> list[dict]:
+        """Format sequential loop job status."""
+        config = job.config
+        commands = config.get("commands", [])
+        loop_count = config.get("loop_count", 1)
+        results = job.results or []
+
+        current_loop = len(results) // len(commands) + 1 if commands else 1
+        current_cmd = len(results) % len(commands) if commands else 0
+
+        status_text = {
+            "pending": ":hourglass: Pending",
+            "running": f":arrows_counterclockwise: Running (Loop {current_loop}/{loop_count}, Command {current_cmd + 1}/{len(commands)})",
+            "completed": ":white_check_mark: Completed",
+            "failed": ":x: Failed",
+            "cancelled": ":no_entry: Cancelled",
+        }.get(job.status, job.status)
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f":repeat: Sequential Loop ({loop_count}x, {len(commands)} commands)",
+                    "emoji": True,
+                },
+            },
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": status_text}],
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Progress:* {len(results)} / {len(commands) * loop_count} commands completed",
+                },
+            },
+        ]
+
+        # Add action buttons
+        if job.status in ("pending", "running"):
+            blocks.append(
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "Cancel", "emoji": True},
+                            "action_id": "cancel_job",
+                            "value": str(job.id),
+                            "style": "danger",
+                        }
+                    ],
+                }
+            )
+
+        return blocks
+
+    @classmethod
+    def error_message(cls, error: str) -> list[dict]:
+        """Format an error message."""
+        return [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":x: *Error*\n```{cls._escape_markdown(error[:2500])}```",
+                },
+            }
+        ]
+
+    @classmethod
+    def cwd_updated(cls, new_cwd: str) -> list[dict]:
+        """Format CWD update confirmation."""
+        return [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":file_folder: Working directory updated to:\n`{new_cwd}`",
+                },
+            }
+        ]
+
+    @classmethod
+    def job_status_list(cls, jobs: list[ParallelJob]) -> list[dict]:
+        """Format list of active jobs."""
+        if not jobs:
+            return [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": ":inbox_tray: No active jobs"},
+                }
+            ]
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": ":gear: Active Jobs", "emoji": True},
+            },
+            {"type": "divider"},
+        ]
+
+        for job in jobs:
+            job_type = "Parallel" if job.job_type == "parallel_analysis" else "Sequential"
+            status_emoji = ":arrows_counterclockwise:" if job.status == "running" else ":hourglass:"
+
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Job #{job.id}* {status_emoji} {job_type}\n_{cls._time_ago(job.created_at)}_",
+                    },
+                    "accessory": {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Cancel", "emoji": True},
+                        "action_id": "cancel_job",
+                        "value": str(job.id),
+                        "style": "danger",
+                    },
+                }
+            )
+
+        return blocks
+
+    @staticmethod
+    def _escape_markdown(text: str) -> str:
+        """Escape special Slack markdown characters."""
+        # Only escape what's necessary for Slack mrkdwn
+        text = text.replace("&", "&amp;")
+        text = text.replace("<", "&lt;")
+        text = text.replace(">", "&gt;")
+        return text
+
+    @staticmethod
+    def _time_ago(dt: datetime) -> str:
+        """Format a datetime as 'X time ago'."""
+        now = datetime.now()
+        diff = now - dt
+
+        seconds = diff.total_seconds()
+        if seconds < 60:
+            return "just now"
+        elif seconds < 3600:
+            mins = int(seconds / 60)
+            return f"{mins} min{'s' if mins != 1 else ''} ago"
+        elif seconds < 86400:
+            hours = int(seconds / 3600)
+            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        else:
+            days = int(seconds / 86400)
+            return f"{days} day{'s' if days != 1 else ''} ago"

@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "slack-claude-code"
+version = "0.1.0"
+description = "Slack app for running Claude Code CLI commands"
+authors = ["Dan"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+slack-bolt = "^1.27.0"
+aiosqlite = "^0.21.0"
+python-dotenv = "^1.2.1"
+pexpect = "^4.9.0"
+aiohttp = "^3.13.2"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.2"
+pytest-asyncio = "^1.3.0"
+pytest-cov = "^7.0.0"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
