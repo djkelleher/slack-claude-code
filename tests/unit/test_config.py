@@ -210,7 +210,3 @@ class TestEnvironmentVariableOverrides:
         with mock.patch.dict(os.environ, {"AUTO_APPROVE_TOOLS": ""}, clear=False):
             # Empty string should result in empty list (due to conditional check)
             assert Config.AUTO_APPROVE_TOOLS == [] or Config.AUTO_APPROVE_TOOLS == [""]
-
-    def test_use_pty_sessions_default(self):
-        """USE_PTY_SESSIONS defaults to true."""
-        assert config.USE_PTY_SESSIONS is True

@@ -194,7 +194,6 @@ async def main():
         loop.add_signal_handler(sig, signal_handler)
 
     logger.info("Starting Slack Claude Code Bot...")
-    logger.info(f"PTY sessions enabled: {config.USE_PTY_SESSIONS}")
     logger.info(f"Default working directory: {config.DEFAULT_WORKING_DIR}")
     logger.info(f"Command timeout: {config.timeouts.execution.command}s")
     logger.info(f"Session idle timeout: {config.timeouts.pty.idle}s")

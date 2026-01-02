@@ -64,9 +64,6 @@ class Config:
     # Slack output limits
     MAX_OUTPUT_LENGTH: int = 2900  # Slack block limit is 3000, leave room for formatting
 
-    # PTY Sessions
-    USE_PTY_SESSIONS: bool = os.getenv("USE_PTY_SESSIONS", "true").lower() == "true"
-
     # Multi-agent workflow
     PLANNER_MAX_TURNS: int = int(os.getenv("PLANNER_MAX_TURNS", "10"))
     WORKER_MAX_TURNS: int = int(os.getenv("WORKER_MAX_TURNS", "30"))

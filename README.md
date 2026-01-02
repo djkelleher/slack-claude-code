@@ -327,7 +327,6 @@ DATABASE_PATH=./data/slack_claude.db
 DEFAULT_WORKING_DIR=/home/dan/projects
 
 # PTY Sessions
-USE_PTY_SESSIONS=true
 SESSION_IDLE_TIMEOUT=1800  # 30 minutes
 
 # Multi-Agent
