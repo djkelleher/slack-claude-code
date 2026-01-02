@@ -9,7 +9,7 @@ A Slack app that allows you to run Claude Code CLI commands from Slack. Each cha
 - **Multi-Agent Workflows**: Run complex tasks through Planner → Worker → Evaluator pipeline
 - **Usage Budgeting**: Time-aware usage thresholds (day/night) with automatic pausing
 - **Permission Approval**: Handle MCP tool permissions via Slack buttons
-- **Command History**: Browse, search, and rerun previous commands
+- **Command History**: Commands are stored in the database and can be rerun via buttons
 - **Parallel Execution**: Run the same prompt in N terminals simultaneously, then aggregate results
 - **Sequential Loops**: Execute an array of commands in sequence, optionally looping N times
 - **Streaming Output**: See Claude's responses as they're generated
@@ -60,13 +60,12 @@ poetry install
    | Command | Description |
    |---------|-------------|
    | `/c` | Run a Claude Code command |
-   | `/h` | View command history |
+   | `/cwd` | Set working directory |
    | `/g` | Gather: run prompt in N terminals, then aggregate |
    | `/s` | Run array of commands sequentially |
    | `/l` | Run command array N times |
    | `/st` | View active jobs |
    | `/cc` | Cancel running jobs |
-   | `/cwd` | Set working directory |
    | `/task` | Start multi-agent workflow task |
    | `/tasks` | List active multi-agent tasks |
    | `/task-cancel` | Cancel a multi-agent task |
@@ -113,12 +112,6 @@ Runs the prompt in Claude Code and sends the response.
 ```
 
 Sets the working directory for the current channel's session.
-
-```
-/h
-```
-
-Shows paginated command history with rerun buttons.
 
 ### Multi-Agent Workflows
 
@@ -249,7 +242,8 @@ slack-claude-code/
 │   │   └── repository.py   # Data access
 │   ├── claude/             # Claude CLI integration
 │   │   ├── executor.py     # PTY-based execution
-│   │   └── streaming.py    # JSON stream parsing
+│   │   ├── streaming.py    # JSON stream parsing
+│   │   └── subprocess_executor.py  # Subprocess-based execution
 │   ├── pty/                # PTY session management
 │   │   ├── session.py      # PTYSession class (pexpect)
 │   │   ├── pool.py         # Session pool registry
@@ -267,7 +261,12 @@ slack-claude-code/
 │   │   ├── handler.py      # PermissionManager
 │   │   └── slack_ui.py     # Approval button blocks
 │   ├── handlers/           # Slack event handlers
-│   │   ├── commands.py     # Slash commands
+│   │   ├── base.py         # Command decorator and context
+│   │   ├── basic.py        # /c and /cwd commands
+│   │   ├── agents.py       # /task, /tasks, /task-cancel
+│   │   ├── budget.py       # /usage and /budget commands
+│   │   ├── parallel.py     # /g, /s, /l, /st, /cc commands
+│   │   ├── pty.py          # /pty command
 │   │   └── actions.py      # Button interactions
 │   └── utils/              # Helpers
 │       ├── formatting.py   # Slack Block Kit
