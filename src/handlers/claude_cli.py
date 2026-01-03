@@ -133,3 +133,63 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_claude_config(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /claude-config command - show Claude Code config."""
         await _send_claude_command(ctx, "/config", deps)
+
+    @app.command("/context")
+    @slack_command()
+    async def handle_context(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /context command - visualize current context usage."""
+        await _send_claude_command(ctx, "/context", deps)
+
+    @app.command("/model")
+    @slack_command()
+    async def handle_model(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /model [name] command - show or change AI model."""
+        if ctx.text:
+            await _send_claude_command(ctx, f"/model {ctx.text}", deps)
+        else:
+            await _send_claude_command(ctx, "/model", deps)
+
+    @app.command("/resume")
+    @slack_command()
+    async def handle_resume(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /resume [session] command - resume a previous session."""
+        if ctx.text:
+            await _send_claude_command(ctx, f"/resume {ctx.text}", deps)
+        else:
+            await _send_claude_command(ctx, "/resume", deps)
+
+    @app.command("/init")
+    @slack_command()
+    async def handle_init(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /init command - initialize project with CLAUDE.md."""
+        await _send_claude_command(ctx, "/init", deps)
+
+    @app.command("/memory")
+    @slack_command()
+    async def handle_memory(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /memory command - edit CLAUDE.md memory files."""
+        await _send_claude_command(ctx, "/memory", deps)
+
+    @app.command("/review")
+    @slack_command()
+    async def handle_review(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /review command - request code review."""
+        await _send_claude_command(ctx, "/review", deps)
+
+    @app.command("/permissions")
+    @slack_command()
+    async def handle_permissions(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /permissions command - view or update permissions."""
+        await _send_claude_command(ctx, "/permissions", deps)
+
+    @app.command("/stats")
+    @slack_command()
+    async def handle_stats(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /stats command - show usage stats and history."""
+        await _send_claude_command(ctx, "/stats", deps)
+
+    @app.command("/todos")
+    @slack_command()
+    async def handle_todos(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /todos command - list current TODO items."""
+        await _send_claude_command(ctx, "/todos", deps)

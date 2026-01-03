@@ -82,6 +82,15 @@ poetry install
    | `/claude-help` | Show Claude Code help |
    | `/doctor` | Run Claude Code diagnostics |
    | `/claude-config` | Show Claude Code config |
+   | `/context` | Visualize context usage |
+   | `/model` | Show or change AI model |
+   | `/resume` | Resume a previous session |
+   | `/init` | Initialize project with CLAUDE.md |
+   | `/memory` | Edit CLAUDE.md memory files |
+   | `/review` | Request code review |
+   | `/permissions` | View or update permissions |
+   | `/stats` | Show usage stats and history |
+   | `/todos` | List current TODO items |
 
 6. **Install to Workspace**:
 
@@ -251,6 +260,15 @@ Access Claude Code CLI commands directly from Slack:
 /claude-help        # Show Claude Code help
 /doctor             # Run diagnostics
 /claude-config      # Show config
+/context            # Visualize context usage
+/model              # Show or change AI model
+/resume             # Resume a previous session
+/init               # Initialize project with CLAUDE.md
+/memory             # Edit CLAUDE.md memory files
+/review             # Request code review
+/permissions        # View or update permissions
+/stats              # Show usage stats and history
+/todos              # List current TODO items
 ```
 
 ### Job Management
