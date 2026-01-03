@@ -1,7 +1,6 @@
-"""Basic command handlers: /cwd, /cd, /ls, /c."""
+"""Basic command handlers: /cd, /ls, /c."""
 
 import asyncio
-import os
 import uuid
 from pathlib import Path
 
@@ -9,7 +8,6 @@ from slack_bolt.async_app import AsyncApp
 
 from src.config import config
 from src.utils.formatting import SlackFormatter
-from src.utils.validators import validate_path
 
 from .base import CommandContext, HandlerDependencies, slack_command
 
@@ -25,47 +23,17 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         Shared handler dependencies.
     """
 
-    @app.command("/cwd")
-    @slack_command()
-    async def handle_cwd(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /cwd [path] command - show or set working directory."""
-        if not ctx.text:
-            # Show current working directory
-            session = await deps.db.get_or_create_session(
-                ctx.channel_id, config.DEFAULT_WORKING_DIR
-            )
-            await ctx.client.chat_postMessage(
-                channel=ctx.channel_id,
-                text=f":file_folder: Current working directory: `{session.working_directory}`",
-            )
-            return
-
-        valid, result = validate_path(ctx.text)
-        if not valid:
-            await ctx.client.chat_postMessage(
-                channel=ctx.channel_id,
-                text=f"Error: {result}",
-                blocks=SlackFormatter.error_message(result),
-            )
-            return
-
-        await deps.db.update_session_cwd(ctx.channel_id, str(result))
-        await ctx.client.chat_postMessage(
-            channel=ctx.channel_id,
-            text=f"Working directory updated to: {result}",
-            blocks=SlackFormatter.cwd_updated(str(result)),
-        )
-
     @app.command("/ls")
     @slack_command()
     async def handle_ls(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /ls [path] command - list directory contents."""
+        """Handle /ls [path] command - list directory contents and show cwd."""
         session = await deps.db.get_or_create_session(
             ctx.channel_id, config.DEFAULT_WORKING_DIR
         )
         base_path = Path(session.working_directory).expanduser()
 
         # Resolve target path (relative or absolute)
+        is_cwd = not ctx.text
         if ctx.text:
             target_path = (base_path / ctx.text).resolve()
         else:
@@ -102,7 +70,9 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Contents of {target_path}",
-                blocks=SlackFormatter.directory_listing(str(target_path), entry_tuples),
+                blocks=SlackFormatter.directory_listing(
+                    str(target_path), entry_tuples, is_cwd=is_cwd
+                ),
             )
         except PermissionError:
             await ctx.client.chat_postMessage(

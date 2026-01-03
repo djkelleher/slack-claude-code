@@ -61,8 +61,7 @@ poetry install
    | Command | Description |
    |---------|-------------|
    | `/c` | Run a Claude Code command |
-   | `/cwd` | Show or set working directory |
-   | `/ls` | List directory contents |
+   | `/ls` | List directory contents (shows cwd when no argument) |
    | `/cd` | Change working directory (supports relative paths) |
    | `/q` | Add command to FIFO queue |
    | `/qv` | View queue status |
@@ -117,12 +116,6 @@ poetry run python run.py
 ```
 
 Runs the prompt in Claude Code and sends the response.
-
-```
-/cwd /home/dan/projects/my-app
-```
-
-Sets the working directory for the current channel's session.
 
 ### Multi-Agent Workflows
 
@@ -198,7 +191,7 @@ Includes a "Restart Session" button to force-restart the session.
 /ls
 ```
 
-Lists contents of the current working directory.
+Lists contents of the current working directory and displays the cwd path.
 
 ```
 /ls src/handlers
@@ -313,7 +306,7 @@ slack-claude-code/
 │   │   └── slack_ui.py     # Approval button blocks
 │   ├── handlers/           # Slack event handlers
 │   │   ├── base.py         # Command decorator and context
-│   │   ├── basic.py        # /c, /cwd, /ls, /cd commands
+│   │   ├── basic.py        # /c, /ls, /cd commands
 │   │   ├── queue.py        # /q, /qv, /qc, /qr commands
 │   │   ├── claude_cli.py   # Claude CLI passthrough commands
 │   │   ├── agents.py       # /task, /tasks, /task-cancel
@@ -406,7 +399,7 @@ AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP  # Comma-separated
 - **Multi-agent tasks**: Use `/task` for complex work that benefits from planning and evaluation.
 - **Night mode**: Higher usage thresholds at night allow more intensive work during off-hours.
 - **Command queue**: Use `/q` to queue multiple commands that will execute sequentially.
-- **Filesystem**: Use `/ls` and `/cd` to navigate directories without running Claude commands.
+- **Filesystem**: Use `/ls` to see cwd and contents, `/cd` to navigate directories.
 - **Session management**: Use `/clear` to reset conversation, `/compact` to reduce context size.
 
 ## Troubleshooting
@@ -419,7 +412,7 @@ AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP  # Comma-separated
 - Check the app is installed to your workspace
 
 **"Working directory does not exist"**
-- Use `/cwd` to set a valid directory
+- Use `/cd` to set a valid directory
 
 **Timeouts**
 - Increase `COMMAND_TIMEOUT` for long-running operations

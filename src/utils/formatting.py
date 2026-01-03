@@ -525,7 +525,9 @@ class SlackFormatter:
         ]
 
     @classmethod
-    def directory_listing(cls, path: str, entries: list[tuple[str, bool]]) -> list[dict]:
+    def directory_listing(
+        cls, path: str, entries: list[tuple[str, bool]], is_cwd: bool = False
+    ) -> list[dict]:
         """Format directory listing for /ls command.
 
         Parameters
@@ -534,6 +536,8 @@ class SlackFormatter:
             The directory path being listed.
         entries : list[tuple[str, bool]]
             List of (name, is_directory) tuples.
+        is_cwd : bool
+            If True, indicates this is the current working directory.
         """
         if not entries:
             output = "_Directory is empty_"
@@ -550,12 +554,17 @@ class SlackFormatter:
             else:
                 output = "\n".join(lines)
 
+        if is_cwd:
+            header = f":open_file_folder: *Current directory:* `{path}`"
+        else:
+            header = f":open_file_folder: *{path}*"
+
         return [
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f":open_file_folder: *{path}*",
+                    "text": header,
                 },
             },
             {"type": "divider"},
