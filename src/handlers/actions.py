@@ -67,15 +67,12 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         accumulated_output = ""
         last_update_time = 0
 
-        # Maximum accumulated output size (500KB) to prevent memory exhaustion
-        MAX_ACCUMULATED_SIZE = 500000
-
         async def on_chunk(msg):
             nonlocal accumulated_output, last_update_time
 
             if msg.type == "assistant" and msg.content:
                 # Limit accumulated output to prevent memory issues
-                if len(accumulated_output) < MAX_ACCUMULATED_SIZE:
+                if len(accumulated_output) < config.timeouts.streaming.max_accumulated_size:
                     accumulated_output += msg.content
 
                 current_time = asyncio.get_running_loop().time()

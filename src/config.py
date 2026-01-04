@@ -42,6 +42,13 @@ class CacheTimeouts:
 
 
 @dataclass
+class StreamingConfig:
+    """Configuration for streaming message updates."""
+
+    max_accumulated_size: int = 500000  # Maximum output buffer (500KB)
+
+
+@dataclass
 class TimeoutConfig:
     """Centralized timeout configuration."""
 
@@ -49,6 +56,7 @@ class TimeoutConfig:
     execution: ExecutionTimeouts
     slack: SlackTimeouts
     cache: CacheTimeouts
+    streaming: StreamingConfig
 
 
 class Config:
@@ -100,6 +108,9 @@ class Config:
         ),
         cache=CacheTimeouts(
             usage=int(os.getenv("USAGE_CACHE_DURATION", "60")),
+        ),
+        streaming=StreamingConfig(
+            max_accumulated_size=int(os.getenv("MAX_ACCUMULATED_SIZE", "500000")),
         ),
     )
 

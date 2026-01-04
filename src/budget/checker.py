@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, Tuple
 
 from ..config import config
+from ..exceptions import UsageCheckError
 
 logger = logging.getLogger(__name__)
 
@@ -57,32 +58,49 @@ class UsageChecker:
     async def get_usage(self, force_refresh: bool = False) -> UsageSnapshot:
         """Get current usage percentage.
 
-        Args:
-            force_refresh: Bypass cache and get fresh data
+        Parameters
+        ----------
+        force_refresh : bool
+            Bypass cache and get fresh data.
 
-        Returns:
-            UsageSnapshot with current usage
+        Returns
+        -------
+        UsageSnapshot
+            Current usage snapshot. If the usage check fails, returns cached
+            value if available, otherwise returns a safe default (100% usage,
+            is_paused=True) to prevent bypassing budget limits.
         """
         if not force_refresh and self._cache_valid():
             return self._cache
 
-        # Run claude usage command
-        output = await self._execute_command()
+        try:
+            # Run claude usage command
+            output = await self._execute_command()
 
-        # Parse the output
-        usage_percent = self._parse_usage(output)
-        reset_time = self._parse_reset_time(output)
+            # Parse the output
+            usage_percent = self._parse_usage(output)
+            reset_time = self._parse_reset_time(output)
 
-        snapshot = UsageSnapshot(
-            usage_percent=usage_percent,
-            reset_time=reset_time,
-        )
+            snapshot = UsageSnapshot(
+                usage_percent=usage_percent,
+                reset_time=reset_time,
+            )
 
-        # Update cache
-        self._cache = snapshot
-        self._cache_time = datetime.now()
+            # Update cache
+            self._cache = snapshot
+            self._cache_time = datetime.now()
 
-        return snapshot
+            return snapshot
+
+        except UsageCheckError:
+            # Return cached value if available
+            if self._cache is not None:
+                logger.warning("Usage check failed, using cached value")
+                return self._cache
+
+            # No cache - return safe default (assume at limit)
+            logger.warning("Usage check failed with no cache, assuming at limit")
+            return UsageSnapshot(usage_percent=100.0, is_paused=True)
 
     async def check_should_pause(self, threshold: float = 85.0) -> Tuple[bool, Optional[datetime]]:
         """Check if usage exceeds threshold.
@@ -98,7 +116,13 @@ class UsageChecker:
         return should_pause, snapshot.reset_time
 
     async def _execute_command(self) -> str:
-        """Execute claude usage command and return output."""
+        """Execute claude usage command and return output.
+
+        Raises
+        ------
+        UsageCheckError
+            If the command times out or fails to execute.
+        """
         try:
             process = await asyncio.create_subprocess_exec(
                 "claude",
@@ -118,12 +142,12 @@ class UsageChecker:
 
             return output
 
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             logger.error("Usage check timed out")
-            return ""
+            raise UsageCheckError("Usage check timed out", timeout=True) from e
         except Exception as e:
             logger.error(f"Failed to check usage: {e}")
-            return ""
+            raise UsageCheckError(f"Failed to check usage: {e}") from e
 
     def _parse_usage(self, output: str) -> float:
         """Parse usage percentage from output.

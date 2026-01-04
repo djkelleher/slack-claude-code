@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 
 import aiosqlite
 import json
@@ -17,6 +18,19 @@ class DatabaseRepository:
 
     def _get_connection(self) -> aiosqlite.Connection:
         return aiosqlite.connect(self.db_path)
+
+    @asynccontextmanager
+    async def _transact(self):
+        """Provide a connection with automatic commit on success.
+
+        Usage:
+            async with self._transact() as db:
+                await db.execute(...)
+                # commit happens automatically on exit
+        """
+        async with self._get_connection() as db:
+            yield db
+            await db.commit()
 
     async def _with_timeout(self, coro, timeout: float = None):
         """Wrap a coroutine with a timeout to prevent hanging operations."""

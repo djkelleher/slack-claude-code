@@ -1,5 +1,6 @@
 """Base infrastructure for Slack command handlers."""
 
+import threading
 import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -59,6 +60,7 @@ class HandlerDependencies:
 
     Provides access to shared instances across all handlers.
     Optional dependencies are lazily initialized on first access.
+    Thread-safe through RLock.
     """
 
     db: Any  # DatabaseRepository
@@ -66,33 +68,37 @@ class HandlerDependencies:
     _orchestrator: Any = field(default=None, repr=False)
     _usage_checker: Any = field(default=None, repr=False)
     _budget_scheduler: Any = field(default=None, repr=False)
+    _init_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     @property
     def orchestrator(self) -> Any:
-        """Get or create the MultiAgentOrchestrator."""
-        if self._orchestrator is None:
-            from src.agents import MultiAgentOrchestrator
+        """Get or create the MultiAgentOrchestrator (thread-safe)."""
+        with self._init_lock:
+            if self._orchestrator is None:
+                from src.agents import MultiAgentOrchestrator
 
-            self._orchestrator = MultiAgentOrchestrator(self.executor)
-        return self._orchestrator
+                self._orchestrator = MultiAgentOrchestrator(self.executor)
+            return self._orchestrator
 
     @property
     def usage_checker(self) -> Any:
-        """Get or create the UsageChecker."""
-        if self._usage_checker is None:
-            from src.budget import UsageChecker
+        """Get or create the UsageChecker (thread-safe)."""
+        with self._init_lock:
+            if self._usage_checker is None:
+                from src.budget import UsageChecker
 
-            self._usage_checker = UsageChecker()
-        return self._usage_checker
+                self._usage_checker = UsageChecker()
+            return self._usage_checker
 
     @property
     def budget_scheduler(self) -> Any:
-        """Get or create the BudgetScheduler."""
-        if self._budget_scheduler is None:
-            from src.budget import BudgetScheduler
+        """Get or create the BudgetScheduler (thread-safe)."""
+        with self._init_lock:
+            if self._budget_scheduler is None:
+                from src.budget import BudgetScheduler
 
-            self._budget_scheduler = BudgetScheduler()
-        return self._budget_scheduler
+                self._budget_scheduler = BudgetScheduler()
+            return self._budget_scheduler
 
 
 def slack_command(

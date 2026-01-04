@@ -6,28 +6,34 @@ import logging
 from slack_bolt.async_app import AsyncApp
 
 from src.config import config
+from src.tasks import TaskManager
 from src.utils.formatting import SlackFormatter
 
 from .base import CommandContext, HandlerDependencies, slack_command
 
 logger = logging.getLogger(__name__)
 
-# Track queue processors per channel to prevent duplicate processors
-_queue_processors: dict[str, asyncio.Task] = {}
+# Default timeout for queue processors (1 hour)
+QUEUE_PROCESSOR_TIMEOUT = 3600
 
 
-def _create_queue_task(coro, channel_id: str, task_logger=None) -> asyncio.Task:
+async def _create_queue_task(coro, channel_id: str, task_logger=None) -> asyncio.Task:
     """Create a queue processor task with proper tracking.
 
-    Prevents duplicate processors by storing references per channel.
+    Uses TaskManager for lifecycle management with automatic cleanup.
     """
     task = asyncio.create_task(coro)
-    _queue_processors[channel_id] = task
+    task_id = f"queue_{channel_id}"
+
+    await TaskManager.register(
+        task_id=task_id,
+        task=task,
+        channel_id=channel_id,
+        task_type="queue_processor",
+        timeout_seconds=QUEUE_PROCESSOR_TIMEOUT,
+    )
 
     def done_callback(t: asyncio.Task) -> None:
-        # Remove from tracking when done
-        if _queue_processors.get(channel_id) is t:
-            del _queue_processors[channel_id]
         if not t.cancelled():
             exc = t.exception()
             if exc:
@@ -36,6 +42,13 @@ def _create_queue_task(coro, channel_id: str, task_logger=None) -> asyncio.Task:
 
     task.add_done_callback(done_callback)
     return task
+
+
+async def _is_queue_processor_running(channel_id: str) -> bool:
+    """Check if a queue processor is already running for a channel."""
+    task_id = f"queue_{channel_id}"
+    tracked = await TaskManager.get(task_id)
+    return tracked is not None and not tracked.is_done
 
 
 def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
@@ -90,8 +103,8 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
 
         # Start queue processor if not already running
-        if ctx.channel_id not in _queue_processors:
-            _create_queue_task(
+        if not await _is_queue_processor_running(ctx.channel_id):
+            await _create_queue_task(
                 _process_queue(ctx.channel_id, deps, ctx.client, ctx.logger),
                 ctx.channel_id,
                 ctx.logger,

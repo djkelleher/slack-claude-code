@@ -7,8 +7,9 @@ from .parser import (
     TerminalOutputParser,
 )
 from .pool import PTYSessionPool
-from .session import (
-    PTYSession,
+from .process import ClaudeProcess
+from .session import PTYSession
+from .types import (
     PTYSessionConfig,
     ResponseChunk,
     SessionResponse,
