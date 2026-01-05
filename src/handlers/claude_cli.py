@@ -92,8 +92,32 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @app.command("/clear")
     @slack_command()
     async def handle_clear(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /clear command - reset Claude conversation."""
+        """Handle /clear command - cancel processes and reset Claude conversation."""
+        import asyncio
+
+        # Step 1: Cancel all active executor processes for this channel
+        cancelled_count = 0
+        if hasattr(deps.executor, '_active_processes'):
+            # Cancel processes where execution_id contains channel_id
+            for exec_id, process in list(deps.executor._active_processes.items()):
+                if ctx.channel_id in exec_id:
+                    process.terminate()
+                    cancelled_count += 1
+                    ctx.logger.info(f"Terminated process: {exec_id}")
+
+            # Brief wait for graceful shutdown
+            if cancelled_count > 0:
+                await asyncio.sleep(0.5)
+
+        # Step 2: Send /clear command to Claude CLI (existing flow)
         await _send_claude_command(ctx, "/clear", deps)
+
+        # Step 3: Notify user if processes were cancelled
+        if cancelled_count > 0:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Cancelled {cancelled_count} active process(es) and cleared Claude session.",
+            )
 
     @app.command("/add-dir")
     @slack_command(require_text=True, usage_hint="Usage: /add-dir <path>")
