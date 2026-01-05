@@ -23,10 +23,43 @@ class GitService:
     def __init__(self, timeout: int = 30):
         self.timeout = timeout
 
+    def _validate_working_directory(self, working_directory: str) -> None:
+        """Validate that working directory exists and is a directory."""
+        path = Path(working_directory).expanduser().resolve()
+        if not path.exists():
+            raise GitError(f"Directory does not exist: {working_directory}")
+        if not path.is_dir():
+            raise GitError(f"Not a directory: {working_directory}")
+
+    def _validate_branch_name(self, branch_name: str) -> None:
+        """Validate branch name follows git naming rules."""
+        if not branch_name or not branch_name.strip():
+            raise GitError("Branch name cannot be empty")
+        if len(branch_name) > 255:
+            raise GitError("Branch name too long (max 255 characters)")
+        # Check for invalid characters (git ref restrictions)
+        invalid_chars = [" ", "~", "^", ":", "?", "*", "[", "\\", "..", "@{", "//"]
+        for char in invalid_chars:
+            if char in branch_name:
+                raise GitError(f"Branch name contains invalid character: {char}")
+        if branch_name.startswith(".") or branch_name.endswith("."):
+            raise GitError("Branch name cannot start or end with '.'")
+        if branch_name.endswith(".lock"):
+            raise GitError("Branch name cannot end with '.lock'")
+
+    def _validate_commit_message(self, message: str) -> None:
+        """Validate commit message is reasonable."""
+        if not message or not message.strip():
+            raise GitError("Commit message cannot be empty")
+        if len(message) > 10000:
+            raise GitError("Commit message too long (max 10000 characters)")
+
     async def _run_git_command(
         self, working_directory: str, *args: str
     ) -> tuple[str, str, int]:
         """Run a git command and return (stdout, stderr, returncode)."""
+        self._validate_working_directory(working_directory)
+        process = None
         try:
             process = await asyncio.create_subprocess_exec(
                 "git",
@@ -46,9 +79,19 @@ class GitService:
             return stdout, stderr, process.returncode
 
         except asyncio.TimeoutError:
+            if process:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
             logger.error(f"Git command timed out: git {' '.join(args)}")
             raise GitError("Git command timed out")
         except Exception as e:
+            if process and process.returncode is None:
+                process.terminate()
+                await process.wait()
             logger.error(f"Git command failed: {e}")
             raise GitError(f"Git command failed: {e}")
 
@@ -116,8 +159,19 @@ class GitService:
 
         return status
 
-    async def get_diff(self, working_directory: str, staged: bool = False) -> str:
-        """Get git diff."""
+    async def get_diff(
+        self, working_directory: str, staged: bool = False, max_size: int = 1_000_000
+    ) -> str:
+        """Get git diff.
+
+        Args:
+            working_directory: Directory to run git diff in
+            staged: If True, show staged changes only
+            max_size: Maximum diff size in bytes (default 1MB)
+
+        Returns:
+            Diff output, truncated if exceeds max_size
+        """
         if not await self.validate_git_repo(working_directory):
             raise GitError("Not a git repository")
 
@@ -132,7 +186,14 @@ class GitService:
         if returncode != 0:
             raise GitError(f"Git diff failed: {stderr}")
 
-        return stdout if stdout else "(no changes)"
+        if not stdout:
+            return "(no changes)"
+
+        # Truncate if diff is too large
+        if len(stdout) > max_size:
+            return stdout[:max_size] + f"\n\n... (diff truncated, {len(stdout)} bytes total)"
+
+        return stdout
 
     async def create_checkpoint(
         self, working_directory: str, name: str, description: Optional[str] = None
@@ -205,6 +266,9 @@ class GitService:
         if not await self.validate_git_repo(working_directory):
             raise GitError("Not a git repository")
 
+        # Validate commit message
+        self._validate_commit_message(message)
+
         # Stage files if specified
         if files:
             add_args = ["add"] + files
@@ -236,6 +300,9 @@ class GitService:
         if not await self.validate_git_repo(working_directory):
             raise GitError("Not a git repository")
 
+        # Validate branch name
+        self._validate_branch_name(branch_name)
+
         if switch:
             args = ["checkout", "-b", branch_name]
         else:
@@ -252,6 +319,9 @@ class GitService:
         """Switch branch."""
         if not await self.validate_git_repo(working_directory):
             raise GitError("Not a git repository")
+
+        # Validate branch name
+        self._validate_branch_name(branch_name)
 
         stdout, stderr, returncode = await self._run_git_command(
             working_directory, "checkout", branch_name

@@ -222,7 +222,10 @@ async def main():
                 context_lines = []
                 for fc in relevant_files:
                     # Calculate time ago
-                    time_delta = datetime.now(timezone.utc) - fc.last_used.replace(tzinfo=timezone.utc)
+                    # Ensure both datetimes are timezone-aware for comparison
+                    now_utc = datetime.now(timezone.utc)
+                    last_used_utc = fc.last_used.replace(tzinfo=timezone.utc) if fc.last_used.tzinfo is None else fc.last_used
+                    time_delta = now_utc - last_used_utc
                     if time_delta.total_seconds() < 60:
                         time_str = "just now"
                     elif time_delta.total_seconds() < 3600:

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import aiofiles
 import aiohttp
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -74,8 +75,13 @@ async def download_slack_file(
         # Create destination directory
         os.makedirs(destination_dir, exist_ok=True)
 
+        # Sanitize filename to prevent path traversal
+        safe_filename = os.path.basename(filename.replace("..", "_"))
+        if not safe_filename or safe_filename.startswith("."):
+            safe_filename = f"upload_{file_id}"
+
         # Determine local path (handle duplicate filenames)
-        base_path = Path(destination_dir) / filename
+        base_path = Path(destination_dir) / safe_filename
         local_path = base_path
         counter = 1
         while local_path.exists():
@@ -85,7 +91,8 @@ async def download_slack_file(
             counter += 1
 
         # Download file using aiohttp with Slack authorization
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=300, connect=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             headers = {"Authorization": f"Bearer {slack_bot_token}"}
             async with session.get(file_url, headers=headers) as response:
                 if response.status != 200:
@@ -93,13 +100,25 @@ async def download_slack_file(
                         f"Failed to download file: HTTP {response.status}"
                     )
 
-                # Write file
-                with open(local_path, "wb") as f:
+                # Verify content length if available
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > max_size_bytes:
+                    raise FileTooLargeError(safe_filename, int(content_length), max_size_bytes)
+
+                # Write file asynchronously with size verification
+                bytes_downloaded = 0
+                async with aiofiles.open(local_path, "wb") as f:
                     while True:
                         chunk = await response.content.read(8192)
                         if not chunk:
                             break
-                        f.write(chunk)
+                        bytes_downloaded += len(chunk)
+                        if bytes_downloaded > max_size_bytes:
+                            # Clean up partial file
+                            await f.close()
+                            os.remove(local_path)
+                            raise FileTooLargeError(safe_filename, bytes_downloaded, max_size_bytes)
+                        await f.write(chunk)
 
         logger.info(
             f"Downloaded file {filename} ({file_size} bytes) to {local_path}"

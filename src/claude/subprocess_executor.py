@@ -52,6 +52,7 @@ class SubprocessExecutor:
     ) -> None:
         self.timeout = timeout or config.timeouts.execution.command
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self._background_tasks: set[asyncio.Task] = set()  # Keep references to prevent GC
         self.db = db  # Optional database for smart context tracking
 
     async def execute(
@@ -321,7 +322,9 @@ class SubprocessExecutor:
             except Exception as e:
                 logger.warning(f"Failed to track file context for {file_path}: {e}")
 
-        asyncio.create_task(_do_track())
+        task = asyncio.create_task(_do_track())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""

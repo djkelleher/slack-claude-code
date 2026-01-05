@@ -16,6 +16,7 @@ aiosqlite = "^0.21.0"
 python-dotenv = "^1.2.1"
 pexpect = "^4.9.0"
 aiohttp = "^3.13.2"
+aiofiles = "^24.1.0"
 
 
 [tool.poetry.group.dev.dependencies]

@@ -35,8 +35,12 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle rerun button click."""
         await ack()
 
-        channel_id = body["channel"]["id"]
-        command_id = int(action["value"])
+        try:
+            channel_id = body["channel"]["id"]
+            command_id = int(action["value"])
+        except (KeyError, ValueError) as e:
+            logger.error(f"Invalid action data: {e}")
+            return
 
         # Get original command
         cmd = await deps.db.get_command_by_id(command_id)
@@ -142,7 +146,12 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle view output button click."""
         await ack()
 
-        command_id = int(action["value"])
+        try:
+            command_id = int(action["value"])
+        except (KeyError, ValueError) as e:
+            logger.error(f"Invalid action value: {e}")
+            return
+
         cmd = await deps.db.get_command_by_id(command_id)
 
         if not cmd:
@@ -208,7 +217,12 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle view parallel results button click."""
         await ack()
 
-        job_id = int(action["value"])
+        try:
+            job_id = int(action["value"])
+        except (KeyError, ValueError) as e:
+            logger.error(f"Invalid action value: {e}")
+            return
+
         job = await deps.db.get_parallel_job(job_id)
 
         if not job:
@@ -292,8 +306,12 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle cancel job button click."""
         await ack()
 
-        channel_id = body["channel"]["id"]
-        job_id = int(action["value"])
+        try:
+            channel_id = body["channel"]["id"]
+            job_id = int(action["value"])
+        except (KeyError, ValueError) as e:
+            logger.error(f"Invalid action data: {e}")
+            return
 
         cancelled = await deps.db.cancel_job(job_id)
 

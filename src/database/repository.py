@@ -37,8 +37,12 @@ class DatabaseRepository:
                 # commit happens automatically on exit
         """
         async with self._get_connection() as db:
-            yield db
-            await db.commit()
+            try:
+                yield db
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
 
     async def _with_timeout(self, coro, timeout: float = None):
         """Wrap a coroutine with a timeout to prevent hanging operations."""
