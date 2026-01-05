@@ -98,6 +98,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 session_id=session.claude_session_id,
                 execution_id=execution_id,
                 on_chunk=on_chunk,
+                db_session_id=session.id,  # Smart context tracking
             )
 
             if result.session_id:

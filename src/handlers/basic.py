@@ -186,6 +186,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 resume_session_id=session.claude_session_id,  # Resume previous session if exists
                 execution_id=execution_id,
                 on_chunk=on_chunk,
+                db_session_id=session.id,  # Smart context tracking
             )
 
             # Update session with Claude session ID for resume

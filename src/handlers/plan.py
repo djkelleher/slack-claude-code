@@ -198,6 +198,7 @@ def register_plan_command(app: AsyncApp, deps: HandlerDependencies) -> None:
                 resume_session_id=plan_session_id,  # Resume from planning session
                 execution_id=execution_id,
                 on_chunk=on_chunk,
+                db_session_id=session.id,  # Smart context tracking
             )
 
             # Update session with new Claude session ID
@@ -342,6 +343,7 @@ async def execute_planning_phase(
             resume_session_id=session.claude_session_id,
             execution_id=execution_id,
             on_chunk=on_chunk,
+                db_session_id=session.id,  # Smart context tracking
             plan_mode=True,  # Enable plan mode for planning phase
         )
 

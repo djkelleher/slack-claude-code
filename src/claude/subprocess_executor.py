@@ -7,10 +7,13 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Optional
 
 from ..config import config
 from .streaming import StreamMessage, StreamParser
+
+if TYPE_CHECKING:
+    from ..database.repository import DatabaseRepository
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +45,14 @@ class SubprocessExecutor:
     Supports session resume via --resume flag.
     """
 
-    def __init__(self, timeout: int = None) -> None:
+    def __init__(
+        self,
+        timeout: int = None,
+        db: Optional["DatabaseRepository"] = None,
+    ) -> None:
         self.timeout = timeout or config.timeouts.execution.command
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self.db = db  # Optional database for smart context tracking
 
     async def execute(
         self,
@@ -55,6 +63,7 @@ class SubprocessExecutor:
         execution_id: Optional[str] = None,
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]] = None,
         plan_mode: bool = False,
+        db_session_id: Optional[int] = None,
     ) -> ExecutionResult:
         """Execute a prompt via Claude Code subprocess.
 
@@ -66,6 +75,7 @@ class SubprocessExecutor:
             execution_id: Unique ID for this execution (for cancellation)
             on_chunk: Async callback for each streamed message
             plan_mode: If True, use --permission-mode plan for planning phase
+            db_session_id: Database session ID for smart context tracking (optional)
 
         Returns:
             ExecutionResult with the command output
@@ -172,23 +182,26 @@ class SubprocessExecutor:
                     if msg.content:
                         preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
                         logger.debug(f"Claude: {preview}")
-                    # Log tool use
+                    # Log tool use and track file context
                     if msg.raw:
                         message = msg.raw.get("message", {})
                         for block in message.get("content", []):
                             if block.get("type") == "tool_use":
                                 tool_name = block.get("name", "unknown")
                                 tool_input = block.get("input", {})
-                                # Log tool use summary
+                                # Log tool use summary and track file operations
                                 if tool_name == "Read":
                                     file_path = tool_input.get("file_path", "")
                                     logger.info(f"Tool: Read {file_path}")
+                                    self._track_file_context(db_session_id, file_path, "read")
                                 elif tool_name == "Edit":
                                     file_path = tool_input.get("file_path", "")
                                     logger.info(f"Tool: Edit {file_path}")
+                                    self._track_file_context(db_session_id, file_path, "modified")
                                 elif tool_name == "Write":
                                     file_path = tool_input.get("file_path", "")
                                     logger.info(f"Tool: Write {file_path}")
+                                    self._track_file_context(db_session_id, file_path, "created")
                                 elif tool_name == "Bash":
                                     command = tool_input.get("command", "")[:50]
                                     logger.info(f"Tool: Bash '{command}...'")
@@ -287,6 +300,28 @@ class SubprocessExecutor:
             )
         finally:
             self._active_processes.pop(track_id, None)
+
+    def _track_file_context(
+        self, db_session_id: Optional[int], file_path: str, context_type: str
+    ) -> None:
+        """Track file context usage in background (non-blocking).
+
+        Args:
+            db_session_id: Database session ID for file context tracking
+            file_path: Path to the file being accessed
+            context_type: Type of access ("read", "modified", "created")
+        """
+        if not self.db or not db_session_id or not file_path:
+            return
+
+        # Queue context update (async, non-blocking)
+        async def _do_track():
+            try:
+                await self.db.track_file_context(db_session_id, file_path, context_type)
+            except Exception as e:
+                logger.warning(f"Failed to track file context for {file_path}: {e}")
+
+        asyncio.create_task(_do_track())
 
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""

@@ -60,7 +60,7 @@ async def main():
 
     # Create app components
     db = DatabaseRepository(config.DATABASE_PATH)
-    executor = SubprocessExecutor()  # Uses config.timeouts.execution.command
+    executor = SubprocessExecutor(db=db)  # Pass db for smart context tracking
 
     # Create Slack app
     app = AsyncApp(
@@ -249,6 +249,7 @@ async def main():
                 resume_session_id=session.claude_session_id,  # Resume previous session if exists
                 execution_id=execution_id,
                 on_chunk=on_chunk,
+                db_session_id=session.id,  # Pass for smart context tracking
             )
 
             # Update session with Claude session ID for resume
