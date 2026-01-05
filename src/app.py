@@ -180,28 +180,39 @@ async def main():
                     text=output[:100] + "..." if len(output) > 100 else output,
                     blocks=blocks,
                 )
-                # Upload file
+                # Upload files as separate messages
                 try:
+                    # Upload summary file
                     await client.files_upload_v2(
                         channel=channel_id,
                         content=file_content,
                         filename=file_title,
-                        title=file_title,
-                        thread_ts=message_ts,
+                        title="Claude Summary",
+                        initial_comment="📄 Response summary",
+                        filetype="text",
                     )
+                    # Upload full detailed output file if available
+                    if result.detailed_output and result.detailed_output != output:
+                        raw_output_filename = f"claude_detailed_{cmd_history.id}.txt"
+                        await client.files_upload_v2(
+                            channel=channel_id,
+                            content=result.detailed_output,
+                            filename=raw_output_filename,
+                            title="Claude Detailed Output",
+                            initial_comment="📋 Complete response with tool use and results",
+                            filetype="text",
+                        )
                 except Exception as upload_error:
                     logger.error(f"Failed to upload file: {upload_error}")
                     error_msg = str(upload_error)
                     if "missing_scope" in error_msg and "files:write" in error_msg:
                         await client.chat_postMessage(
                             channel=channel_id,
-                            thread_ts=message_ts,
                             text="⚠️ Could not upload file: Missing `files:write` scope. Please add this scope in your Slack app configuration (OAuth & Permissions).",
                         )
                     else:
                         await client.chat_postMessage(
                             channel=channel_id,
-                            thread_ts=message_ts,
                             text=f"⚠️ Could not upload file: {error_msg}",
                         )
             else:

@@ -15,6 +15,7 @@ class StreamMessage:
 
     type: str  # init, assistant, result, error
     content: str = ""
+    detailed_content: str = ""  # Full output with tool use details
     session_id: Optional[str] = None
     is_final: bool = False
     cost_usd: Optional[float] = None
@@ -33,6 +34,7 @@ class StreamParser:
         self.buffer = ""
         self.session_id: Optional[str] = None
         self.accumulated_content = ""
+        self.accumulated_detailed = ""
 
     def parse_line(self, line: str) -> Optional[StreamMessage]:
         """Parse a single line of stream-json output."""
@@ -73,16 +75,65 @@ class StreamParser:
             content_blocks = message.get("content", [])
 
             text_content = ""
+            detailed_content = ""
+
             for block in content_blocks:
                 if block.get("type") == "text":
-                    text_content += block.get("text", "")
+                    text = block.get("text", "")
+                    text_content += text
+                    detailed_content += text
+                elif block.get("type") == "tool_use":
+                    # Include tool use in detailed output
+                    tool_name = block.get("name", "unknown")
+                    tool_input = block.get("input", {})
+                    detailed_content += f"\n\n[Tool: {tool_name}]\n"
+                    # Format tool input nicely
+                    for key, value in tool_input.items():
+                        if isinstance(value, str) and len(value) > 100:
+                            value_preview = value[:100] + "..."
+                        else:
+                            value_preview = value
+                        detailed_content += f"  {key}: {value_preview}\n"
 
             if text_content:
                 self.accumulated_content += text_content
+            if detailed_content:
+                self.accumulated_detailed += detailed_content
 
             return StreamMessage(
                 type="assistant",
                 content=text_content,
+                detailed_content=detailed_content,
+                session_id=self.session_id,
+                raw=data,
+            )
+
+        elif msg_type == "user":
+            # User message (tool results)
+            message = data.get("message", {})
+            content_blocks = message.get("content", [])
+
+            detailed_addition = ""
+            for block in content_blocks:
+                if block.get("type") == "tool_result":
+                    tool_use_id = block.get("tool_use_id", "unknown")
+                    content = block.get("content", "")
+                    is_error = block.get("is_error", False)
+
+                    if isinstance(content, str):
+                        content_preview = content[:500] + "..." if len(content) > 500 else content
+                    else:
+                        content_preview = str(content)[:500]
+
+                    status = "ERROR" if is_error else "SUCCESS"
+                    detailed_addition += f"\n\n[Tool Result: {status}]\n{content_preview}\n"
+
+            if detailed_addition:
+                self.accumulated_detailed += detailed_addition
+
+            return StreamMessage(
+                type="user",
+                detailed_content=detailed_addition,
                 session_id=self.session_id,
                 raw=data,
             )
@@ -92,6 +143,7 @@ class StreamParser:
             return StreamMessage(
                 type="result",
                 content=self.accumulated_content,
+                detailed_content=self.accumulated_detailed,
                 session_id=data.get("session_id", self.session_id),
                 is_final=True,
                 cost_usd=data.get("cost_usd"),
@@ -121,3 +173,4 @@ class StreamParser:
         self.buffer = ""
         self.session_id = None
         self.accumulated_content = ""
+        self.accumulated_detailed = ""

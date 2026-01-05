@@ -27,6 +27,7 @@ class ExecutionResult:
 
     success: bool
     output: str
+    detailed_output: str = ""  # Full output with tool use details
     session_id: Optional[str] = None
     error: Optional[str] = None
     cost_usd: Optional[float] = None
@@ -112,6 +113,7 @@ class SubprocessExecutor:
 
         parser = StreamParser()
         accumulated_output = ""
+        accumulated_detailed = ""
         result_session_id = None
         cost_usd = None
         duration_ms = None
@@ -132,6 +134,7 @@ class SubprocessExecutor:
                     return ExecutionResult(
                         success=False,
                         output=accumulated_output,
+                        detailed_output=accumulated_detailed,
                         session_id=result_session_id,
                         error="Command timed out",
                     )
@@ -165,6 +168,9 @@ class SubprocessExecutor:
                     duration_ms = msg.duration_ms
                     if msg.session_id:
                         result_session_id = msg.session_id
+                    # Get final accumulated detailed output
+                    if msg.detailed_content:
+                        accumulated_detailed = msg.detailed_content
 
                 # Track errors
                 if msg.type == "error":
@@ -194,6 +200,7 @@ class SubprocessExecutor:
             return ExecutionResult(
                 success=success,
                 output=accumulated_output,
+                detailed_output=accumulated_detailed,
                 session_id=result_session_id,
                 error=error_msg,
                 cost_usd=cost_usd,
@@ -206,6 +213,7 @@ class SubprocessExecutor:
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
+                detailed_output=accumulated_detailed,
                 session_id=result_session_id,
                 error="Cancelled",
                 was_cancelled=True,
@@ -217,6 +225,7 @@ class SubprocessExecutor:
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
+                detailed_output=accumulated_detailed,
                 session_id=result_session_id,
                 error=str(e),
             )
