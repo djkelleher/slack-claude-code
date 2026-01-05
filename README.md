@@ -53,6 +53,7 @@ poetry install
    - `commands` - Handle slash commands
    - `channels:history` - Read channel messages (for context)
    - `app_mentions:read` - Respond to @mentions
+   - `files:write` - Upload files (for long responses)
 
 5. **Create Slash Commands**:
 

@@ -222,13 +222,29 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     blocks=blocks,
                 )
                 # Upload file
-                await ctx.client.files_upload_v2(
-                    channel=ctx.channel_id,
-                    content=file_content,
-                    filename=file_title,
-                    title=file_title,
-                    thread_ts=message_ts,
-                )
+                try:
+                    await ctx.client.files_upload_v2(
+                        channel=ctx.channel_id,
+                        content=file_content,
+                        filename=file_title,
+                        title=file_title,
+                        thread_ts=message_ts,
+                    )
+                except Exception as upload_error:
+                    ctx.logger.error(f"Failed to upload file: {upload_error}")
+                    error_msg = str(upload_error)
+                    if "missing_scope" in error_msg and "files:write" in error_msg:
+                        await ctx.client.chat_postMessage(
+                            channel=ctx.channel_id,
+                            thread_ts=message_ts,
+                            text="⚠️ Could not upload file: Missing `files:write` scope. Please add this scope in your Slack app configuration (OAuth & Permissions).",
+                        )
+                    else:
+                        await ctx.client.chat_postMessage(
+                            channel=ctx.channel_id,
+                            thread_ts=message_ts,
+                            text=f"⚠️ Could not upload file: {error_msg}",
+                        )
             else:
                 await ctx.client.chat_update(
                     channel=ctx.channel_id,
