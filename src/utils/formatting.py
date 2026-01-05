@@ -26,6 +26,8 @@ from .formatters import (
     queue_status,
     sanitize_error,
     sequential_job_status,
+    session_cleanup_result,
+    session_list,
     should_attach_file,
     streaming_update,
     time_ago,
@@ -127,3 +129,11 @@ class SlackFormatter:
         cls, path: str, entries: list[tuple[str, bool]], is_cwd: bool = False
     ) -> list[dict]:
         return directory_listing(path, entries, is_cwd)
+
+    @classmethod
+    def session_list(cls, sessions: list) -> list[dict]:
+        return session_list(sessions)
+
+    @classmethod
+    def session_cleanup_result(cls, deleted_count: int, inactive_days: int) -> list[dict]:
+        return session_cleanup_result(deleted_count, inactive_days)

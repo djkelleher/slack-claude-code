@@ -15,6 +15,7 @@ from .parallel import register_parallel_commands
 from .plan import register_plan_command
 from .pty import register_pty_commands
 from .queue import register_queue_commands
+from .session_management import register_session_commands
 
 
 def register_commands(
@@ -48,5 +49,6 @@ def register_commands(
     register_budget_commands(app, deps)
     register_pty_commands(app, deps)
     register_plan_command(app, deps)
+    register_session_commands(app, deps)
 
     return deps
