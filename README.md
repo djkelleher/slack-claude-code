@@ -1,11 +1,15 @@
 # Slack Claude Code Bot
 
-A Slack app that allows you to run Claude Code CLI commands from Slack. Each channel represents a separate session, with persistent PTY-based sessions, multi-agent workflows, usage budgeting, and permission approval via Slack buttons.
+A Slack app that allows you to run Claude Code CLI commands from Slack. Each channel and thread represents a separate session, with persistent PTY-based sessions, thread-based contexts, file upload support, smart context management, git integration, multi-agent workflows, usage budgeting, and permission approval via Slack buttons.
 
 ## Features
 
 - **Persistent PTY Sessions**: Keep Claude Code running in interactive mode per channel using pexpect
+- **Thread-Based Contexts**: Each Slack thread maintains its own independent Claude session with separate working directory and command history
 - **Channel-based Sessions**: Each Slack channel maintains its own Claude Code session with working directory and command history
+- **File Upload Support**: Drag and drop files into Slack - Claude can read and work with uploaded files (code, images, PDFs, documents)
+- **Smart Context Management**: Automatically tracks frequently-used files and includes them in future prompts for better context
+- **Git Integration**: Local git operations (status, diff, commit, branch management) directly from Slack
 - **Multi-Agent Workflows**: Run complex tasks through Planner → Worker → Evaluator pipeline
 - **Usage Budgeting**: Time-aware usage thresholds (day/night) with automatic pausing
 - **Permission Approval**: Handle MCP tool permissions via Slack buttons
@@ -89,7 +93,7 @@ poetry install
    | `/usage` | Show Claude Pro usage |
    | `/budget` | Configure usage thresholds |
    | `/pty` | Show PTY session status |
-   | `/clear` | Reset Claude conversation |
+   | `/clear` | Reset Claude conversation and cancel processes |
    | `/add-dir` | Add directory to Claude context |
    | `/compact` | Compact conversation |
    | `/cost` | Show session cost |
@@ -105,6 +109,12 @@ poetry install
    | `/permissions` | View or update permissions |
    | `/stats` | Show usage stats and history |
    | `/todos` | List current TODO items |
+   | `/diff` | Show git diff of uncommitted changes |
+   | `/status` | Show git status |
+   | `/commit` | Commit staged changes |
+   | `/branch` | Git branch operations (list, create, switch) |
+   | `/sessions` | List all sessions for the channel |
+   | `/session-cleanup` | Delete inactive sessions (>30 days) |
 
 7. **Install to Workspace**:
 
@@ -147,6 +157,152 @@ The bot will automatically send your message to Claude Code and stream the respo
 ```
 /c Explain this codebase
 ```
+
+### Thread-Based Contexts
+
+Each Slack thread automatically creates an independent Claude session:
+
+```
+# In main channel
+How does authentication work?
+
+# Start a thread (reply to any message)
+└─> Let's refactor the auth module
+```
+
+**Key Features**:
+- **Independent Sessions**: Each thread has its own Claude conversation context
+- **Separate Working Directories**: Threads can work in different directories
+- **Isolated Command History**: Thread commands don't affect the main channel
+- **Thread Continuity**: All messages in a thread share the same session
+
+**Usage**:
+- Messages in the main channel use the channel-level session
+- Messages in threads use thread-specific sessions
+- `/clear` in a thread only clears that thread's session
+- `/clear` in the channel only clears the channel-level session
+
+### File Upload Support
+
+Upload files directly to Slack and Claude can read and work with them:
+
+```
+# Upload a file by dragging and dropping into Slack
+[Uploads: config.yaml]
+"What does this configuration file do?"
+
+# Claude receives the file and can read it
+```
+
+**Supported File Types**:
+- **Code files**: .py, .js, .java, .go, etc.
+- **Documents**: .txt, .md, .pdf, .docx
+- **Images**: .png, .jpg, .gif (thumbnails shown in thread)
+- **Data files**: .json, .yaml, .csv, .xml
+
+**How it Works**:
+1. Files are downloaded to `.slack_uploads/` in the session's working directory
+2. File paths are automatically added to the prompt
+3. Claude can read, analyze, and work with the uploaded files
+4. Images show thumbnails for easy reference
+
+**Configuration**:
+- `MAX_FILE_SIZE_MB`: Maximum file size (default: 10MB)
+- `MAX_UPLOAD_STORAGE_MB`: Total storage limit (default: 100MB)
+
+### Smart Context Management
+
+The bot automatically tracks files that Claude works with and includes them in future prompts:
+
+**How it Works**:
+- When Claude reads, edits, or creates a file, it's tracked
+- Files with 2+ uses are automatically included in context
+- Recently used files appear in prompts with usage stats
+- Upload tracking ensures uploaded files stay in context
+
+**Example**:
+```
+# First interaction
+Edit src/auth.py to add logging
+
+# Later interaction
+Add more logging
+# Claude automatically knows you're working with src/auth.py
+```
+
+**Context Display**:
+```
+[Recently accessed files in this session:]
+- src/auth.py (modified 3x, 2m ago)
+- src/database.py (read 5x, 10m ago)
+- config.yaml (uploaded 1x, 15m ago)
+```
+
+### Git Integration
+
+Perform local git operations directly from Slack:
+
+**Check Status**:
+```
+/status
+```
+
+Shows git status with:
+- Current branch
+- Commits ahead/behind
+- Staged changes
+- Unstaged changes
+- Untracked files
+
+**View Changes**:
+```
+/diff                # Show uncommitted changes
+/diff --staged       # Show staged changes only
+```
+
+Displays diff with syntax highlighting and truncation for large diffs.
+
+**Commit Changes**:
+```
+/commit Fix authentication bug in login handler
+```
+
+Commits all staged changes with the provided message.
+
+**Branch Management**:
+```
+/branch                    # Show current branch
+/branch create feature-x   # Create and switch to new branch
+/branch switch main        # Switch to existing branch
+```
+
+**Notes**:
+- All git operations use your local git configuration
+- No GitHub API integration - purely local git commands
+- Works in any directory that's a git repository
+- Non-git directories show appropriate error messages
+
+### Session Management
+
+Manage Claude sessions across channels and threads:
+
+**List Sessions**:
+```
+/sessions
+```
+
+Shows all sessions for the current channel:
+- Channel-level session
+- All thread-level sessions
+- Working directory for each
+- Last active time
+
+**Cleanup Inactive Sessions**:
+```
+/session-cleanup
+```
+
+Removes sessions that haven't been used in 30+ days to free up resources.
 
 ### Plan Mode
 
@@ -343,13 +499,17 @@ slack-claude-code/
 │   ├── app.py              # Main entry point
 │   ├── config.py           # Configuration
 │   ├── database/           # SQLite persistence
-│   │   ├── models.py       # Data models
+│   │   ├── models.py       # Data models (Session, UploadedFile, FileContext)
 │   │   ├── migrations.py   # Schema setup
 │   │   └── repository.py   # Data access
 │   ├── claude/             # Claude CLI integration
 │   │   ├── executor.py     # PTY-based execution
 │   │   ├── streaming.py    # JSON stream parsing
-│   │   └── subprocess_executor.py  # Subprocess-based execution
+│   │   └── subprocess_executor.py  # Subprocess-based execution with tool tracking
+│   ├── git/                # Git integration
+│   │   ├── service.py      # Git operations (status, diff, commit, branch)
+│   │   ├── repository.py   # Git checkpoint database operations
+│   │   └── models.py       # GitStatus, Checkpoint models
 │   ├── pty/                # PTY session management
 │   │   ├── session.py      # PTYSession class (pexpect)
 │   │   ├── pool.py         # Session pool registry
@@ -365,19 +525,27 @@ slack-claude-code/
 │   │   └── scheduler.py    # Time-aware thresholds
 │   ├── approval/           # Permission handling
 │   │   ├── handler.py      # PermissionManager
+│   │   ├── plan_manager.py # PlanApprovalManager
 │   │   └── slack_ui.py     # Approval button blocks
 │   ├── handlers/           # Slack event handlers
 │   │   ├── base.py         # Command decorator and context
 │   │   ├── basic.py        # /c, /ls, /cd commands
 │   │   ├── queue.py        # /q, /qv, /qc, /qr commands
 │   │   ├── claude_cli.py   # Claude CLI passthrough commands
+│   │   ├── git.py          # /diff, /status, /commit, /branch commands
+│   │   ├── session_management.py  # /sessions, /session-cleanup commands
 │   │   ├── agents.py       # /task, /tasks, /task-cancel
 │   │   ├── budget.py       # /usage and /budget commands
 │   │   ├── parallel.py     # /st, /cc commands
 │   │   ├── pty.py          # /pty command
+│   │   ├── plan.py         # /plan command
 │   │   └── actions.py      # Button interactions
 │   └── utils/              # Helpers
 │       ├── formatting.py   # Slack Block Kit
+│       ├── formatters/     # Specialized formatters
+│       │   ├── session.py  # Session list formatting
+│       │   └── git.py      # Git output formatting
+│       ├── file_downloader.py  # Slack file download service
 │       └── validators.py   # Input validation
 ├── data/                   # SQLite database
 ├── .env                    # Configuration
@@ -450,6 +618,10 @@ NIGHT_END_HOUR=6
 # Permissions
 PERMISSION_TIMEOUT=300  # 5 minutes
 AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP  # Comma-separated
+
+# File Upload
+MAX_FILE_SIZE_MB=10  # Maximum file upload size
+MAX_UPLOAD_STORAGE_MB=100  # Total storage limit for uploads
 ```
 
 ## Tips
@@ -457,12 +629,17 @@ AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP  # Comma-separated
 - **Long outputs**: Responses exceeding Slack's limit are truncated. Use "View Output" for full text.
 - **Streaming**: Responses update every 2 seconds during generation to avoid rate limits.
 - **Sessions**: Each channel maintains a persistent PTY session with Claude Code.
+- **Thread isolation**: Use threads to work on multiple separate tasks in the same channel.
+- **File uploads**: Drag and drop files directly into Slack - Claude can read and work with them.
+- **Smart context**: Files you work with frequently are automatically included in future prompts.
+- **Git integration**: Use `/status`, `/diff`, `/commit`, and `/branch` for version control.
 - **Timeouts**: Default 5-minute timeout. Set `COMMAND_TIMEOUT` to adjust.
 - **Multi-agent tasks**: Use `/task` for complex work that benefits from planning and evaluation.
 - **Night mode**: Higher usage thresholds at night allow more intensive work during off-hours.
 - **Command queue**: Use `/q` to queue multiple commands that will execute sequentially.
 - **Filesystem**: Use `/ls` to see cwd and contents, `/cd` to navigate directories.
-- **Session management**: Use `/clear` to reset conversation, `/compact` to reduce context size.
+- **Session management**: Use `/clear` to reset conversation and cancel processes, `/compact` to reduce context size.
+- **Session cleanup**: Use `/session-cleanup` to remove inactive sessions and free up resources.
 
 ## Troubleshooting
 
