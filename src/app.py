@@ -85,24 +85,27 @@ async def main():
             return
 
         channel_id = event.get("channel")
+        thread_ts = event.get("thread_ts")  # Extract thread timestamp
         prompt = event.get("text", "").strip()
 
         if not prompt:
             logger.debug("Empty prompt, ignoring")
             return
 
-        # Get or create session
+        # Get or create session (thread-aware)
         session = await deps.db.get_or_create_session(
-            channel_id, config.DEFAULT_WORKING_DIR
+            channel_id, thread_ts=thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
+        logger.info(f"Using session: {session.session_display_name()}")
 
         # Create command history entry
         cmd_history = await deps.db.add_command(session.id, prompt)
         await deps.db.update_command_status(cmd_history.id, "running")
 
-        # Send initial processing message
+        # Send initial processing message (in thread if applicable)
         response = await client.chat_postMessage(
             channel=channel_id,
+            thread_ts=thread_ts,  # Reply in thread if this is a thread message
             text=f"Processing: {prompt[:100]}...",  # Fallback for notifications
             blocks=SlackFormatter.processing_message(prompt),
         )
@@ -149,7 +152,7 @@ async def main():
 
             # Update session with Claude session ID for resume
             if result.session_id:
-                await deps.db.update_session_claude_id(channel_id, result.session_id)
+                await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
             # Update command history
             if result.success:

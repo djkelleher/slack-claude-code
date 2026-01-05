@@ -25,6 +25,7 @@ class CommandContext:
     command_name: str
     client: Any
     logger: Any
+    thread_ts: str | None = None  # Thread timestamp for thread-based sessions
 
     @classmethod
     def from_command(cls, command: dict, client: Any, logger: Any) -> "CommandContext":
@@ -43,6 +44,11 @@ class CommandContext:
         -------
         CommandContext
             Populated context object.
+
+        Note
+        ----
+        Slash commands don't include thread_ts, so it will always be None for commands.
+        Thread-based sessions are only available when handling message events.
         """
         return cls(
             channel_id=command["channel_id"],
@@ -51,6 +57,7 @@ class CommandContext:
             command_name=command.get("command", ""),
             client=client,
             logger=logger,
+            thread_ts=None,  # Commands always operate on channel-level sessions
         )
 
 
