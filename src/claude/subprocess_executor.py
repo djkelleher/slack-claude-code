@@ -76,6 +76,13 @@ class SubprocessExecutor:
             "--output-format", "stream-json",
         ]
 
+        # Add permission mode
+        if config.CLAUDE_PERMISSION_MODE in ["approve-all", "prompt", "deny"]:
+            cmd.extend(["--permissions", config.CLAUDE_PERMISSION_MODE])
+        else:
+            logger.warning(f"Invalid CLAUDE_PERMISSION_MODE: {config.CLAUDE_PERMISSION_MODE}, using approve-all")
+            cmd.extend(["--permissions", "approve-all"])
+
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):
             cmd.extend(["--resume", resume_session_id])
@@ -146,13 +153,54 @@ class SubprocessExecutor:
                 if not line_str:
                     continue
 
-                # Print raw output for debugging
-                print(line_str, flush=True)
-
                 # Parse the JSON message
                 msg = parser.parse_line(line_str)
                 if not msg:
                     continue
+
+                # Log human-readable summaries (not full JSON)
+                if msg.type == "assistant":
+                    # Log text content
+                    if msg.content:
+                        preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                        logger.debug(f"Claude: {preview}")
+                    # Log tool use
+                    if msg.raw:
+                        message = msg.raw.get("message", {})
+                        for block in message.get("content", []):
+                            if block.get("type") == "tool_use":
+                                tool_name = block.get("name", "unknown")
+                                tool_input = block.get("input", {})
+                                # Log tool use summary
+                                if tool_name == "Read":
+                                    file_path = tool_input.get("file_path", "")
+                                    logger.info(f"Tool: Read {file_path}")
+                                elif tool_name == "Edit":
+                                    file_path = tool_input.get("file_path", "")
+                                    logger.info(f"Tool: Edit {file_path}")
+                                elif tool_name == "Write":
+                                    file_path = tool_input.get("file_path", "")
+                                    logger.info(f"Tool: Write {file_path}")
+                                elif tool_name == "Bash":
+                                    command = tool_input.get("command", "")[:50]
+                                    logger.info(f"Tool: Bash '{command}...'")
+                                else:
+                                    logger.info(f"Tool: {tool_name}")
+                elif msg.type == "user" and msg.raw:
+                    # Log tool results summary
+                    message = msg.raw.get("message", {})
+                    for block in message.get("content", []):
+                        if block.get("type") == "tool_result":
+                            tool_use_id = block.get("tool_use_id", "")[:8]
+                            is_error = block.get("is_error", False)
+                            status = "ERROR" if is_error else "OK"
+                            logger.info(f"Tool result [{tool_use_id}]: {status}")
+                elif msg.type == "init":
+                    logger.info(f"Session initialized: {msg.session_id}")
+                elif msg.type == "error":
+                    logger.error(f"Error: {msg.content}")
+                elif msg.type == "result":
+                    logger.info(f"Completed in {msg.duration_ms}ms, cost ${msg.cost_usd:.4f}" if msg.cost_usd else f"Completed in {msg.duration_ms}ms")
 
                 # Track session ID
                 if msg.session_id:

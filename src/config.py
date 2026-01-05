@@ -69,6 +69,9 @@ class Config:
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./data/slack_claude.db")
     DEFAULT_WORKING_DIR: str = os.getenv("DEFAULT_WORKING_DIR", str(Path.home()))
 
+    # Claude Code configuration
+    CLAUDE_PERMISSION_MODE: str = os.getenv("CLAUDE_PERMISSION_MODE", "approve-all")  # approve-all, prompt, or deny
+
     # Slack output limits
     MAX_OUTPUT_LENGTH: int = 2900  # Slack block limit is 3000, leave room for formatting
 
