@@ -11,6 +11,7 @@ from .base import CommandContext, HandlerDependencies
 from .basic import register_basic_commands
 from .budget import register_budget_commands
 from .claude_cli import register_claude_cli_commands
+from .git import register_git_commands
 from .parallel import register_parallel_commands
 from .plan import register_plan_command
 from .pty import register_pty_commands
@@ -50,5 +51,6 @@ def register_commands(
     register_pty_commands(app, deps)
     register_plan_command(app, deps)
     register_session_commands(app, deps)
+    register_git_commands(app, deps)
 
     return deps
