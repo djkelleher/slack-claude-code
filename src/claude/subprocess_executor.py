@@ -87,13 +87,16 @@ class SubprocessExecutor:
 
         logger.info(f"Executing: {' '.join(cmd[:5])}... (prompt: {prompt[:50]}...)")
 
-        # Start subprocess
+        # Start subprocess with increased line limit (default is 64KB)
+        # Large files can produce JSON lines exceeding this limit
+        limit = 10 * 1024 * 1024  # 10MB limit for large file reads
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=working_directory,
+                limit=limit,
             )
         except Exception as e:
             logger.error(f"Failed to start Claude process: {e}")
