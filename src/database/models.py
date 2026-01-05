@@ -8,6 +8,7 @@ import json
 class Session:
     id: Optional[int] = None
     channel_id: str = ""
+    thread_ts: Optional[str] = None  # Thread timestamp for thread-based sessions
     working_directory: str = "~"
     claude_session_id: Optional[str] = None  # For --resume flag
     created_at: datetime = field(default_factory=datetime.now)
@@ -18,11 +19,22 @@ class Session:
         return cls(
             id=row[0],
             channel_id=row[1],
-            working_directory=row[2],
-            claude_session_id=row[3],
-            created_at=datetime.fromisoformat(row[4]) if row[4] else datetime.now(),
-            last_active=datetime.fromisoformat(row[5]) if row[5] else datetime.now(),
+            thread_ts=row[2],
+            working_directory=row[3],
+            claude_session_id=row[4],
+            created_at=datetime.fromisoformat(row[5]) if row[5] else datetime.now(),
+            last_active=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
         )
+
+    def is_thread_session(self) -> bool:
+        """Check if this is a thread-scoped session."""
+        return self.thread_ts is not None
+
+    def session_display_name(self) -> str:
+        """Get human-readable session identifier."""
+        if self.is_thread_session():
+            return f"{self.channel_id} (Thread: {self.thread_ts})"
+        return f"{self.channel_id} (Channel)"
 
 
 @dataclass
@@ -113,4 +125,87 @@ class QueueItem:
             created_at=datetime.fromisoformat(row[9]) if row[9] else datetime.now(),
             started_at=datetime.fromisoformat(row[10]) if row[10] else None,
             completed_at=datetime.fromisoformat(row[11]) if row[11] else None,
+        )
+
+
+@dataclass
+class UploadedFile:
+    """File uploaded from Slack and stored locally."""
+
+    id: Optional[int] = None
+    session_id: int = 0
+    slack_file_id: str = ""
+    filename: str = ""
+    mimetype: str = ""
+    size: int = 0
+    local_path: str = ""
+    uploaded_at: datetime = field(default_factory=datetime.now)
+    last_referenced: Optional[datetime] = None
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "UploadedFile":
+        return cls(
+            id=row[0],
+            session_id=row[1],
+            slack_file_id=row[2],
+            filename=row[3],
+            mimetype=row[4],
+            size=row[5],
+            local_path=row[6],
+            uploaded_at=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
+            last_referenced=datetime.fromisoformat(row[8]) if row[8] else None,
+        )
+
+
+@dataclass
+class FileContext:
+    """Track file usage for smart context management."""
+
+    id: Optional[int] = None
+    session_id: int = 0
+    file_path: str = ""
+    context_type: str = ""  # 'modified', 'read', 'created', 'uploaded'
+    last_used: datetime = field(default_factory=datetime.now)
+    use_count: int = 1
+    auto_include: bool = False
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "FileContext":
+        return cls(
+            id=row[0],
+            session_id=row[1],
+            file_path=row[2],
+            context_type=row[3],
+            last_used=datetime.fromisoformat(row[4]) if row[4] else datetime.now(),
+            use_count=row[5],
+            auto_include=bool(row[6]),
+        )
+
+
+@dataclass
+class GitCheckpoint:
+    """Git checkpoint for version control."""
+
+    id: Optional[int] = None
+    session_id: int = 0
+    channel_id: str = ""
+    name: str = ""
+    stash_ref: str = ""
+    stash_message: Optional[str] = None
+    description: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    is_auto: bool = False
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "GitCheckpoint":
+        return cls(
+            id=row[0],
+            session_id=row[1],
+            channel_id=row[2],
+            name=row[3],
+            stash_ref=row[4],
+            stash_message=row[5],
+            description=row[6],
+            created_at=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
+            is_auto=bool(row[8]),
         )

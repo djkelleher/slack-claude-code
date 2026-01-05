@@ -2,10 +2,11 @@ import aiosqlite
 from pathlib import Path
 
 SCHEMA = """
--- Sessions table (one per channel)
+-- Sessions table (one per channel or thread)
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id TEXT UNIQUE NOT NULL,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
     working_directory TEXT DEFAULT '~',
     claude_session_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -157,8 +158,52 @@ CREATE TABLE IF NOT EXISTS queue_items (
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
+-- Uploaded files tracking
+CREATE TABLE IF NOT EXISTS uploaded_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    slack_file_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    mimetype TEXT,
+    size INTEGER,
+    local_path TEXT NOT NULL,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_referenced TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    UNIQUE(session_id, slack_file_id)
+);
+
+-- File context tracking for smart context management
+CREATE TABLE IF NOT EXISTS file_context (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    context_type TEXT NOT NULL,
+    last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    use_count INTEGER DEFAULT 1,
+    auto_include INTEGER DEFAULT 0,
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    UNIQUE(session_id, file_path, context_type)
+);
+
+-- Git checkpoints for version control
+CREATE TABLE IF NOT EXISTS git_checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    channel_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    stash_ref TEXT NOT NULL,
+    stash_message TEXT,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_auto BOOLEAN DEFAULT 0,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread ON sessions(channel_id, thread_ts);
+CREATE INDEX IF NOT EXISTS idx_sessions_thread ON sessions(thread_ts) WHERE thread_ts IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_history_session ON command_history(session_id);
 CREATE INDEX IF NOT EXISTS idx_history_created ON command_history(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_session ON parallel_jobs(session_id);
@@ -172,6 +217,11 @@ CREATE INDEX IF NOT EXISTS idx_hook_events_type ON hook_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_queue_items_status ON queue_items(status);
 CREATE INDEX IF NOT EXISTS idx_queue_items_channel ON queue_items(channel_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_position ON queue_items(channel_id, position);
+CREATE INDEX IF NOT EXISTS idx_uploaded_files_session ON uploaded_files(session_id);
+CREATE INDEX IF NOT EXISTS idx_file_context_session ON file_context(session_id);
+CREATE INDEX IF NOT EXISTS idx_file_context_use_count ON file_context(use_count DESC);
+CREATE INDEX IF NOT EXISTS idx_git_checkpoints_channel ON git_checkpoints(channel_id);
+CREATE INDEX IF NOT EXISTS idx_git_checkpoints_session ON git_checkpoints(session_id);
 """
 
 
@@ -189,6 +239,17 @@ async def reset_database(db_path: str) -> None:
     """Drop all tables and reinitialize (for development)."""
     async with aiosqlite.connect(db_path) as db:
         await db.executescript("""
+            DROP TABLE IF EXISTS git_checkpoints;
+            DROP TABLE IF EXISTS file_context;
+            DROP TABLE IF EXISTS uploaded_files;
+            DROP TABLE IF EXISTS queue_items;
+            DROP TABLE IF EXISTS hook_events;
+            DROP TABLE IF EXISTS budget_config;
+            DROP TABLE IF EXISTS usage_snapshots;
+            DROP TABLE IF EXISTS permission_requests;
+            DROP TABLE IF EXISTS agent_turns;
+            DROP TABLE IF EXISTS agent_tasks;
+            DROP TABLE IF EXISTS pty_sessions;
             DROP TABLE IF EXISTS parallel_jobs;
             DROP TABLE IF EXISTS command_history;
             DROP TABLE IF EXISTS sessions;

@@ -5,7 +5,15 @@ import aiosqlite
 import json
 from datetime import datetime
 from typing import Optional
-from .models import Session, CommandHistory, ParallelJob, QueueItem
+from .models import (
+    Session,
+    CommandHistory,
+    ParallelJob,
+    QueueItem,
+    UploadedFile,
+    FileContext,
+    GitCheckpoint,
+)
 
 # Default timeout for database operations (seconds)
 DB_TIMEOUT = 30.0
@@ -37,50 +45,137 @@ class DatabaseRepository:
         return await asyncio.wait_for(coro, timeout=timeout or self.timeout)
 
     # Session operations
-    async def get_or_create_session(self, channel_id: str, default_cwd: str = "~") -> Session:
-        """Get existing session for channel or create a new one.
+    async def get_or_create_session(
+        self, channel_id: str, thread_ts: Optional[str] = None, default_cwd: str = "~"
+    ) -> Session:
+        """Get existing session for channel/thread or create a new one.
 
         Uses INSERT OR IGNORE to avoid race conditions when multiple
         concurrent requests try to create the same session.
+
+        Args:
+            channel_id: Slack channel ID
+            thread_ts: Slack thread timestamp (None for channel-level session)
+            default_cwd: Default working directory for new sessions
         """
         async with self._get_connection() as db:
-            # Atomic insert-or-ignore (UNIQUE constraint on channel_id handles duplicates)
+            # Atomic insert-or-ignore (composite UNIQUE constraint handles duplicates)
             await db.execute(
-                """INSERT OR IGNORE INTO sessions (channel_id, working_directory)
-                   VALUES (?, ?)""",
-                (channel_id, default_cwd),
+                """INSERT OR IGNORE INTO sessions (channel_id, thread_ts, working_directory)
+                   VALUES (?, ?, ?)""",
+                (channel_id, thread_ts, default_cwd),
             )
             # Update last_active timestamp
+            # Handle NULL properly: WHERE clause matches NULL when both are NULL
             await db.execute(
-                "UPDATE sessions SET last_active = ? WHERE channel_id = ?",
-                (datetime.now().isoformat(), channel_id),
+                """UPDATE sessions SET last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    datetime.now().isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
             )
             await db.commit()
 
             # Fetch the session (guaranteed to exist now)
             cursor = await db.execute(
-                "SELECT * FROM sessions WHERE channel_id = ?", (channel_id,)
+                """SELECT * FROM sessions
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (channel_id, thread_ts, thread_ts, thread_ts),
             )
             row = await cursor.fetchone()
             return Session.from_row(row)
 
-    async def update_session_cwd(self, channel_id: str, cwd: str) -> None:
+    async def update_session_cwd(
+        self, channel_id: str, thread_ts: Optional[str], cwd: str
+    ) -> None:
         """Update the working directory for a session."""
         async with self._get_connection() as db:
             await db.execute(
-                "UPDATE sessions SET working_directory = ?, last_active = ? WHERE channel_id = ?",
-                (cwd, datetime.now().isoformat(), channel_id),
+                """UPDATE sessions SET working_directory = ?, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    cwd,
+                    datetime.now().isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
             )
             await db.commit()
 
-    async def update_session_claude_id(self, channel_id: str, claude_session_id: str) -> None:
+    async def update_session_claude_id(
+        self, channel_id: str, thread_ts: Optional[str], claude_session_id: str
+    ) -> None:
         """Update the Claude session ID for resume functionality."""
         async with self._get_connection() as db:
             await db.execute(
-                "UPDATE sessions SET claude_session_id = ?, last_active = ? WHERE channel_id = ?",
-                (claude_session_id, datetime.now().isoformat(), channel_id),
+                """UPDATE sessions SET claude_session_id = ?, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    claude_session_id,
+                    datetime.now().isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
             )
             await db.commit()
+
+    async def get_sessions_by_channel(self, channel_id: str) -> list[Session]:
+        """Get all sessions for a channel (channel + all threads)."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "SELECT * FROM sessions WHERE channel_id = ? ORDER BY created_at DESC",
+                (channel_id,),
+            )
+            rows = await cursor.fetchall()
+            return [Session.from_row(row) for row in rows]
+
+    async def delete_session(
+        self, channel_id: str, thread_ts: Optional[str] = None
+    ) -> bool:
+        """Delete a specific session."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """DELETE FROM sessions
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (channel_id, thread_ts, thread_ts, thread_ts),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def delete_inactive_sessions(self, inactive_days: int = 30) -> int:
+        """Delete sessions inactive for N days."""
+        async with self._get_connection() as db:
+            cutoff = datetime.now().timestamp() - (inactive_days * 24 * 3600)
+            cursor = await db.execute(
+                """DELETE FROM sessions
+                   WHERE last_active < datetime(?, 'unixepoch')""",
+                (cutoff,),
+            )
+            await db.commit()
+            return cursor.rowcount
 
     # Command history operations
     async def add_command(self, session_id: int, command: str) -> CommandHistory:
@@ -379,3 +474,193 @@ class DatabaseRepository:
             )
             row = await cursor.fetchone()
             return QueueItem.from_row(row) if row else None
+
+    # Uploaded file operations
+    async def add_uploaded_file(
+        self,
+        session_id: int,
+        slack_file_id: str,
+        filename: str,
+        local_path: str,
+        mimetype: str = "",
+        size: int = 0,
+    ) -> UploadedFile:
+        """Track an uploaded file."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """INSERT OR REPLACE INTO uploaded_files
+                   (session_id, slack_file_id, filename, local_path, mimetype, size)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (session_id, slack_file_id, filename, local_path, mimetype, size),
+            )
+            await db.commit()
+
+            cursor = await db.execute(
+                "SELECT * FROM uploaded_files WHERE id = ?", (cursor.lastrowid,)
+            )
+            row = await cursor.fetchone()
+            return UploadedFile.from_row(row)
+
+    async def get_session_uploaded_files(self, session_id: int) -> list[UploadedFile]:
+        """Get all uploaded files for a session."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """SELECT * FROM uploaded_files
+                   WHERE session_id = ?
+                   ORDER BY uploaded_at DESC""",
+                (session_id,),
+            )
+            rows = await cursor.fetchall()
+            return [UploadedFile.from_row(row) for row in rows]
+
+    # File context operations
+    async def track_file_context(
+        self, session_id: int, file_path: str, context_type: str
+    ) -> None:
+        """Track or increment file usage for smart context."""
+        async with self._get_connection() as db:
+            # Try to increment existing record
+            cursor = await db.execute(
+                """UPDATE file_context
+                   SET use_count = use_count + 1, last_used = ?
+                   WHERE session_id = ? AND file_path = ? AND context_type = ?""",
+                (datetime.now().isoformat(), session_id, file_path, context_type),
+            )
+
+            # If no rows updated, insert new record
+            if cursor.rowcount == 0:
+                await db.execute(
+                    """INSERT INTO file_context
+                       (session_id, file_path, context_type, use_count)
+                       VALUES (?, ?, ?, 1)""",
+                    (session_id, file_path, context_type),
+                )
+
+            await db.commit()
+
+    async def get_file_context(
+        self, session_id: int, auto_include_only: bool = False
+    ) -> list[FileContext]:
+        """Get file context for smart prompts."""
+        async with self._get_connection() as db:
+            if auto_include_only:
+                cursor = await db.execute(
+                    """SELECT * FROM file_context
+                       WHERE session_id = ? AND auto_include = 1
+                       ORDER BY use_count DESC, last_used DESC""",
+                    (session_id,),
+                )
+            else:
+                cursor = await db.execute(
+                    """SELECT * FROM file_context
+                       WHERE session_id = ?
+                       ORDER BY use_count DESC, last_used DESC
+                       LIMIT 10""",
+                    (session_id,),
+                )
+            rows = await cursor.fetchall()
+            return [FileContext.from_row(row) for row in rows]
+
+    async def set_file_auto_include(
+        self, session_id: int, file_path: str, auto_include: bool
+    ) -> None:
+        """Set auto-include flag for a file."""
+        async with self._get_connection() as db:
+            await db.execute(
+                """UPDATE file_context
+                   SET auto_include = ?
+                   WHERE session_id = ? AND file_path = ?""",
+                (1 if auto_include else 0, session_id, file_path),
+            )
+            await db.commit()
+
+    # Git checkpoint operations
+    async def create_checkpoint(
+        self,
+        session_id: int,
+        channel_id: str,
+        name: str,
+        stash_ref: str,
+        stash_message: Optional[str] = None,
+        description: Optional[str] = None,
+        is_auto: bool = False,
+    ) -> GitCheckpoint:
+        """Create a git checkpoint record."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """INSERT INTO git_checkpoints
+                   (session_id, channel_id, name, stash_ref, stash_message, description, is_auto)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    channel_id,
+                    name,
+                    stash_ref,
+                    stash_message,
+                    description,
+                    1 if is_auto else 0,
+                ),
+            )
+            await db.commit()
+
+            cursor = await db.execute(
+                "SELECT * FROM git_checkpoints WHERE id = ?", (cursor.lastrowid,)
+            )
+            row = await cursor.fetchone()
+            return GitCheckpoint.from_row(row)
+
+    async def get_checkpoints(
+        self, channel_id: str, include_auto: bool = False
+    ) -> list[GitCheckpoint]:
+        """Get checkpoints for a channel."""
+        async with self._get_connection() as db:
+            if include_auto:
+                cursor = await db.execute(
+                    """SELECT * FROM git_checkpoints
+                       WHERE channel_id = ?
+                       ORDER BY created_at DESC""",
+                    (channel_id,),
+                )
+            else:
+                cursor = await db.execute(
+                    """SELECT * FROM git_checkpoints
+                       WHERE channel_id = ? AND is_auto = 0
+                       ORDER BY created_at DESC""",
+                    (channel_id,),
+                )
+            rows = await cursor.fetchall()
+            return [GitCheckpoint.from_row(row) for row in rows]
+
+    async def get_checkpoint_by_name(
+        self, channel_id: str, name: str
+    ) -> Optional[GitCheckpoint]:
+        """Get a specific checkpoint by name."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """SELECT * FROM git_checkpoints
+                   WHERE channel_id = ? AND name = ?
+                   ORDER BY created_at DESC
+                   LIMIT 1""",
+                (channel_id, name),
+            )
+            row = await cursor.fetchone()
+            return GitCheckpoint.from_row(row) if row else None
+
+    async def delete_checkpoint(self, checkpoint_id: int) -> bool:
+        """Delete a checkpoint."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "DELETE FROM git_checkpoints WHERE id = ?", (checkpoint_id,)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def delete_auto_checkpoints(self, channel_id: str) -> int:
+        """Delete all auto checkpoints for a channel."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "DELETE FROM git_checkpoints WHERE channel_id = ? AND is_auto = 1",
+                (channel_id,),
+            )
+            await db.commit()
+            return cursor.rowcount
