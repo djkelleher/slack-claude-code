@@ -40,7 +40,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             Handler dependencies.
         """
         session = await deps.db.get_or_create_session(
-            ctx.channel_id, config.DEFAULT_WORKING_DIR
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
 
         # Send processing message
@@ -62,7 +62,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
             # Update session if needed
             if result.session_id:
-                await deps.db.update_session_claude_id(ctx.channel_id, result.session_id)
+                await deps.db.update_session_claude_id(ctx.channel_id, ctx.thread_ts, result.session_id)
 
             output = result.output or result.error or "Command completed (no output)"
 

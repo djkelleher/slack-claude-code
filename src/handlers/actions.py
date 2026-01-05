@@ -101,7 +101,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             )
 
             if result.session_id:
-                await deps.db.update_session_claude_id(channel_id, result.session_id)
+                await deps.db.update_session_claude_id(channel_id, None, result.session_id)
 
             if result.success:
                 await deps.db.update_command_status(

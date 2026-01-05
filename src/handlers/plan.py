@@ -88,7 +88,7 @@ def register_plan_command(app: AsyncApp, deps: HandlerDependencies) -> None:
         # Update planning command as completed
         await deps.db.update_command_status(cmd_history.id, "completed", plan_content)
         if plan_session_id:
-            await deps.db.update_session_claude_id(ctx.channel_id, plan_session_id)
+            await deps.db.update_session_claude_id(ctx.channel_id, ctx.thread_ts, plan_session_id)
 
         # Update message to show plan is ready
         approval_id = str(uuid.uuid4())[:8]
@@ -202,7 +202,7 @@ def register_plan_command(app: AsyncApp, deps: HandlerDependencies) -> None:
 
             # Update session with new Claude session ID
             if result.session_id:
-                await deps.db.update_session_claude_id(ctx.channel_id, result.session_id)
+                await deps.db.update_session_claude_id(ctx.channel_id, ctx.thread_ts, result.session_id)
 
             # Update command history
             if result.success:

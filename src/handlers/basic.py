@@ -119,7 +119,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         # Update working directory
-        await deps.db.update_session_cwd(ctx.channel_id, str(target_path))
+        await deps.db.update_session_cwd(ctx.channel_id, ctx.thread_ts, str(target_path))
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             text=f"Working directory updated to: {target_path}",
@@ -190,7 +190,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
             # Update session with Claude session ID for resume
             if result.session_id:
-                await deps.db.update_session_claude_id(ctx.channel_id, result.session_id)
+                await deps.db.update_session_claude_id(ctx.channel_id, ctx.thread_ts, result.session_id)
 
             # Update command history
             if result.success:
