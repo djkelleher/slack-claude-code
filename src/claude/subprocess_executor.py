@@ -89,7 +89,7 @@ class SubprocessExecutor:
 
         # Start subprocess with increased line limit (default is 64KB)
         # Large files can produce JSON lines exceeding this limit
-        limit = 10 * 1024 * 1024  # 10MB limit for large file reads
+        limit = 200 * 1024 * 1024  # 200MB limit for large file reads
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
