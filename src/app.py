@@ -140,6 +140,11 @@ async def main():
                     uploaded_files.append(uploaded_file)
                     logger.info(f"File downloaded and tracked: {local_path}")
 
+                    # Track in file context for smart context
+                    await deps.db.track_file_context(
+                        session.id, local_path, "uploaded"
+                    )
+
                     # For images, show thumbnail in thread
                     if file_info.get("mimetype", "").startswith("image/"):
                         thumb_url = file_info.get("thumb_360") or file_info.get("thumb_160")
@@ -186,7 +191,7 @@ async def main():
                         text=f"⚠️ Error processing file: {file_info['name']} - {str(e)}",
                     )
 
-        # Enhance prompt with file references
+        # Enhance prompt with uploaded file references
         if uploaded_files:
             file_refs = "\n".join([
                 f"- {f.filename} (at {f.local_path})"
@@ -198,6 +203,49 @@ async def main():
             else:
                 # No text, only files - provide default prompt
                 prompt = f"Please analyze these uploaded files:\n{file_refs}"
+
+        # Smart context: Add recently used files to prompt
+        try:
+            # Get files you've worked with recently (use_count >= 2 or auto_include)
+            file_contexts = await deps.db.get_file_context(session.id)
+
+            if file_contexts:
+                # Limit to top 5 most relevant files
+                relevant_files = sorted(
+                    file_contexts,
+                    key=lambda f: (f.use_count, f.last_used),
+                    reverse=True
+                )[:5]
+
+                # Build context summary
+                from datetime import datetime, timezone
+                context_lines = []
+                for fc in relevant_files:
+                    # Calculate time ago
+                    time_delta = datetime.now(timezone.utc) - fc.last_used.replace(tzinfo=timezone.utc)
+                    if time_delta.total_seconds() < 60:
+                        time_str = "just now"
+                    elif time_delta.total_seconds() < 3600:
+                        minutes = int(time_delta.total_seconds() / 60)
+                        time_str = f"{minutes}m ago"
+                    elif time_delta.total_seconds() < 86400:
+                        hours = int(time_delta.total_seconds() / 3600)
+                        time_str = f"{hours}h ago"
+                    else:
+                        days = int(time_delta.total_seconds() / 86400)
+                        time_str = f"{days}d ago"
+
+                    context_lines.append(
+                        f"- {fc.file_path} ({fc.context_type} {fc.use_count}x, {time_str})"
+                    )
+
+                if context_lines:
+                    context_summary = "\n".join(context_lines)
+                    prompt = f"{prompt}\n\n[Recently accessed files in this session:]\n{context_summary}"
+                    logger.info(f"Enhanced prompt with {len(relevant_files)} file context(s)")
+
+        except Exception as e:
+            logger.warning(f"Failed to enhance prompt with file context: {e}")
 
         # Create command history entry
         cmd_history = await deps.db.add_command(session.id, prompt)
