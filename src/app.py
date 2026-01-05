@@ -8,6 +8,7 @@ with each channel representing a separate persistent PTY session.
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 import traceback
@@ -21,6 +22,11 @@ from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.claude.subprocess_executor import SubprocessExecutor
 from src.handlers import register_commands, register_actions
+from src.utils.file_downloader import (
+    FileTooLargeError,
+    FileDownloadError,
+    download_slack_file,
+)
 from src.utils.formatting import SlackFormatter
 
 # Configure logging
@@ -87,9 +93,11 @@ async def main():
         channel_id = event.get("channel")
         thread_ts = event.get("thread_ts")  # Extract thread timestamp
         prompt = event.get("text", "").strip()
+        files = event.get("files", [])  # Extract uploaded files
 
-        if not prompt:
-            logger.debug("Empty prompt, ignoring")
+        # Allow messages with files but no text
+        if not prompt and not files:
+            logger.debug("Empty prompt and no files, ignoring")
             return
 
         # Get or create session (thread-aware)
@@ -97,6 +105,99 @@ async def main():
             channel_id, thread_ts=thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
         logger.info(f"Using session: {session.session_display_name()}")
+
+        # Process file uploads
+        uploaded_files = []
+        if files:
+            logger.info(f"Processing {len(files)} uploaded file(s)")
+
+            # Create .slack_uploads directory in session working directory
+            uploads_dir = os.path.join(session.working_directory, ".slack_uploads")
+            os.makedirs(uploads_dir, exist_ok=True)
+
+            for file_info in files:
+                try:
+                    logger.info(f"Downloading file: {file_info.get('name')}")
+
+                    # Download file
+                    local_path, metadata = await download_slack_file(
+                        client=client,
+                        file_id=file_info["id"],
+                        slack_bot_token=config.SLACK_BOT_TOKEN,
+                        destination_dir=uploads_dir,
+                        max_size_bytes=config.MAX_FILE_SIZE_MB * 1024 * 1024,
+                    )
+
+                    # Track in database
+                    uploaded_file = await deps.db.add_uploaded_file(
+                        session_id=session.id,
+                        slack_file_id=file_info["id"],
+                        filename=file_info["name"],
+                        local_path=local_path,
+                        mimetype=file_info.get("mimetype", ""),
+                        size=file_info.get("size", 0),
+                    )
+                    uploaded_files.append(uploaded_file)
+                    logger.info(f"File downloaded and tracked: {local_path}")
+
+                    # For images, show thumbnail in thread
+                    if file_info.get("mimetype", "").startswith("image/"):
+                        thumb_url = file_info.get("thumb_360") or file_info.get("thumb_160")
+                        if thumb_url:
+                            await client.chat_postMessage(
+                                channel=channel_id,
+                                thread_ts=thread_ts or event.get("ts"),  # Use message ts if not in thread
+                                text=f"📎 Uploaded: {file_info['name']}",
+                                blocks=[
+                                    {
+                                        "type": "section",
+                                        "text": {
+                                            "type": "mrkdwn",
+                                            "text": f":frame_with_picture: Uploaded image: *{file_info['name']}*",
+                                        },
+                                    },
+                                    {
+                                        "type": "image",
+                                        "image_url": thumb_url,
+                                        "alt_text": file_info["name"],
+                                    },
+                                ],
+                            )
+
+                except FileTooLargeError as e:
+                    logger.warning(f"File too large: {file_info.get('name')} - {e}")
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts or event.get("ts"),
+                        text=f"⚠️ File too large: {file_info['name']} ({e.size_mb:.1f}MB, max: {e.max_mb}MB)",
+                    )
+                except FileDownloadError as e:
+                    logger.error(f"File download failed: {file_info.get('name')} - {e}")
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts or event.get("ts"),
+                        text=f"⚠️ Failed to download file: {file_info['name']} - {str(e)}",
+                    )
+                except Exception as e:
+                    logger.error(f"Unexpected error processing file {file_info.get('name')}: {e}\n{traceback.format_exc()}")
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts or event.get("ts"),
+                        text=f"⚠️ Error processing file: {file_info['name']} - {str(e)}",
+                    )
+
+        # Enhance prompt with file references
+        if uploaded_files:
+            file_refs = "\n".join([
+                f"- {f.filename} (at {f.local_path})"
+                for f in uploaded_files
+            ])
+
+            if prompt:
+                prompt = f"{prompt}\n\nUploaded files:\n{file_refs}"
+            else:
+                # No text, only files - provide default prompt
+                prompt = f"Please analyze these uploaded files:\n{file_refs}"
 
         # Create command history entry
         cmd_history = await deps.db.add_command(session.id, prompt)

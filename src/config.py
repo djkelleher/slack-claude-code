@@ -94,6 +94,10 @@ class Config:
         else []
     )
 
+    # File upload configuration
+    MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "10"))
+    MAX_UPLOAD_STORAGE_MB: int = int(os.getenv("MAX_UPLOAD_STORAGE_MB", "100"))
+
     # Centralized timeout configuration
     timeouts: TimeoutConfig = TimeoutConfig(
         pty=PTYTimeouts(
