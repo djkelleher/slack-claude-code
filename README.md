@@ -50,12 +50,24 @@ poetry install
 
    Go to "OAuth & Permissions" and add these Bot Token Scopes:
    - `chat:write` - Send messages
-   - `commands` - Handle slash commands
-   - `channels:history` - Read channel messages (for context)
+   - `commands` - Handle slash commands (optional, for `/c` and other commands)
+   - `channels:history` - Read channel messages
    - `app_mentions:read` - Respond to @mentions
    - `files:write` - Upload files (for long responses)
 
-5. **Create Slash Commands**:
+5. **Subscribe to Events**:
+
+   Go to "Event Subscriptions" and enable events:
+   - Toggle "Enable Events" ON
+   - Under "Subscribe to bot events", add:
+     - `message.channels` - Listen to messages in public channels
+     - `app_mention` - Respond to @mentions
+
+   **Note**: All messages in channels where the bot is present will be sent to Claude Code. The bot automatically ignores its own messages to prevent loops.
+
+6. **Create Slash Commands** (Optional):
+
+   These are optional - you can just type messages directly in the channel.
 
    Go to "Slash Commands" and create:
 
@@ -93,13 +105,13 @@ poetry install
    | `/stats` | Show usage stats and history |
    | `/todos` | List current TODO items |
 
-6. **Install to Workspace**:
+7. **Install to Workspace**:
 
    - Go to "Install App" in the sidebar
    - Click "Install to Workspace"
    - Authorize the app
 
-7. **Configure Environment**:
+8. **Configure Environment**:
 
 ```bash
 cp .env.example .env
@@ -119,13 +131,21 @@ poetry run python run.py
 
 ## Usage
 
-### Basic Commands
+### Sending Messages to Claude
+
+Just type your message in any channel where the bot is present:
+
+```
+Explain this codebase
+```
+
+The bot will automatically send your message to Claude Code and stream the response back to Slack.
+
+**Note**: You can also use the `/c` command if you prefer:
 
 ```
 /c Explain this codebase
 ```
-
-Runs the prompt in Claude Code and sends the response.
 
 ### Multi-Agent Workflows
 
