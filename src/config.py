@@ -25,6 +25,7 @@ class ExecutionTimeouts:
     command: int = 300  # max command runtime (5 min)
     permission: int = 300  # permission request timeout
     usage_check: int = 30  # usage CLI command timeout
+    plan_approval: int = 600  # plan approval timeout (10 min)
 
 
 @dataclass
@@ -105,6 +106,7 @@ class Config:
             command=int(os.getenv("COMMAND_TIMEOUT", "300")),
             permission=int(os.getenv("PERMISSION_TIMEOUT", "300")),
             usage_check=int(os.getenv("USAGE_CHECK_TIMEOUT", "30")),
+            plan_approval=int(os.getenv("PLAN_APPROVAL_TIMEOUT", "600")),
         ),
         slack=SlackTimeouts(
             message_update_throttle=float(os.getenv("MESSAGE_UPDATE_THROTTLE", "2.0")),

@@ -54,6 +54,7 @@ class SubprocessExecutor:
         resume_session_id: Optional[str] = None,
         execution_id: Optional[str] = None,
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]] = None,
+        plan_mode: bool = False,
     ) -> ExecutionResult:
         """Execute a prompt via Claude Code subprocess.
 
@@ -64,6 +65,7 @@ class SubprocessExecutor:
             resume_session_id: Claude session ID to resume (from previous execution)
             execution_id: Unique ID for this execution (for cancellation)
             on_chunk: Async callback for each streamed message
+            plan_mode: If True, use --permission-mode plan for planning phase
 
         Returns:
             ExecutionResult with the command output
@@ -77,11 +79,17 @@ class SubprocessExecutor:
         ]
 
         # Add permission mode
-        if config.CLAUDE_PERMISSION_MODE in ["approve-all", "prompt", "deny"]:
-            cmd.extend(["--permissions", config.CLAUDE_PERMISSION_MODE])
+        if plan_mode:
+            # Use plan mode for planning phase
+            cmd.extend(["--permission-mode", "plan"])
+            logger.info("Using --permission-mode plan for planning phase")
         else:
-            logger.warning(f"Invalid CLAUDE_PERMISSION_MODE: {config.CLAUDE_PERMISSION_MODE}, using approve-all")
-            cmd.extend(["--permissions", "approve-all"])
+            # Use standard permission mode
+            if config.CLAUDE_PERMISSION_MODE in ["approve-all", "prompt", "deny"]:
+                cmd.extend(["--permissions", config.CLAUDE_PERMISSION_MODE])
+            else:
+                logger.warning(f"Invalid CLAUDE_PERMISSION_MODE: {config.CLAUDE_PERMISSION_MODE}, using approve-all")
+                cmd.extend(["--permissions", "approve-all"])
 
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):

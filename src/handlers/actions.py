@@ -6,6 +6,8 @@ import uuid
 from slack_bolt.async_app import AsyncApp
 
 from src.approval import PermissionManager, build_approval_result_blocks
+from src.approval.plan_manager import PlanApprovalManager
+from src.approval.slack_ui import build_plan_result_blocks
 from src.config import config
 from src.pty import PTYSessionPool
 from src.utils.formatting import SlackFormatter
@@ -399,6 +401,86 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 channel=channel_id,
                 user=user_id,
                 text=f"Approval request `{approval_id}` not found or already resolved.",
+            )
+
+    @app.action("approve_plan")
+    async def handle_approve_plan(ack, action, body, client, logger):
+        """Handle plan approval button click."""
+        await ack()
+
+        channel_id = body["channel"]["id"]
+        message_ts = body["message"]["ts"]
+        user_id = body["user"]["id"]
+        approval_id = action["value"]
+
+        # Resolve the approval
+        resolved = await PlanApprovalManager.resolve(
+            approval_id=approval_id,
+            approved=True,
+            resolved_by=user_id,
+        )
+
+        if resolved:
+            # Update the message to show approved status
+            try:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    blocks=build_plan_result_blocks(
+                        approval_id=approval_id,
+                        approved=True,
+                        user_id=user_id,
+                    ),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update plan approval message: {e}")
+
+            logger.info(f"Plan {approval_id} approved by {user_id}")
+        else:
+            await client.chat_postEphemeral(
+                channel=channel_id,
+                user=user_id,
+                text=f"Plan approval request `{approval_id}` not found or already resolved.",
+            )
+
+    @app.action("reject_plan")
+    async def handle_reject_plan(ack, action, body, client, logger):
+        """Handle plan rejection button click."""
+        await ack()
+
+        channel_id = body["channel"]["id"]
+        message_ts = body["message"]["ts"]
+        user_id = body["user"]["id"]
+        approval_id = action["value"]
+
+        # Resolve the approval (rejected)
+        resolved = await PlanApprovalManager.resolve(
+            approval_id=approval_id,
+            approved=False,
+            resolved_by=user_id,
+        )
+
+        if resolved:
+            # Update the message to show rejected status
+            try:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    blocks=build_plan_result_blocks(
+                        approval_id=approval_id,
+                        approved=False,
+                        user_id=user_id,
+                    ),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update plan rejection message: {e}")
+
+            logger.info(f"Plan {approval_id} rejected by {user_id}")
+        else:
+            await client.chat_postEphemeral(
+                channel=channel_id,
+                user=user_id,
+                text=f"Plan approval request `{approval_id}` not found or already resolved.",
             )
 
     # -------------------------------------------------------------------------

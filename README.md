@@ -74,6 +74,7 @@ poetry install
    | Command | Description |
    |---------|-------------|
    | `/c` | Run a Claude Code command |
+   | `/plan` | Plan mode - review implementation plan before execution |
    | `/ls` | List directory contents (shows cwd when no argument) |
    | `/cd` | Change working directory (supports relative paths) |
    | `/q` | Add command to FIFO queue |
@@ -146,6 +147,28 @@ The bot will automatically send your message to Claude Code and stream the respo
 ```
 /c Explain this codebase
 ```
+
+### Plan Mode
+
+Use plan mode when you want to review Claude's implementation plan before execution:
+
+```
+/plan Add a new API endpoint for user authentication
+```
+
+How it works:
+1. **Planning Phase**: Claude explores the codebase and creates a detailed implementation plan
+2. **Review**: The plan is displayed in Slack with Approve/Reject buttons
+3. **Execution Phase**: If approved, Claude executes the plan step by step
+4. **Session Continuity**: Both phases share the same session context
+
+Plan mode is ideal for:
+- Complex implementations requiring careful planning
+- Tasks where you want visibility into the approach before execution
+- Learning how Claude approaches problems
+- Situations where you want to review and approve before making changes
+
+The plan approval times out after 10 minutes by default (configurable via `PLAN_APPROVAL_TIMEOUT`).
 
 ### Multi-Agent Workflows
 
