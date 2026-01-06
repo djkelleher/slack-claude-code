@@ -346,3 +346,7 @@ class SubprocessExecutor:
     async def shutdown(self) -> None:
         """Shutdown and cancel all active executions."""
         await self.cancel_all()
+        # Wait for any pending background tasks (file context tracking)
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()

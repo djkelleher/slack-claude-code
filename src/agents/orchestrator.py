@@ -11,7 +11,6 @@ from enum import Enum
 from typing import Callable, Awaitable, Optional
 
 from ..claude.subprocess_executor import SubprocessExecutor, ExecutionResult
-from ..pty import PTYSessionPool
 from .roles import AgentRole, format_task_prompt, get_agent_config
 
 logger = logging.getLogger(__name__)
@@ -289,10 +288,10 @@ class MultiAgentOrchestrator:
         )
 
     async def _cleanup_sessions(self, task_id: str) -> None:
-        """Cleanup PTY sessions for a task."""
+        """Cancel any active subprocess executions for a task."""
         for role in ["planner", "worker", "evaluator"]:
             session_id = f"{task_id}-{role}"
-            await PTYSessionPool.remove(session_id)
+            await self.executor.cancel(session_id)
 
     async def cancel_task(self, task_id: str) -> bool:
         """Cancel an active task.

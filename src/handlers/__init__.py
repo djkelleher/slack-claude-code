@@ -2,7 +2,7 @@
 
 from slack_bolt.async_app import AsyncApp
 
-from src.claude import ClaudeExecutor
+from src.claude.subprocess_executor import SubprocessExecutor
 from src.database import DatabaseRepository
 
 from .actions import register_actions
@@ -22,7 +22,7 @@ from .session_management import register_session_commands
 def register_commands(
     app: AsyncApp,
     db: DatabaseRepository,
-    executor: ClaudeExecutor,
+    executor: SubprocessExecutor,
 ) -> HandlerDependencies:
     """Register all slash command handlers.
 
