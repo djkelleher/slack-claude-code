@@ -47,6 +47,8 @@ class StreamingConfig:
     """Configuration for streaming message updates."""
 
     max_accumulated_size: int = 500000  # Maximum output buffer (500KB)
+    max_tools_display: int = 10  # Max tools shown in main message
+    tool_thread_threshold: int = 500  # Post tool output to thread if > this chars
 
 
 @dataclass
@@ -120,6 +122,8 @@ class Config:
         ),
         streaming=StreamingConfig(
             max_accumulated_size=int(os.getenv("MAX_ACCUMULATED_SIZE", "500000")),
+            max_tools_display=int(os.getenv("MAX_TOOLS_DISPLAY", "10")),
+            tool_thread_threshold=int(os.getenv("TOOL_THREAD_THRESHOLD", "500")),
         ),
     )
 

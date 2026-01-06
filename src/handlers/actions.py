@@ -1,6 +1,7 @@
 """Interactive component action handlers."""
 
 import asyncio
+import json
 import uuid
 
 from slack_bolt.async_app import AsyncApp
@@ -8,8 +9,10 @@ from slack_bolt.async_app import AsyncApp
 from src.approval import PermissionManager, build_approval_result_blocks
 from src.approval.plan_manager import PlanApprovalManager
 from src.approval.slack_ui import build_plan_result_blocks
+from src.claude.streaming import ToolActivity
 from src.config import config
 from src.pty import PTYSessionPool
+from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.formatting import SlackFormatter
 
 from .base import HandlerDependencies
@@ -554,3 +557,63 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
 
         logger.info(f"PTY session for {channel_id} restarted by {user_id}")
+
+    # -------------------------------------------------------------------------
+    # Tool detail handlers
+    # -------------------------------------------------------------------------
+
+    @app.action("view_tool_detail")
+    async def handle_view_tool_detail(ack, action, body, client, logger):
+        """Handle view tool detail button click.
+
+        Opens a modal with full tool input/output details.
+        """
+        await ack()
+
+        try:
+            tool_data = json.loads(action["value"])
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Invalid tool data: {e}")
+            await client.views_open(
+                trigger_id=body["trigger_id"],
+                view={
+                    "type": "modal",
+                    "title": {"type": "plain_text", "text": "Error"},
+                    "close": {"type": "plain_text", "text": "Close"},
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": "Could not load tool details.",
+                            },
+                        }
+                    ],
+                },
+            )
+            return
+
+        # Reconstruct ToolActivity from the serialized data
+        tool = ToolActivity(
+            id=tool_data.get("id", "unknown"),
+            name=tool_data.get("name", "unknown"),
+            input=tool_data.get("input", {}),
+            input_summary=tool_data.get("input_summary", ""),
+            result=tool_data.get("result"),
+            full_result=tool_data.get("full_result"),
+            is_error=tool_data.get("is_error", False),
+            duration_ms=tool_data.get("duration_ms"),
+        )
+
+        # Get formatted blocks
+        detail_blocks = format_tool_detail_blocks(tool)
+
+        await client.views_open(
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "title": {"type": "plain_text", "text": f"Tool: {tool.name}"},
+                "close": {"type": "plain_text", "text": "Close"},
+                "blocks": detail_blocks[:50],  # Modal block limit
+            },
+        )

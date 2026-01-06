@@ -1,6 +1,12 @@
 """Streaming message formatting."""
 
+from typing import TYPE_CHECKING
+
 from .base import escape_markdown, truncate_from_start
+from .tool_blocks import format_tool_activity_section
+
+if TYPE_CHECKING:
+    from src.claude.streaming import ToolActivity
 
 
 def processing_message(prompt: str) -> list[dict]:
@@ -16,13 +22,38 @@ def processing_message(prompt: str) -> list[dict]:
     ]
 
 
-def streaming_update(prompt: str, current_output: str, is_complete: bool = False) -> list[dict]:
-    """Format a streaming update message."""
+def streaming_update(
+    prompt: str,
+    current_output: str,
+    tool_activities: list["ToolActivity"] = None,
+    is_complete: bool = False,
+    max_tools_display: int = 8,
+) -> list[dict]:
+    """Format a streaming update message with tool activity.
+
+    Parameters
+    ----------
+    prompt : str
+        The original user prompt.
+    current_output : str
+        The accumulated text output from Claude.
+    tool_activities : list[ToolActivity], optional
+        List of tool activities to display.
+    is_complete : bool
+        Whether the response is complete.
+    max_tools_display : int
+        Maximum number of tools to show in the activity section.
+
+    Returns
+    -------
+    list[dict]
+        Slack blocks for the streaming message.
+    """
     status = ":white_check_mark: Complete" if is_complete else ":arrows_counterclockwise: Streaming..."
 
     current_output = truncate_from_start(current_output)
 
-    return [
+    blocks = [
         {
             "type": "context",
             "elements": [
@@ -38,3 +69,10 @@ def streaming_update(prompt: str, current_output: str, is_complete: bool = False
             "text": {"type": "mrkdwn", "text": current_output or "_Waiting for response..._"},
         },
     ]
+
+    # Add tool activity section if there are tools
+    if tool_activities:
+        tool_blocks = format_tool_activity_section(tool_activities, max_tools_display)
+        blocks.extend(tool_blocks)
+
+    return blocks

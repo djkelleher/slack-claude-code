@@ -5,9 +5,12 @@ New code should import directly from src.utils.formatters.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from src.database.models import ParallelJob
+
+if TYPE_CHECKING:
+    from src.claude.streaming import ToolActivity
 
 from .formatters import (
     FILE_THRESHOLD,
@@ -61,8 +64,15 @@ class SlackFormatter:
         return processing_message(prompt)
 
     @classmethod
-    def streaming_update(cls, prompt: str, current_output: str, is_complete: bool = False) -> list[dict]:
-        return streaming_update(prompt, current_output, is_complete)
+    def streaming_update(
+        cls,
+        prompt: str,
+        current_output: str,
+        tool_activities: list["ToolActivity"] = None,
+        is_complete: bool = False,
+        max_tools_display: int = 8,
+    ) -> list[dict]:
+        return streaming_update(prompt, current_output, tool_activities, is_complete, max_tools_display)
 
     @classmethod
     def parallel_job_status(cls, job: ParallelJob) -> list[dict]:

@@ -265,32 +265,57 @@ async def main():
 
         # Execute command with streaming updates
         accumulated_output = ""
+        accumulated_tools: dict[str, "ToolActivity"] = {}  # tool_id -> ToolActivity
         last_update_time = 0
         execution_id = str(uuid.uuid4())
 
-        async def on_chunk(msg):
-            nonlocal accumulated_output, last_update_time
+        # Import here to avoid circular imports
+        from src.claude.streaming import ToolActivity
 
+        async def on_chunk(msg):
+            nonlocal accumulated_output, accumulated_tools, last_update_time
+
+            # Accumulate text content
             if msg.type == "assistant" and msg.content:
                 # Limit accumulated output to prevent memory issues
                 if len(accumulated_output) < config.timeouts.streaming.max_accumulated_size:
                     accumulated_output += msg.content
 
-                # Rate limit updates to avoid Slack API limits
-                current_time = asyncio.get_running_loop().time()
-                if current_time - last_update_time > config.timeouts.slack.message_update_throttle:
-                    last_update_time = current_time
-                    try:
-                        await client.chat_update(
-                            channel=channel_id,
-                            ts=message_ts,
-                            text=accumulated_output[:100] + "..." if len(accumulated_output) > 100 else accumulated_output,
-                            blocks=SlackFormatter.streaming_update(
-                                prompt, accumulated_output
-                            ),
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to update message: {e}")
+            # Track tool activities
+            if msg.tool_activities:
+                for tool in msg.tool_activities:
+                    if tool.id in accumulated_tools:
+                        # Update existing tool with result
+                        existing = accumulated_tools[tool.id]
+                        if tool.result is not None:
+                            existing.result = tool.result
+                            existing.full_result = tool.full_result
+                            existing.is_error = tool.is_error
+                            existing.duration_ms = tool.duration_ms
+                    else:
+                        # Add new tool
+                        accumulated_tools[tool.id] = tool
+
+            # Rate limit updates to avoid Slack API limits
+            current_time = asyncio.get_running_loop().time()
+            if current_time - last_update_time > config.timeouts.slack.message_update_throttle:
+                last_update_time = current_time
+                try:
+                    # Get tool list (most recent last)
+                    tool_list = list(accumulated_tools.values())
+
+                    await client.chat_update(
+                        channel=channel_id,
+                        ts=message_ts,
+                        text=accumulated_output[:100] + "..." if len(accumulated_output) > 100 else accumulated_output,
+                        blocks=SlackFormatter.streaming_update(
+                            prompt,
+                            accumulated_output,
+                            tool_activities=tool_list,
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update message: {e}")
 
         try:
             result = await executor.execute(

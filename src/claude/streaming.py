@@ -1,6 +1,7 @@
 import json
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Optional, Iterator
 
 logger = logging.getLogger(__name__)
@@ -10,12 +11,87 @@ MAX_BUFFER_SIZE = 10000
 
 
 @dataclass
+class ToolActivity:
+    """Structured representation of a tool invocation.
+
+    Tracks the full lifecycle of a tool use from invocation to result.
+    """
+
+    id: str  # tool_use_id from Claude
+    name: str  # Read, Edit, Write, Bash, Glob, Grep, etc.
+    input: dict  # Full tool input parameters
+    input_summary: str  # Short summary for inline display
+    result: Optional[str] = None  # Result content (truncated for display)
+    full_result: Optional[str] = None  # Full untruncated result
+    is_error: bool = False
+    duration_ms: Optional[int] = None
+    started_at: Optional[float] = None  # time.time() when tool started
+
+    @classmethod
+    def create_input_summary(cls, name: str, input_dict: dict) -> str:
+        """Create a short summary of tool input for inline display."""
+        if name == "Read":
+            path = input_dict.get("file_path", "?")
+            return f"`{cls._truncate_path(path)}`"
+        elif name == "Edit":
+            path = input_dict.get("file_path", "?")
+            return f"`{cls._truncate_path(path)}`"
+        elif name == "Write":
+            path = input_dict.get("file_path", "?")
+            return f"`{cls._truncate_path(path)}`"
+        elif name == "Bash":
+            cmd = input_dict.get("command", "?")
+            return f"`{cls._truncate_cmd(cmd)}`"
+        elif name == "Glob":
+            pattern = input_dict.get("pattern", "?")
+            return f"`{pattern[:40]}{'...' if len(pattern) > 40 else ''}`"
+        elif name == "Grep":
+            pattern = input_dict.get("pattern", "?")
+            return f"`{pattern[:40]}{'...' if len(pattern) > 40 else ''}`"
+        elif name == "Task":
+            desc = input_dict.get("description", input_dict.get("prompt", "?"))
+            return f"`{desc[:40]}{'...' if len(str(desc)) > 40 else ''}`"
+        elif name == "WebFetch":
+            url = input_dict.get("url", "?")
+            return f"`{url[:50]}{'...' if len(url) > 50 else ''}`"
+        elif name == "WebSearch":
+            query = input_dict.get("query", "?")
+            return f"`{query[:40]}{'...' if len(query) > 40 else ''}`"
+        elif name == "LSP":
+            op = input_dict.get("operation", "?")
+            path = input_dict.get("filePath", "?")
+            return f"`{op}` on `{cls._truncate_path(path)}`"
+        elif name == "TodoWrite":
+            todos = input_dict.get("todos", [])
+            return f"`{len(todos)} items`"
+        else:
+            # Generic summary
+            return ""
+
+    @staticmethod
+    def _truncate_path(path: str, max_len: int = 45) -> str:
+        """Truncate file path, keeping filename visible."""
+        if len(path) <= max_len:
+            return path
+        return "..." + path[-(max_len - 3):]
+
+    @staticmethod
+    def _truncate_cmd(cmd: str, max_len: int = 50) -> str:
+        """Truncate command for display."""
+        cmd = cmd.replace("\n", " ").strip()
+        if len(cmd) <= max_len:
+            return cmd
+        return cmd[: max_len - 3] + "..."
+
+
+@dataclass
 class StreamMessage:
     """Parsed message from Claude's stream-json output."""
 
-    type: str  # init, assistant, result, error
+    type: str  # init, assistant, user, result, error
     content: str = ""
     detailed_content: str = ""  # Full output with tool use details
+    tool_activities: list[ToolActivity] = None  # Structured tool data
     session_id: Optional[str] = None
     is_final: bool = False
     cost_usd: Optional[float] = None
@@ -25,6 +101,8 @@ class StreamMessage:
     def __post_init__(self):
         if self.raw is None:
             self.raw = {}
+        if self.tool_activities is None:
+            self.tool_activities = []
 
 
 class StreamParser:
@@ -35,6 +113,8 @@ class StreamParser:
         self.session_id: Optional[str] = None
         self.accumulated_content = ""
         self.accumulated_detailed = ""
+        # Track pending tool uses to link with results
+        self.pending_tools: dict[str, ToolActivity] = {}  # tool_use_id -> ToolActivity
 
     def parse_line(self, line: str) -> Optional[StreamMessage]:
         """Parse a single line of stream-json output."""
@@ -76,6 +156,7 @@ class StreamParser:
 
             text_content = ""
             detailed_content = ""
+            tool_activities = []
 
             for block in content_blocks:
                 if block.get("type") == "text":
@@ -83,9 +164,25 @@ class StreamParser:
                     text_content += text
                     detailed_content += text
                 elif block.get("type") == "tool_use":
-                    # Include tool use in detailed output
+                    # Create structured tool activity
+                    tool_id = block.get("id", "")
                     tool_name = block.get("name", "unknown")
                     tool_input = block.get("input", {})
+
+                    # Create ToolActivity object
+                    tool_activity = ToolActivity(
+                        id=tool_id,
+                        name=tool_name,
+                        input=tool_input,
+                        input_summary=ToolActivity.create_input_summary(tool_name, tool_input),
+                        started_at=time.time(),
+                    )
+                    tool_activities.append(tool_activity)
+
+                    # Track for linking with results
+                    self.pending_tools[tool_id] = tool_activity
+
+                    # Include tool use in detailed output
                     detailed_content += f"\n\n[Tool: {tool_name}]\n"
                     # Format tool input nicely
                     for key, value in tool_input.items():
@@ -104,6 +201,7 @@ class StreamParser:
                 type="assistant",
                 content=text_content,
                 detailed_content=detailed_content,
+                tool_activities=tool_activities,
                 session_id=self.session_id,
                 raw=data,
             )
@@ -114,16 +212,56 @@ class StreamParser:
             content_blocks = message.get("content", [])
 
             detailed_addition = ""
+            tool_activities = []
+
             for block in content_blocks:
                 if block.get("type") == "tool_result":
                     tool_use_id = block.get("tool_use_id", "unknown")
                     content = block.get("content", "")
                     is_error = block.get("is_error", False)
 
+                    # Get full content as string
                     if isinstance(content, str):
-                        content_preview = content[:500] + "..." if len(content) > 500 else content
+                        full_content = content
+                    elif isinstance(content, list):
+                        # Handle array of content blocks
+                        full_content = ""
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                full_content += item.get("text", "")
+                            elif isinstance(item, str):
+                                full_content += item
                     else:
-                        content_preview = str(content)[:500]
+                        full_content = str(content)
+
+                    content_preview = (
+                        full_content[:500] + "..." if len(full_content) > 500 else full_content
+                    )
+
+                    # Update linked ToolActivity if we have it
+                    if tool_use_id in self.pending_tools:
+                        tool_activity = self.pending_tools[tool_use_id]
+                        tool_activity.result = content_preview
+                        tool_activity.full_result = full_content
+                        tool_activity.is_error = is_error
+                        # Compute duration
+                        if tool_activity.started_at:
+                            tool_activity.duration_ms = int(
+                                (time.time() - tool_activity.started_at) * 1000
+                            )
+                        tool_activities.append(tool_activity)
+                    else:
+                        # Create a result-only activity for untracked tools
+                        tool_activity = ToolActivity(
+                            id=tool_use_id,
+                            name="unknown",
+                            input={},
+                            input_summary="",
+                            result=content_preview,
+                            full_result=full_content,
+                            is_error=is_error,
+                        )
+                        tool_activities.append(tool_activity)
 
                     status = "ERROR" if is_error else "SUCCESS"
                     detailed_addition += f"\n\n[Tool Result: {status}]\n{content_preview}\n"
@@ -134,6 +272,7 @@ class StreamParser:
             return StreamMessage(
                 type="user",
                 detailed_content=detailed_addition,
+                tool_activities=tool_activities,
                 session_id=self.session_id,
                 raw=data,
             )
@@ -174,3 +313,4 @@ class StreamParser:
         self.session_id = None
         self.accumulated_content = ""
         self.accumulated_detailed = ""
+        self.pending_tools.clear()
