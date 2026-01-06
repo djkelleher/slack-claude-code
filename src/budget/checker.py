@@ -7,7 +7,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 from ..config import config
@@ -213,14 +213,13 @@ class UsageChecker:
         match = re.search(r"[Rr]esets?\s+(?:in\s+)?(\d+)\s*(?:hours?|hrs?)", output)
         if match:
             hours = int(match.group(1))
-            return now.replace(minute=0, second=0, microsecond=0) + \
-                   __import__('datetime').timedelta(hours=hours)
+            return now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=hours)
 
         # Check for "in X minutes"
         match = re.search(r"[Rr]esets?\s+(?:in\s+)?(\d+)\s*(?:minutes?|mins?)", output)
         if match:
             minutes = int(match.group(1))
-            return now + __import__('datetime').timedelta(minutes=minutes)
+            return now + timedelta(minutes=minutes)
 
         # Check for specific date
         match = re.search(r"(\d{4}-\d{2}-\d{2})", output)

@@ -262,7 +262,7 @@ class PTYSession:
                 last_output_time = current_time
                 self.accumulated_output += data
 
-                print(data, end='', flush=True)
+                logger.debug(f"PTY output: {data[:100]}..." if len(data) > 100 else f"PTY output: {data}")
 
                 if self.on_output:
                     await self.on_output(data)

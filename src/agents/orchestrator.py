@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Callable, Awaitable, Optional
 
-from ..claude.executor import ClaudeExecutor, ExecutionResult
+from ..claude.subprocess_executor import SubprocessExecutor, ExecutionResult
 from ..pty import PTYSessionPool
 from .roles import AgentRole, format_task_prompt, get_agent_config
 
@@ -84,7 +84,7 @@ class MultiAgentOrchestrator:
 
     def __init__(
         self,
-        executor: ClaudeExecutor,
+        executor: SubprocessExecutor,
         max_iterations: int = 3,
     ) -> None:
         """Initialize orchestrator.

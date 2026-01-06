@@ -6,6 +6,7 @@ for asyncio tasks across the application.
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
@@ -54,18 +55,25 @@ class TaskManager:
     """Centralized async task lifecycle management.
 
     Provides registration, cancellation, and automatic cleanup of tasks.
-    Thread-safe through asyncio.Lock.
+    Thread-safe through asyncio.Lock with double-checked locking.
     """
 
     _tasks: dict[str, TrackedTask] = {}
     _lock: Optional[asyncio.Lock] = None
+    _init_lock: threading.Lock = threading.Lock()
     _cleanup_task: Optional[asyncio.Task] = None
 
     @classmethod
     def _get_lock(cls) -> asyncio.Lock:
-        """Get or create the lock (lazily created for the current event loop)."""
+        """Get or create the lock (lazily created for the current event loop).
+
+        Uses double-checked locking pattern with threading lock to ensure
+        thread-safe initialization of the asyncio lock.
+        """
         if cls._lock is None:
-            cls._lock = asyncio.Lock()
+            with cls._init_lock:
+                if cls._lock is None:
+                    cls._lock = asyncio.Lock()
         return cls._lock
 
     @classmethod

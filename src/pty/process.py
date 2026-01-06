@@ -157,8 +157,8 @@ class ClaudeProcess:
             If process has terminated.
         """
         try:
-            self.child.read_nonblocking(size=size, timeout=timeout)
-            return self.child.before or ""
+            data = self.child.read_nonblocking(size=size, timeout=timeout)
+            return data if data else ""
         except pexpect.TIMEOUT:
             return ""
 

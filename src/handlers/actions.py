@@ -101,14 +101,15 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             result = await deps.executor.execute(
                 prompt=cmd.command,
                 working_directory=session.working_directory,
-                session_id=session.claude_session_id,
+                session_id=channel_id,
+                resume_session_id=session.claude_session_id,
                 execution_id=execution_id,
                 on_chunk=on_chunk,
                 db_session_id=session.id,  # Smart context tracking
             )
 
             if result.session_id:
-                await deps.db.update_session_claude_id(channel_id, None, result.session_id)
+                await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
             if result.success:
                 await deps.db.update_command_status(
