@@ -97,9 +97,10 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
         # Step 1: Cancel all active executor processes for this channel
         cancelled_count = 0
-        if hasattr(deps.executor, '_active_processes'):
+        active_processes = getattr(deps.executor, '_active_processes', None)
+        if active_processes is not None:
             # Cancel processes where execution_id contains channel_id
-            for exec_id, process in list(deps.executor._active_processes.items()):
+            for exec_id, process in list(active_processes.items()):
                 if ctx.channel_id in exec_id:
                     process.terminate()
                     cancelled_count += 1

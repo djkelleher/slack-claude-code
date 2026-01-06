@@ -189,7 +189,17 @@ def register_agent_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     blocks=SlackFormatter.error_message(f"Workflow error: {e}"),
                 )
 
-        asyncio.create_task(run_workflow())
+        # Run workflow in background with proper task tracking
+        from src.tasks import TaskManager
+
+        workflow_task = asyncio.create_task(run_workflow())
+        await TaskManager.register(
+            task_id=f"workflow_{task_id}",
+            task=workflow_task,
+            channel_id=channel_id,
+            task_type="multi_agent_workflow",
+            timeout_seconds=3600,  # 1 hour timeout for complex workflows
+        )
 
     @app.command("/tasks")
     @slack_command()

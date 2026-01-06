@@ -47,7 +47,7 @@ class ResponseChunk:
     """
 
     content: str
-    output_type: OutputType = None
+    output_type: Optional[OutputType] = None
     tool_name: Optional[str] = None
     tool_input: Optional[str] = None
     is_final: bool = False

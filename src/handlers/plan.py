@@ -146,8 +146,12 @@ def register_plan_command(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         if not approved:
-            # Plan rejected or timed out
+            # Plan rejected or timed out - notify user
             logger.info(f"Plan {approval_id} rejected or timed out")
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=":no_entry: Plan was rejected or timed out.",
+            )
             return
 
         # Phase 2: Execution

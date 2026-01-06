@@ -176,10 +176,10 @@ def hook(event_type: HookEventType, name: Optional[str] = None):
 
 def create_context(
     session_id: str,
-    channel_id: str = None,
-    thread_ts: str = None,
-    user_id: str = None,
-    working_directory: str = None,
+    channel_id: Optional[str] = None,
+    thread_ts: Optional[str] = None,
+    user_id: Optional[str] = None,
+    working_directory: Optional[str] = None,
 ) -> HookContext:
     """Helper factory for creating HookContext.
 
