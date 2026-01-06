@@ -273,7 +273,7 @@ async def main():
         from src.claude.streaming import ToolActivity
 
         async def on_chunk(msg):
-            nonlocal accumulated_output, accumulated_tools, last_update_time
+            nonlocal accumulated_output, last_update_time
 
             # Accumulate text content
             if msg.type == "assistant" and msg.content:

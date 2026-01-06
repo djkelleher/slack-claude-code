@@ -154,7 +154,7 @@ class SubprocessExecutor:
                         timeout=self.timeout
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(f"Timeout waiting for Claude output")
+                    logger.warning("Timeout waiting for Claude output")
                     process.terminate()
                     await process.wait()  # Prevent zombie process
                     return ExecutionResult(

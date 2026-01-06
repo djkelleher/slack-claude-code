@@ -200,13 +200,6 @@ class UsageChecker:
         if not output:
             return None
 
-        # Try to find reset time patterns
-        patterns = [
-            r"[Rr]esets?\s+(?:in\s+)?(\d+)\s*(?:hours?|hrs?)",
-            r"[Rr]esets?\s+(?:in\s+)?(\d+)\s*(?:minutes?|mins?)",
-            r"[Rr]esets?\s+(?:at\s+)?(\d{4}-\d{2}-\d{2})",
-        ]
-
         now = datetime.now()
 
         # Check for "in X hours"

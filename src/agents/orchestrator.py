@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Callable, Awaitable, Optional
 
 from ..claude.subprocess_executor import SubprocessExecutor, ExecutionResult
-from .roles import AgentRole, format_task_prompt, get_agent_config
+from .roles import AgentRole, format_task_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,6 @@ class MultiAgentOrchestrator:
 
     async def _run_planner(self, task: AgentTask) -> ExecutionResult:
         """Run the planner agent."""
-        config = get_agent_config(AgentRole.PLANNER)
         prompt = format_task_prompt(
             role=AgentRole.PLANNER,
             task=task.description,

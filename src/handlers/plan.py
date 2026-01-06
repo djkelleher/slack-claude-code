@@ -105,7 +105,7 @@ def register_plan_command(app: AsyncApp, deps: HandlerDependencies) -> None:
             plan_content=plan_content,
             session_id=ctx.channel_id,
         )
-        plan_message = await ctx.client.chat_postMessage(
+        await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             text="Review plan",
             blocks=plan_blocks,
@@ -343,7 +343,7 @@ async def execute_planning_phase(
             resume_session_id=session.claude_session_id,
             execution_id=execution_id,
             on_chunk=on_chunk,
-                db_session_id=session.id,  # Smart context tracking
+            db_session_id=session.id,  # Smart context tracking
             plan_mode=True,  # Enable plan mode for planning phase
         )
 

@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 
 import aiosqlite
@@ -43,10 +42,6 @@ class DatabaseRepository:
             except Exception:
                 await db.rollback()
                 raise
-
-    async def _with_timeout(self, coro, timeout: float = None):
-        """Wrap a coroutine with a timeout to prevent hanging operations."""
-        return await asyncio.wait_for(coro, timeout=timeout or self.timeout)
 
     # Session operations
     async def get_or_create_session(

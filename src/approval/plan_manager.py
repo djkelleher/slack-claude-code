@@ -110,7 +110,7 @@ class PlanApprovalManager:
                     channel=channel_id,
                     thread_ts=thread_ts,
                     blocks=blocks,
-                    text=f"Plan ready for review",
+                    text="Plan ready for review",
                 )
 
                 approval.message_ts = result.get("ts")

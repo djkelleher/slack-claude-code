@@ -128,21 +128,21 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 status_lines.append(f"*Behind:* {status.behind} commit(s)")
 
             if status.staged:
-                status_lines.append(f"\n*Staged changes:*")
+                status_lines.append("\n*Staged changes:*")
                 for file_path in status.staged[:10]:
                     status_lines.append(f"  :white_check_mark: {file_path}")
                 if len(status.staged) > 10:
                     status_lines.append(f"  _... and {len(status.staged) - 10} more_")
 
             if status.unstaged:
-                status_lines.append(f"\n*Unstaged changes:*")
+                status_lines.append("\n*Unstaged changes:*")
                 for file_path in status.unstaged[:10]:
                     status_lines.append(f"  :pencil2: {file_path}")
                 if len(status.unstaged) > 10:
                     status_lines.append(f"  _... and {len(status.unstaged) - 10} more_")
 
             if status.untracked:
-                status_lines.append(f"\n*Untracked files:*")
+                status_lines.append("\n*Untracked files:*")
                 for file_path in status.untracked[:10]:
                     status_lines.append(f"  :question: {file_path}")
                 if len(status.untracked) > 10:

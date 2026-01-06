@@ -71,7 +71,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
 
         # Add to queue
-        queue_item = await deps.db.add_to_queue(
+        await deps.db.add_to_queue(
             session_id=session.id,
             channel_id=ctx.channel_id,
             prompt=ctx.text,
