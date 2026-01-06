@@ -65,7 +65,7 @@ class ClaudeProcess:
         bool
             True if prompt was found, False otherwise.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def read_until_prompt():
             patterns = [

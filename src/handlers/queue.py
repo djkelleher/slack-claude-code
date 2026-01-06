@@ -67,7 +67,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     async def handle_queue_add(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /q <prompt> command - add command to FIFO queue."""
         session = await deps.db.get_or_create_session(
-            ctx.channel_id, config.DEFAULT_WORKING_DIR
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
 
         # Add to queue
@@ -228,8 +228,9 @@ async def _process_queue(
 
         try:
             # Get session for working directory and claude session continuity
+            # Note: Queue processing uses channel-level session (no thread_ts)
             session = await deps.db.get_or_create_session(
-                channel_id, config.DEFAULT_WORKING_DIR
+                channel_id, thread_ts=None, default_cwd=config.DEFAULT_WORKING_DIR
             )
 
             # Execute with session resume for continuity
@@ -243,7 +244,7 @@ async def _process_queue(
 
             # Update Claude session for next item
             if result.session_id:
-                await deps.db.update_session_claude_id(channel_id, result.session_id)
+                await deps.db.update_session_claude_id(channel_id, None, result.session_id)
 
             # Update queue item
             if result.success:

@@ -41,7 +41,7 @@ def register_plan_command(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         # Get or create session
         session = await deps.db.get_or_create_session(
-            ctx.channel_id, config.DEFAULT_WORKING_DIR
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
 
         # Create command history entry for planning phase

@@ -38,6 +38,8 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         try:
             channel_id = body["channel"]["id"]
             command_id = int(action["value"])
+            # Get thread_ts from the message context if available
+            thread_ts = body.get("message", {}).get("thread_ts")
         except (KeyError, ValueError) as e:
             logger.error(f"Invalid action data: {e}")
             return
@@ -53,7 +55,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         session = await deps.db.get_or_create_session(
-            channel_id, config.DEFAULT_WORKING_DIR
+            channel_id, thread_ts=thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
 
         # Create new command history entry

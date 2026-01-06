@@ -36,7 +36,7 @@ class PendingApproval:
 
     def __post_init__(self):
         if self.future is None:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self.future = loop.create_future()
 
 

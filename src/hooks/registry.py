@@ -7,14 +7,14 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from .types import HookContext, HookEvent, HookEventType, HookResult
 
 logger = logging.getLogger(__name__)
 
 # Type alias for hook handlers
-HookHandler = Callable[[HookEvent], Awaitable[Optional[any]]]
+HookHandler = Callable[[HookEvent], Awaitable[Optional[Any]]]
 
 
 class HookRegistry:

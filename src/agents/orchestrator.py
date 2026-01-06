@@ -113,7 +113,7 @@ class MultiAgentOrchestrator:
         """
         self._active_tasks[task.task_id] = task
         task.started_at = datetime.now()
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         try:
             # Phase 1: Planning
@@ -274,7 +274,7 @@ class MultiAgentOrchestrator:
     ) -> WorkflowResult:
         """Create a workflow result."""
         duration_ms = int(
-            (asyncio.get_event_loop().time() - start_time) * 1000
+            (asyncio.get_running_loop().time() - start_time) * 1000
         )
 
         return WorkflowResult(

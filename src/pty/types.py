@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Optional
 
 from ..config import config
+from .parser import OutputType
 
 
 class SessionState(Enum):
@@ -46,7 +47,7 @@ class ResponseChunk:
     """
 
     content: str
-    output_type: "OutputType" = None  # Forward reference, set at runtime
+    output_type: OutputType = None
     tool_name: Optional[str] = None
     tool_input: Optional[str] = None
     is_final: bool = False
@@ -55,7 +56,6 @@ class ResponseChunk:
 
     def __post_init__(self):
         if self.output_type is None:
-            from .parser import OutputType
             self.output_type = OutputType.TEXT
 
 

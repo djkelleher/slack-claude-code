@@ -28,7 +28,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     async def handle_ls(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /ls [path] command - list directory contents and show cwd."""
         session = await deps.db.get_or_create_session(
-            ctx.channel_id, config.DEFAULT_WORKING_DIR
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
         base_path = Path(session.working_directory).expanduser()
 
@@ -86,7 +86,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     async def handle_cd(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /cd [path] command - change working directory with relative path support."""
         session = await deps.db.get_or_create_session(
-            ctx.channel_id, config.DEFAULT_WORKING_DIR
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
 
         if not ctx.text:
@@ -134,7 +134,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         # Get or create session
         session = await deps.db.get_or_create_session(
-            ctx.channel_id, config.DEFAULT_WORKING_DIR
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
 
         # Create command history entry

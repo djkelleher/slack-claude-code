@@ -32,6 +32,7 @@ def register_agent_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ack()
 
         channel_id = command["channel_id"]
+        thread_ts = command.get("thread_ts")
         description = command.get("text", "").strip()
 
         if not description:
@@ -44,7 +45,7 @@ def register_agent_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         session = await deps.db.get_or_create_session(
-            channel_id, config.DEFAULT_WORKING_DIR
+            channel_id, thread_ts=thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
 
         # Create task
