@@ -498,6 +498,7 @@ slack-claude-code/
 ├── src/
 │   ├── app.py              # Main entry point
 │   ├── config.py           # Configuration
+│   ├── exceptions.py       # Custom exception classes
 │   ├── database/           # SQLite persistence
 │   │   ├── models.py       # Data models (Session, UploadedFile, FileContext)
 │   │   ├── migrations.py   # Schema setup
@@ -508,12 +509,13 @@ slack-claude-code/
 │   │   └── subprocess_executor.py  # Subprocess-based execution with tool tracking
 │   ├── git/                # Git integration
 │   │   ├── service.py      # Git operations (status, diff, commit, branch)
-│   │   ├── repository.py   # Git checkpoint database operations
-│   │   └── models.py       # GitStatus, Checkpoint models
+│   │   └── models.py       # GitStatus data models
 │   ├── pty/                # PTY session management
 │   │   ├── session.py      # PTYSession class (pexpect)
 │   │   ├── pool.py         # Session pool registry
-│   │   └── parser.py       # ANSI stripping, prompt detection
+│   │   ├── parser.py       # ANSI stripping, prompt detection
+│   │   ├── process.py      # Process management utilities
+│   │   └── types.py        # PTY type definitions
 │   ├── hooks/              # Event hook system
 │   │   ├── registry.py     # HookRegistry with decorators
 │   │   └── types.py        # Event types and data
@@ -527,6 +529,8 @@ slack-claude-code/
 │   │   ├── handler.py      # PermissionManager
 │   │   ├── plan_manager.py # PlanApprovalManager
 │   │   └── slack_ui.py     # Approval button blocks
+│   ├── tasks/              # Background task management
+│   │   └── manager.py      # Task lifecycle and tracking
 │   ├── handlers/           # Slack event handlers
 │   │   ├── base.py         # Command decorator and context
 │   │   ├── basic.py        # /c, /ls, /cd commands
@@ -543,10 +547,19 @@ slack-claude-code/
 │   └── utils/              # Helpers
 │       ├── formatting.py   # Slack Block Kit
 │       ├── formatters/     # Specialized formatters
-│       │   ├── session.py  # Session list formatting
-│       │   └── git.py      # Git output formatting
+│       │   ├── base.py         # Base formatter classes
+│       │   ├── command.py      # Command output formatting
+│       │   ├── directory.py    # Directory listing formatting
+│       │   ├── job.py          # Job status formatting
+│       │   ├── plan.py         # Plan output formatting
+│       │   ├── queue.py        # Queue status formatting
+│       │   ├── session.py      # Session list formatting
+│       │   ├── streaming.py    # Streaming output formatting
+│       │   └── tool_blocks.py  # Tool usage block formatting
 │       ├── file_downloader.py  # Slack file download service
-│       └── validators.py   # Input validation
+│       ├── slack_helpers.py    # Slack API utilities
+│       ├── streaming.py        # Output streaming utilities
+│       └── validators.py       # Input validation
 ├── data/                   # SQLite database
 ├── .env                    # Configuration
 └── run.py                  # Startup script
@@ -604,6 +617,9 @@ DEFAULT_WORKING_DIR=/home/dan/projects
 # PTY Sessions
 SESSION_IDLE_TIMEOUT=1800  # 30 minutes
 
+# Command Execution
+COMMAND_TIMEOUT=300  # 5 minutes max per command
+
 # Multi-Agent
 PLANNER_MAX_TURNS=10
 WORKER_MAX_TURNS=30
@@ -618,6 +634,15 @@ NIGHT_END_HOUR=6
 # Permissions
 PERMISSION_TIMEOUT=300  # 5 minutes
 AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP  # Comma-separated
+
+# Claude Code Permission Mode
+# approve-all: Auto-approve all file operations (recommended for personal use)
+# prompt: Prompt for approval via Slack buttons
+# deny: Deny all file operations (read-only mode)
+CLAUDE_PERMISSION_MODE=approve-all
+
+# Plan Mode
+PLAN_APPROVAL_TIMEOUT=600  # 10 minutes
 
 # File Upload
 MAX_FILE_SIZE_MB=10  # Maximum file upload size
