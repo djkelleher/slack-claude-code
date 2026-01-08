@@ -2,7 +2,7 @@
 
 from slack_bolt.async_app import AsyncApp
 
-from src.utils.formatters import session_cleanup_result, session_list
+from src.utils.formatters.session import session_cleanup_result, session_list
 
 from .base import CommandContext, HandlerDependencies, slack_command
 

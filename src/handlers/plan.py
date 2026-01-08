@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import uuid
-from typing import Optional
 
 from slack_bolt.async_app import AsyncApp
 

@@ -9,13 +9,10 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from ..config import config
-from ..hooks import HookRegistry, HookEvent, HookEventType, create_context
-from ..pty import (
-    PTYSessionPool,
-    ResponseChunk,
-    SessionResponse,
-    SessionState,
-)
+from ..hooks.registry import HookRegistry, create_context
+from ..hooks.types import HookEvent, HookEventType
+from ..pty.pool import PTYSessionPool
+from ..pty.types import ResponseChunk
 from .streaming import StreamMessage
 
 

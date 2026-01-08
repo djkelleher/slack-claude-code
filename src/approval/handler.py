@@ -13,7 +13,8 @@ from typing import Optional
 from slack_sdk.web.async_client import AsyncWebClient
 
 from ..config import config
-from ..hooks import HookRegistry, HookEvent, HookEventType, create_context
+from ..hooks.registry import HookRegistry, create_context
+from ..hooks.types import HookEvent, HookEventType
 from .slack_ui import build_approval_blocks
 
 logger = logging.getLogger(__name__)

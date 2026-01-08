@@ -6,12 +6,13 @@ import uuid
 
 from slack_bolt.async_app import AsyncApp
 
-from src.approval import PermissionManager, build_approval_result_blocks
+from src.approval.handler import PermissionManager
+from src.approval.slack_ui import build_approval_result_blocks
 from src.approval.plan_manager import PlanApprovalManager
 from src.approval.slack_ui import build_plan_result_blocks
 from src.claude.streaming import ToolActivity
 from src.config import config
-from src.pty import PTYSessionPool
+from src.pty.pool import PTYSessionPool
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.formatting import SlackFormatter
 

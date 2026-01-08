@@ -5,7 +5,7 @@ import uuid
 
 from slack_bolt.async_app import AsyncApp
 
-from src.agents import AgentTask, TaskStatus
+from src.agents.orchestrator import AgentTask, TaskStatus
 from src.config import config
 from src.utils.formatting import SlackFormatter
 
@@ -190,7 +190,7 @@ def register_agent_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
 
         # Run workflow in background with proper task tracking
-        from src.tasks import TaskManager
+        from src.tasks.manager import TaskManager
 
         workflow_task = asyncio.create_task(run_workflow())
         await TaskManager.register(

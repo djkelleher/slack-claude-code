@@ -7,7 +7,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from ..config import config
 from .streaming import StreamMessage, StreamParser

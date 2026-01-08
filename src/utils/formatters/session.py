@@ -1,7 +1,5 @@
 """Session management formatting."""
 
-from datetime import datetime
-
 from src.database.models import Session
 
 from .base import time_ago

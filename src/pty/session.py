@@ -10,7 +10,8 @@ from typing import Awaitable, Callable, Optional
 
 import pexpect
 
-from ..hooks import HookEvent, HookEventType, HookRegistry, create_context
+from ..hooks.registry import HookRegistry, create_context
+from ..hooks.types import HookEvent, HookEventType
 from .parser import TerminalOutputParser
 from .process import ClaudeProcess
 from .types import (

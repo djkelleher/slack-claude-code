@@ -4,7 +4,6 @@ from typing import Optional
 
 from .base import (
     FILE_THRESHOLD,
-    MAX_TEXT_LENGTH,
     escape_markdown,
     sanitize_error,
     truncate_output,

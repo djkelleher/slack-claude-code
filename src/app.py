@@ -21,7 +21,8 @@ from src.config import config
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.claude.subprocess_executor import SubprocessExecutor
-from src.handlers import register_commands, register_actions
+from src.handlers import register_commands
+from src.handlers.actions import register_actions
 from src.utils.file_downloader import (
     FileTooLargeError,
     FileDownloadError,

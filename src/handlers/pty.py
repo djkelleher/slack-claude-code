@@ -2,7 +2,7 @@
 
 from slack_bolt.async_app import AsyncApp
 
-from src.pty import PTYSessionPool
+from src.pty.pool import PTYSessionPool
 
 from .base import CommandContext, HandlerDependencies, slack_command
 

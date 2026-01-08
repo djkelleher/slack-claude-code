@@ -3,11 +3,10 @@
 from slack_bolt.async_app import AsyncApp
 
 from src.claude.subprocess_executor import SubprocessExecutor
-from src.database import DatabaseRepository
+from src.database.repository import DatabaseRepository
 
-from .actions import register_actions
 from .agents import register_agent_commands
-from .base import CommandContext, HandlerDependencies
+from .base import HandlerDependencies
 from .basic import register_basic_commands
 from .budget import register_budget_commands
 from .claude_cli import register_claude_cli_commands

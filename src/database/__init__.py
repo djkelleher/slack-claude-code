@@ -1,2 +1,1 @@
-from .models import Session, CommandHistory, ParallelJob, QueueItem
-from .repository import DatabaseRepository
+"""Database layer for SQLite persistence."""

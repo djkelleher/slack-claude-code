@@ -12,29 +12,24 @@ from src.database.models import ParallelJob
 if TYPE_CHECKING:
     from src.claude.streaming import ToolActivity
 
-from .formatters import (
+from .formatters.base import (
     FILE_THRESHOLD,
     MAX_TEXT_LENGTH,
-    command_response,
-    command_response_with_file,
-    cwd_updated,
-    directory_listing,
-    error_message,
     escape_markdown,
-    job_status_list,
-    parallel_job_status,
-    processing_message,
-    queue_item_complete,
-    queue_item_running,
-    queue_status,
     sanitize_error,
-    sequential_job_status,
-    session_cleanup_result,
-    session_list,
-    should_attach_file,
-    streaming_update,
     time_ago,
 )
+from .formatters.command import (
+    command_response,
+    command_response_with_file,
+    error_message,
+    should_attach_file,
+)
+from .formatters.directory import cwd_updated, directory_listing
+from .formatters.job import job_status_list, parallel_job_status, sequential_job_status
+from .formatters.queue import queue_item_complete, queue_item_running, queue_status
+from .formatters.session import session_cleanup_result, session_list
+from .formatters.streaming import processing_message, streaming_update
 
 
 class SlackFormatter:
