@@ -100,3 +100,48 @@ async def post_success(
         kwargs["thread_ts"] = thread_ts
 
     return await client.chat_postMessage(**kwargs)
+
+
+async def upload_text_file(
+    client: Any,
+    channel_id: str,
+    content: str,
+    filename: str,
+    title: str,
+    initial_comment: Optional[str] = None,
+) -> dict:
+    """Upload a text file to Slack as a proper text snippet.
+
+    Uses snippet_type to ensure the file is displayed as text, not binary.
+
+    Parameters
+    ----------
+    client : Any
+        Slack WebClient for API calls.
+    channel_id : str
+        Target channel ID.
+    content : str
+        Text content to upload.
+    filename : str
+        Name for the file.
+    title : str
+        Display title for the file.
+    initial_comment : str, optional
+        Comment to post with the file.
+
+    Returns
+    -------
+    dict
+        The Slack API response.
+    """
+    kwargs = {
+        "channel": channel_id,
+        "content": content,
+        "filename": filename,
+        "title": title,
+        "snippet_type": "text",
+    }
+    if initial_comment:
+        kwargs["initial_comment"] = initial_comment
+
+    return await client.files_upload_v2(**kwargs)

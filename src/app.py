@@ -28,6 +28,7 @@ from src.utils.file_downloader import (
     FileDownloadError,
     download_slack_file,
 )
+from src.utils.slack_helpers import upload_text_file
 from src.utils.formatting import SlackFormatter
 
 # Configure logging
@@ -366,24 +367,24 @@ async def main():
                 # Upload files as separate messages
                 try:
                     # Upload summary file
-                    await client.files_upload_v2(
-                        channel=channel_id,
+                    await upload_text_file(
+                        client=client,
+                        channel_id=channel_id,
                         content=file_content,
                         filename=file_title,
                         title="Claude Summary",
                         initial_comment="📄 Response summary",
-                        filetype="text",
                     )
                     # Upload full detailed output file if available
                     if result.detailed_output and result.detailed_output != output:
                         raw_output_filename = f"claude_detailed_{cmd_history.id}.txt"
-                        await client.files_upload_v2(
-                            channel=channel_id,
+                        await upload_text_file(
+                            client=client,
+                            channel_id=channel_id,
                             content=result.detailed_output,
                             filename=raw_output_filename,
                             title="Claude Detailed Output",
                             initial_comment="📋 Complete response with tool use and results",
-                            filetype="text",
                         )
                 except Exception as upload_error:
                     logger.error(f"Failed to upload file: {upload_error}")

@@ -5,6 +5,7 @@ from typing import Optional
 from .base import (
     FILE_THRESHOLD,
     escape_markdown,
+    markdown_to_mrkdwn,
     sanitize_error,
     truncate_output,
 )
@@ -20,6 +21,8 @@ def command_response(
 ) -> list[dict]:
     """Format a command response."""
     output = truncate_output(output)
+    # Convert standard markdown to Slack mrkdwn
+    formatted_output = markdown_to_mrkdwn(output) if output else "_No output_"
 
     blocks = [
         {
@@ -34,7 +37,7 @@ def command_response(
         {"type": "divider"},
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": output or "_No output_"},
+            "text": {"type": "mrkdwn", "text": formatted_output},
         },
     ]
 
@@ -85,6 +88,9 @@ def command_response_with_file(
     preview = "\n".join(preview_lines)
     if len(output) > len(preview):
         preview += "\n\n_... (see attached file for full response)_"
+    
+    # Convert preview to Slack mrkdwn
+    formatted_preview = markdown_to_mrkdwn(preview) if preview else "_No output_"
 
     blocks = [
         {
@@ -99,7 +105,7 @@ def command_response_with_file(
         {"type": "divider"},
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": preview or "_No output_"},
+            "text": {"type": "mrkdwn", "text": formatted_preview},
         },
     ]
 

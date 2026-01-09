@@ -8,6 +8,7 @@ from slack_bolt.async_app import AsyncApp
 
 from src.config import config
 from src.utils.formatting import SlackFormatter
+from src.utils.slack_helpers import upload_text_file
 
 from .base import CommandContext, HandlerDependencies, slack_command
 
@@ -153,14 +154,25 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         accumulated_output = ""
         last_update_time = 0
         execution_id = str(uuid.uuid4())
+        last_chunk_was_newline = False
 
         async def on_chunk(msg):
-            nonlocal accumulated_output, last_update_time
+            nonlocal accumulated_output, last_update_time, last_chunk_was_newline
 
             if msg.type == "assistant" and msg.content:
                 # Limit accumulated output to prevent memory issues
                 if len(accumulated_output) < config.timeouts.streaming.max_accumulated_size:
-                    accumulated_output += msg.content
+                    # Smart chunk concatenation:
+                    # - Add newline between distinct chunks unless last chunk ended with newline
+                    # - Don't add extra newlines if chunk is very small (< 10 chars)
+                    chunk = msg.content
+                    if accumulated_output and not last_chunk_was_newline:
+                        # Add spacing between chunks for readability
+                        if len(chunk) >= 10 or chunk.strip():  # Non-trivial chunk
+                            if not accumulated_output.endswith(('\n', ' ', '\t')):
+                                accumulated_output += "\n\n"
+                    accumulated_output += chunk
+                    last_chunk_was_newline = chunk.endswith('\n')
 
                 # Rate limit updates to avoid Slack API limits
                 current_time = asyncio.get_running_loop().time()
@@ -226,24 +238,24 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 # Upload files as separate messages
                 try:
                     # Upload summary file
-                    await ctx.client.files_upload_v2(
-                        channel=ctx.channel_id,
+                    await upload_text_file(
+                        client=ctx.client,
+                        channel_id=ctx.channel_id,
                         content=file_content,
                         filename=file_title,
                         title="Claude Summary",
                         initial_comment="📄 Response summary",
-                        filetype="text",
                     )
                     # Upload full detailed output file if available
                     if result.detailed_output and result.detailed_output != output:
                         raw_output_filename = f"claude_detailed_{cmd_history.id}.txt"
-                        await ctx.client.files_upload_v2(
-                            channel=ctx.channel_id,
+                        await upload_text_file(
+                            client=ctx.client,
+                            channel_id=ctx.channel_id,
                             content=result.detailed_output,
                             filename=raw_output_filename,
                             title="Claude Detailed Output",
                             initial_comment="📋 Complete response with tool use and results",
-                            filetype="text",
                         )
                 except Exception as upload_error:
                     ctx.logger.error(f"Failed to upload file: {upload_error}")

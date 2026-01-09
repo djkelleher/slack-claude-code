@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from .base import escape_markdown, truncate_from_start
+from .base import escape_markdown, truncate_from_start, markdown_to_mrkdwn
 from .tool_blocks import format_tool_activity_section
 
 if TYPE_CHECKING:
@@ -51,7 +51,10 @@ def streaming_update(
     """
     status = ":white_check_mark: Complete" if is_complete else ":arrows_counterclockwise: Streaming..."
 
+    # Truncate and convert to Slack mrkdwn format
     current_output = truncate_from_start(current_output)
+    # Convert any standard markdown to Slack mrkdwn
+    formatted_output = markdown_to_mrkdwn(current_output) if current_output else "_Waiting for response..._"
 
     blocks = [
         {
@@ -66,7 +69,7 @@ def streaming_update(
         {"type": "divider"},
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": current_output or "_Waiting for response..._"},
+            "text": {"type": "mrkdwn", "text": formatted_output},
         },
     ]
 
