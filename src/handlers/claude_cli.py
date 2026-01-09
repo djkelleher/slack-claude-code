@@ -58,6 +58,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 session_id=ctx.channel_id,
                 resume_session_id=session.claude_session_id,
                 execution_id=str(uuid.uuid4()),
+                permission_mode=session.permission_mode,
             )
 
             # Update session if needed

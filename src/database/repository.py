@@ -138,6 +138,28 @@ class DatabaseRepository:
             )
             await db.commit()
 
+    async def update_session_mode(
+        self, channel_id: str, thread_ts: Optional[str], permission_mode: str
+    ) -> None:
+        """Update the permission mode for a session."""
+        async with self._get_connection() as db:
+            await db.execute(
+                """UPDATE sessions SET permission_mode = ?, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    permission_mode,
+                    datetime.now().isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )
+            await db.commit()
+
     async def get_sessions_by_channel(self, channel_id: str) -> list[Session]:
         """Get all sessions for a channel (channel + all threads)."""
         async with self._get_connection() as db:

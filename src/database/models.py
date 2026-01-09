@@ -11,6 +11,7 @@ class Session:
     thread_ts: Optional[str] = None  # Thread timestamp for thread-based sessions
     working_directory: str = "~"
     claude_session_id: Optional[str] = None  # For --resume flag
+    permission_mode: Optional[str] = None  # Per-session permission mode override
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
 
@@ -22,8 +23,9 @@ class Session:
             thread_ts=row[2],
             working_directory=row[3],
             claude_session_id=row[4],
-            created_at=datetime.fromisoformat(row[5]) if row[5] else datetime.now(),
-            last_active=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
+            permission_mode=row[5],
+            created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
+            last_active=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
         )
 
     def is_thread_session(self) -> bool:

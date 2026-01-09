@@ -63,7 +63,7 @@ class SubprocessExecutor:
         resume_session_id: Optional[str] = None,
         execution_id: Optional[str] = None,
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]] = None,
-        plan_mode: bool = False,
+        permission_mode: Optional[str] = None,
         db_session_id: Optional[int] = None,
     ) -> ExecutionResult:
         """Execute a prompt via Claude Code subprocess.
@@ -75,7 +75,7 @@ class SubprocessExecutor:
             resume_session_id: Claude session ID to resume (from previous execution)
             execution_id: Unique ID for this execution (for cancellation)
             on_chunk: Async callback for each streamed message
-            plan_mode: If True, use --permission-mode plan for planning phase
+            permission_mode: Permission mode to use (overrides config default)
             db_session_id: Database session ID for smart context tracking (optional)
 
         Returns:
@@ -89,20 +89,15 @@ class SubprocessExecutor:
             "--output-format", "stream-json",
         ]
 
-        # Add permission mode
-        if plan_mode:
-            # Use plan mode for planning phase
-            cmd.extend(["--permission-mode", "plan"])
-            logger.info("Using --permission-mode plan for planning phase")
+        # Determine permission mode: explicit > config default
+        mode = permission_mode or config.CLAUDE_PERMISSION_MODE
+        valid_modes = ["acceptEdits", "bypassPermissions", "default", "delegate", "dontAsk", "plan"]
+        if mode in valid_modes:
+            cmd.extend(["--permission-mode", mode])
+            logger.info(f"Using --permission-mode {mode}")
         else:
-            # Use standard permission mode
-            # Valid modes: acceptEdits, bypassPermissions, default, delegate, dontAsk, plan
-            valid_modes = ["acceptEdits", "bypassPermissions", "default", "delegate", "dontAsk", "plan"]
-            if config.CLAUDE_PERMISSION_MODE in valid_modes:
-                cmd.extend(["--permission-mode", config.CLAUDE_PERMISSION_MODE])
-            else:
-                logger.warning(f"Invalid CLAUDE_PERMISSION_MODE: {config.CLAUDE_PERMISSION_MODE}, using bypassPermissions")
-                cmd.extend(["--permission-mode", "bypassPermissions"])
+            logger.warning(f"Invalid permission mode: {mode}, using bypassPermissions")
+            cmd.extend(["--permission-mode", "bypassPermissions"])
 
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):

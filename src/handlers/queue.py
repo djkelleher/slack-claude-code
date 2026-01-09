@@ -240,6 +240,7 @@ async def _process_queue(
                 session_id=channel_id,
                 resume_session_id=session.claude_session_id,
                 execution_id=f"queue_{item.id}",
+                permission_mode=session.permission_mode,
             )
 
             # Update Claude session for next item

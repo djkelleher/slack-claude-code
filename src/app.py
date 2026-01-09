@@ -326,6 +326,7 @@ async def main():
                 resume_session_id=session.claude_session_id,  # Resume previous session if exists
                 execution_id=execution_id,
                 on_chunk=on_chunk,
+                permission_mode=session.permission_mode,  # Use session's mode (falls back to config)
                 db_session_id=session.id,  # Pass for smart context tracking
             )
 

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     thread_ts TEXT DEFAULT NULL,
     working_directory TEXT DEFAULT '~',
     claude_session_id TEXT,
+    permission_mode TEXT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
