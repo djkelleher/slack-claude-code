@@ -167,3 +167,121 @@ async def upload_text_file(
         kwargs["initial_comment"] = initial_comment
 
     return await client.files_upload_v2(**kwargs)
+
+
+async def post_text_snippet(
+    client: Any,
+    channel_id: str,
+    content: str,
+    title: str,
+    thread_ts: Optional[str] = None,
+) -> dict:
+    """Post text content as an inline snippet message (no file download needed).
+
+    For large content, splits into multiple messages with code blocks.
+    Content appears directly in Slack without requiring a file download.
+
+    Parameters
+    ----------
+    client : Any
+        Slack WebClient for API calls.
+    channel_id : str
+        Target channel ID.
+    content : str
+        Text content to post.
+    title : str
+        Title/header for the snippet.
+    thread_ts : str, optional
+        Thread timestamp to post in thread.
+
+    Returns
+    -------
+    dict
+        The Slack API response from the last message posted.
+    """
+    # Slack block text limit is ~3000 chars, use 2800 to be safe
+    MAX_BLOCK_SIZE = 2800
+
+    # If content is small enough, post as single message with code block
+    if len(content) <= MAX_BLOCK_SIZE:
+        blocks = [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*{title}*"},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"```{content}```"},
+            },
+        ]
+
+        kwargs = {
+            "channel": channel_id,
+            "text": title,
+            "blocks": blocks,
+        }
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+
+        return await client.chat_postMessage(**kwargs)
+
+    # For larger content, split into multiple messages
+    chunks = []
+    remaining = content
+    while remaining:
+        # Account for ``` markers (6 chars)
+        chunk_size = MAX_BLOCK_SIZE - 6
+        if len(remaining) <= chunk_size:
+            chunks.append(remaining)
+            break
+
+        # Try to break at a newline for cleaner output
+        break_point = remaining.rfind("\n", 0, chunk_size)
+        if break_point == -1 or break_point < chunk_size // 2:
+            break_point = chunk_size
+
+        chunks.append(remaining[:break_point])
+        remaining = remaining[break_point:].lstrip("\n")
+
+    result = None
+    for i, chunk in enumerate(chunks):
+        if i == 0:
+            # First message includes title
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*{title}* (part {i+1}/{len(chunks)})",
+                    },
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
+                },
+            ]
+        else:
+            blocks = [
+                {
+                    "type": "context",
+                    "elements": [
+                        {"type": "mrkdwn", "text": f"_continued ({i+1}/{len(chunks)})_"}
+                    ],
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
+                },
+            ]
+
+        kwargs = {
+            "channel": channel_id,
+            "text": f"{title} (part {i+1}/{len(chunks)})",
+            "blocks": blocks,
+        }
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+
+        result = await client.chat_postMessage(**kwargs)
+
+    return result

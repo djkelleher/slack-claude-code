@@ -8,7 +8,7 @@ from slack_bolt.async_app import AsyncApp
 
 from src.config import config
 from src.utils.formatting import SlackFormatter
-from src.utils.slack_helpers import upload_text_file
+from src.utils.slack_helpers import upload_text_file, post_text_snippet
 
 from .base import CommandContext, HandlerDependencies, slack_command
 
@@ -237,39 +237,27 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 # Upload files as separate messages
                 try:
-                    # Upload summary file
-                    await upload_text_file(
+                    # Post summary as inline snippet
+                    await post_text_snippet(
                         client=ctx.client,
                         channel_id=ctx.channel_id,
                         content=file_content,
-                        filename=file_title,
-                        title="Claude Summary",
-                        initial_comment="📄 Response summary",
+                        title="📄 Response summary",
                     )
-                    # Upload full detailed output file if available
+                    # Post full detailed output if available
                     if result.detailed_output and result.detailed_output != output:
-                        raw_output_filename = f"claude_detailed_{cmd_history.id}.txt"
-                        await upload_text_file(
+                        await post_text_snippet(
                             client=ctx.client,
                             channel_id=ctx.channel_id,
                             content=result.detailed_output,
-                            filename=raw_output_filename,
-                            title="Claude Detailed Output",
-                            initial_comment="📋 Complete response with tool use and results",
+                            title="📋 Complete response with tool use and results",
                         )
-                except Exception as upload_error:
-                    ctx.logger.error(f"Failed to upload file: {upload_error}")
-                    error_msg = str(upload_error)
-                    if "missing_scope" in error_msg and "files:write" in error_msg:
-                        await ctx.client.chat_postMessage(
-                            channel=ctx.channel_id,
-                            text="⚠️ Could not upload file: Missing `files:write` scope. Please add this scope in your Slack app configuration (OAuth & Permissions).",
-                        )
-                    else:
-                        await ctx.client.chat_postMessage(
-                            channel=ctx.channel_id,
-                            text=f"⚠️ Could not upload file: {error_msg}",
-                        )
+                except Exception as post_error:
+                    ctx.logger.error(f"Failed to post snippet: {post_error}")
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        text=f"⚠️ Could not post detailed output: {str(post_error)[:100]}",
+                    )
             else:
                 await ctx.client.chat_update(
                     channel=ctx.channel_id,

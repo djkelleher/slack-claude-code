@@ -28,7 +28,7 @@ from src.utils.file_downloader import (
     FileDownloadError,
     download_slack_file,
 )
-from src.utils.slack_helpers import upload_text_file
+from src.utils.slack_helpers import upload_text_file, post_text_snippet
 from src.utils.formatting import SlackFormatter
 
 # Configure logging
@@ -488,41 +488,32 @@ async def main():
                     text=output[:100] + "..." if len(output) > 100 else output,
                     blocks=blocks,
                 )
-                # Upload files as separate messages
+                # Post response content as inline snippets (no file download needed)
                 try:
-                    # Upload summary file
-                    await upload_text_file(
+                    # Post summary as inline snippet
+                    await post_text_snippet(
                         client=client,
                         channel_id=channel_id,
                         content=file_content,
-                        filename=file_title,
-                        title="Claude Summary",
-                        initial_comment="📄 Response summary",
+                        title="📄 Response summary",
+                        thread_ts=thread_ts,
                     )
-                    # Upload full detailed output file if available
+                    # Post full detailed output if available
                     if result.detailed_output and result.detailed_output != output:
-                        raw_output_filename = f"claude_detailed_{cmd_history.id}.txt"
-                        await upload_text_file(
+                        await post_text_snippet(
                             client=client,
                             channel_id=channel_id,
                             content=result.detailed_output,
-                            filename=raw_output_filename,
-                            title="Claude Detailed Output",
-                            initial_comment="📋 Complete response with tool use and results",
+                            title="📋 Complete response with tool use and results",
+                            thread_ts=thread_ts,
                         )
-                except Exception as upload_error:
-                    logger.error(f"Failed to upload file: {upload_error}")
-                    error_msg = str(upload_error)
-                    if "missing_scope" in error_msg and "files:write" in error_msg:
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            text="⚠️ Could not upload file: Missing `files:write` scope. Please add this scope in your Slack app configuration (OAuth & Permissions).",
-                        )
-                    else:
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            text=f"⚠️ Could not upload file: {error_msg}",
-                        )
+                except Exception as post_error:
+                    logger.error(f"Failed to post snippet: {post_error}")
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=f"⚠️ Could not post detailed output: {str(post_error)[:100]}",
+                    )
             else:
                 await client.chat_update(
                     channel=channel_id,
