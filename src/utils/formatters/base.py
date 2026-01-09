@@ -40,48 +40,85 @@ def markdown_to_mrkdwn(text: str) -> str:
     - [text](url) -> <url|text>
     - ```code``` -> ```code``` (code blocks stay the same)
     - `inline` -> `inline` (inline code stays the same)
+    
+    Note: In standard Markdown, **text** is bold and *text* is italic.
+    In Slack mrkdwn, *text* is bold and _text_ is italic.
     """
     import re
     
     # Protect code blocks and inline code first
-    code_blocks = []
-    inline_codes = []
+    protected_content = []
     
-    # Extract code blocks
-    def save_code_block(match):
-        code_blocks.append(match.group(0))
-        return f"__CODE_BLOCK_{len(code_blocks)-1}__"
+    # Extract and protect code blocks
+    def save_protected(match):
+        protected_content.append(match.group(0))
+        return f"¤PROTECTED_{len(protected_content)-1}¤"
     
-    text = re.sub(r'```[\s\S]*?```', save_code_block, text)
+    # Protect triple-backtick code blocks
+    text = re.sub(r'```[\s\S]*?```', save_protected, text)
     
-    # Extract inline code
-    def save_inline_code(match):
-        inline_codes.append(match.group(0))
-        return f"__INLINE_CODE_{len(inline_codes)-1}__"
+    # Protect inline code
+    text = re.sub(r'`[^`]+`', save_protected, text)
     
-    text = re.sub(r'`[^`]+`', save_inline_code, text)
+    # Now do the conversions
+    # 1. Convert bold: **text** -> *text*
+    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
     
-    # Convert bold: **text** or __text__ -> *text*
-    text = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', text)
-    text = re.sub(r'__([^_]+)__', r'*\1*', text)
+    # 2. Convert bold: __text__ -> *text*
+    text = re.sub(r'__(.+?)__', r'*\1*', text)
     
-    # Convert italic: *text* -> _text_ (single asterisk)
-    # This is tricky because we just converted bold
-    # Look for single asterisks not preceded/followed by another asterisk
-    text = re.sub(r'(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)', r'_\1_', text)
+    # 3. Convert italic: *text* -> _text_ (but skip the bold ones we just created)
+    # Since we've already converted **bold** to *bold*, we need to be careful
+    # The remaining single asterisks should be italic markers from the original
+    # Actually, let's process this differently - mark all bold first
+    parts = []
+    i = 0
+    while i < len(text):
+        # Look for bold markers we just created (*text*)
+        if text[i] == '*':
+            # Find the closing *
+            j = i + 1
+            while j < len(text) and text[j] != '*':
+                j += 1
+            if j < len(text):
+                # This is a bold section, keep it as is
+                parts.append(text[i:j+1])
+                i = j + 1
+                continue
+        parts.append(text[i])
+        i += 1
     
-    # Convert links: [text](url) -> <url|text>
+    text = ''.join(parts)
+    
+    # 4. Convert links: [text](url) -> <url|text>
     text = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'<\2|\1>', text)
     
-    # Restore code blocks and inline code
-    for i, code in enumerate(code_blocks):
-        text = text.replace(f"__CODE_BLOCK_{i}__", code)
+    # Don't restore protected content yet - we need to escape first
     
-    for i, code in enumerate(inline_codes):
-        text = text.replace(f"__INLINE_CODE_{i}__", code)
+    # Finally escape special characters (but not in URLs)
+    # We need to be careful with escaping since we have <url|text> format
+    # Let's protect URLs first
+    url_pattern = r'<([^|>]+)\|([^>]+)>'
+    urls = []
     
-    # Finally escape special characters
-    return escape_markdown(text)
+    def save_url(match):
+        urls.append(match.group(0))
+        return f"__URL_{len(urls)-1}__"
+    
+    text = re.sub(url_pattern, save_url, text)
+    
+    # Now escape special characters
+    text = escape_markdown(text)
+    
+    # Restore URLs
+    for i, url in enumerate(urls):
+        text = text.replace(f"__URL_{i}__", url)
+    
+    # Finally restore protected content (code blocks and inline code)
+    for i, content in enumerate(protected_content):
+        text = text.replace(f"¤PROTECTED_{i}¤", content)
+    
+    return text
 
 
 def time_ago(dt: datetime) -> str:
