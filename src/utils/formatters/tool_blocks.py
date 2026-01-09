@@ -17,7 +17,7 @@ TOOL_ICONS = {
     "Read": ":page_facing_up:",
     "Edit": ":pencil2:",
     "Write": ":writing_hand:",
-    "Bash": ":terminal:",
+    "Bash": ":computer:",
     "Glob": ":mag:",
     "Grep": ":mag_right:",
     "WebFetch": ":globe_with_meridians:",
