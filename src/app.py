@@ -521,9 +521,6 @@ async def main():
                     ),
                 )
 
-            # Post completion notification to channel (triggers sound/badge)
-            await post_channel_notification(client, db, channel_id, thread_ts, "completion")
-
         except Exception as e:
             logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")
             await deps.db.update_command_status(
