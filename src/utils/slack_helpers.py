@@ -109,10 +109,12 @@ async def upload_text_file(
     filename: str,
     title: str,
     initial_comment: Optional[str] = None,
+    thread_ts: Optional[str] = None,
 ) -> dict:
     """Upload a text file to Slack as a proper text snippet.
 
     Uses filetype="text" to ensure the file is displayed as text, not binary.
+    File attachments appear collapsed by default in Slack.
 
     Parameters
     ----------
@@ -128,6 +130,8 @@ async def upload_text_file(
         Display title for the file.
     initial_comment : str, optional
         Comment to post with the file.
+    thread_ts : str, optional
+        Thread timestamp to post in thread.
 
     Returns
     -------
@@ -160,11 +164,13 @@ async def upload_text_file(
         "content": sanitized_content,
         "filename": filename,
         "title": title,
-        "filetype": "text",  # Explicitly set filetype to text
+        "filetype": "text",
         "snippet_type": "text",
     }
     if initial_comment:
         kwargs["initial_comment"] = initial_comment
+    if thread_ts:
+        kwargs["thread_ts"] = thread_ts
 
     return await client.files_upload_v2(**kwargs)
 

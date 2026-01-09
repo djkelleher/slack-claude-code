@@ -488,7 +488,7 @@ async def main():
                     text=output[:100] + "..." if len(output) > 100 else output,
                     blocks=blocks,
                 )
-                # Post response content as inline snippets (no file download needed)
+                # Post response content
                 try:
                     # Post summary as inline snippet
                     await post_text_snippet(
@@ -498,12 +498,13 @@ async def main():
                         title="📄 Response summary",
                         thread_ts=thread_ts,
                     )
-                    # Post full detailed output if available
+                    # Post detailed output as collapsed file (appears minimized by default)
                     if result.detailed_output and result.detailed_output != output:
-                        await post_text_snippet(
+                        await upload_text_file(
                             client=client,
                             channel_id=channel_id,
                             content=result.detailed_output,
+                            filename=f"claude_detailed_{cmd_history.id}.txt",
                             title="📋 Complete response with tool use and results",
                             thread_ts=thread_ts,
                         )

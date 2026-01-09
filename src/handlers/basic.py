@@ -235,7 +235,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     text=output[:100] + "..." if len(output) > 100 else output,
                     blocks=blocks,
                 )
-                # Upload files as separate messages
+                # Post response content
                 try:
                     # Post summary as inline snippet
                     await post_text_snippet(
@@ -244,12 +244,13 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                         content=file_content,
                         title="📄 Response summary",
                     )
-                    # Post full detailed output if available
+                    # Post detailed output as collapsed file (appears minimized by default)
                     if result.detailed_output and result.detailed_output != output:
-                        await post_text_snippet(
+                        await upload_text_file(
                             client=ctx.client,
                             channel_id=ctx.channel_id,
                             content=result.detailed_output,
+                            filename=f"claude_detailed_{cmd_history.id}.txt",
                             title="📋 Complete response with tool use and results",
                         )
                 except Exception as post_error:
