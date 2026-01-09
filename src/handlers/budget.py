@@ -49,7 +49,7 @@ def register_budget_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 bar = "█" * filled + "░" * (bar_length - filled)
 
                 status = (
-                    ":white_check_mark:"
+                    ":heavy_check_mark:"
                     if snapshot.usage_percent < threshold
                     else ":warning:"
                 )
@@ -197,5 +197,5 @@ def register_budget_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
-            text=f":white_check_mark: Updated {period} threshold to {percent:.0f}%",
+            text=f":heavy_check_mark: Updated {period} threshold to {percent:.0f}%",
         )

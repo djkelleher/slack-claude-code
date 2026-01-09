@@ -98,7 +98,7 @@ def register_agent_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 TaskStatus.PLANNING: ":thinking_face: Planning",
                 TaskStatus.WORKING: ":hammer_and_wrench: Working",
                 TaskStatus.EVALUATING: ":mag: Evaluating",
-                TaskStatus.COMPLETED: ":white_check_mark: Completed",
+                TaskStatus.COMPLETED: ":heavy_check_mark: Completed",
                 TaskStatus.FAILED: ":x: Failed",
                 TaskStatus.CANCELLED: ":no_entry: Cancelled",
             }.get(updated_task.status, ":hourglass: Pending")
@@ -152,7 +152,7 @@ def register_agent_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                                 "type": "header",
                                 "text": {
                                     "type": "plain_text",
-                                    "text": ":white_check_mark: Task Completed",
+                                    "text": ":heavy_check_mark: Task Completed",
                                     "emoji": True,
                                 },
                             },

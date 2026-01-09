@@ -119,7 +119,7 @@ def session_cleanup_result(deleted_count: int, inactive_days: int) -> list[dict]
         Inactivity threshold used.
     """
     if deleted_count == 0:
-        message = f":white_check_mark: No inactive sessions found (inactive >{inactive_days} days)."
+        message = f":heavy_check_mark: No inactive sessions found (inactive >{inactive_days} days)."
     else:
         message = (
             f":wastebasket: Cleaned up {deleted_count} session(s) "

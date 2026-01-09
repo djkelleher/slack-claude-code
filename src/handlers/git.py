@@ -57,7 +57,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f":white_check_mark: {message}",
+                                "text": f":heavy_check_mark: {message}",
                             },
                         }
                     ],
@@ -130,7 +130,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             if status.staged:
                 status_lines.append("\n*Staged changes:*")
                 for file_path in status.staged[:10]:
-                    status_lines.append(f"  :white_check_mark: {file_path}")
+                    status_lines.append(f"  :heavy_check_mark: {file_path}")
                 if len(status.staged) > 10:
                     status_lines.append(f"  _... and {len(status.staged) - 10} more_")
 
@@ -149,7 +149,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     status_lines.append(f"  _... and {len(status.untracked) - 10} more_")
 
             if not status.staged and not status.unstaged and not status.untracked:
-                status_lines.append("\n:white_check_mark: Working tree clean")
+                status_lines.append("\n:heavy_check_mark: Working tree clean")
 
             status_text = "\n".join(status_lines)
 
@@ -207,7 +207,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":white_check_mark: *Committed* `{commit_sha[:7]}`\n> {ctx.text}",
+                            "text": f":heavy_check_mark: *Committed* `{commit_sha[:7]}`\n> {ctx.text}",
                         },
                     }
                 ],
@@ -276,7 +276,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                                 "type": "section",
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": f":white_check_mark: Created and switched to branch `{branch_name}`",
+                                    "text": f":heavy_check_mark: Created and switched to branch `{branch_name}`",
                                 },
                             }
                         ],
@@ -296,7 +296,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                                 "type": "section",
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": f":white_check_mark: Switched to branch `{branch_name}`",
+                                    "text": f":heavy_check_mark: Switched to branch `{branch_name}`",
                                 },
                             }
                         ],

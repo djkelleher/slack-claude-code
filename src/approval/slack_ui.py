@@ -125,7 +125,7 @@ def build_approval_result_blocks(
         List of Slack block kit blocks
     """
     status = "Approved" if approved else "Denied"
-    emoji = ":white_check_mark:" if approved else ":x:"
+    emoji = ":heavy_check_mark:" if approved else ":x:"
 
     blocks = [
         {

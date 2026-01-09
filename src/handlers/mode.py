@@ -103,7 +103,7 @@ def register_mode_command(app: AsyncApp, deps: HandlerDependencies) -> None:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f":white_check_mark: Permission mode set to `{text}`\n\n{_get_mode_description(text)}",
+                        "text": f":heavy_check_mark: Permission mode set to `{text}`\n\n{_get_mode_description(text)}",
                     },
                 },
             ],

@@ -14,7 +14,7 @@ def parallel_job_status(job: ParallelJob) -> list[dict]:
     status_text = {
         "pending": ":hourglass: Pending",
         "running": ":arrows_counterclockwise: Running",
-        "completed": ":white_check_mark: Completed",
+        "completed": ":heavy_check_mark: Completed",
         "failed": ":x: Failed",
         "cancelled": ":no_entry: Cancelled",
     }.get(job.status, job.status)
@@ -27,7 +27,7 @@ def parallel_job_status(job: ParallelJob) -> list[dict]:
             if result.get("error"):
                 terminal_statuses.append(f"Terminal {i + 1}: :x: Failed")
             else:
-                terminal_statuses.append(f"Terminal {i + 1}: :white_check_mark: Complete")
+                terminal_statuses.append(f"Terminal {i + 1}: :heavy_check_mark: Complete")
         elif job.status == "running":
             terminal_statuses.append(f"Terminal {i + 1}: :arrows_counterclockwise: Running...")
         else:
@@ -94,7 +94,7 @@ def sequential_job_status(job: ParallelJob) -> list[dict]:
     status_text = {
         "pending": ":hourglass: Pending",
         "running": f":arrows_counterclockwise: Running (Loop {current_loop}/{loop_count}, Command {current_cmd + 1}/{len(commands)})",
-        "completed": ":white_check_mark: Completed",
+        "completed": ":heavy_check_mark: Completed",
         "failed": ":x: Failed",
         "cancelled": ":no_entry: Cancelled",
     }.get(job.status, job.status)

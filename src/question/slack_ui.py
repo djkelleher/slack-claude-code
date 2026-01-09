@@ -212,7 +212,7 @@ def build_question_result_blocks(
         "type": "section",
         "text": {
             "type": "mrkdwn",
-            "text": f":white_check_mark: *Question answered by <@{user_id}>*",
+            "text": f":heavy_check_mark: *Question answered by <@{user_id}>*",
         },
     })
 

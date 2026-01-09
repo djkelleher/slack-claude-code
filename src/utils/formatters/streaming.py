@@ -49,7 +49,7 @@ def streaming_update(
     list[dict]
         Slack blocks for the streaming message.
     """
-    status = ":white_check_mark: Complete" if is_complete else ":arrows_counterclockwise: Streaming..."
+    status = ":heavy_check_mark: Complete" if is_complete else ":arrows_counterclockwise: Streaming..."
 
     # Truncate and convert to Slack mrkdwn format
     current_output = truncate_from_start(current_output)

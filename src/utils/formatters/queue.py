@@ -78,7 +78,7 @@ def queue_item_running(item: Any) -> list[dict]:
 
 def queue_item_complete(item: Any, result: Any) -> list[dict]:
     """Format completed queue item."""
-    status = ":white_check_mark:" if result.success else ":x:"
+    status = ":heavy_check_mark:" if result.success else ":x:"
     output = result.output or result.error or "No output"
     if len(output) > 2500:
         output = output[:2500] + "\n\n... (truncated)"

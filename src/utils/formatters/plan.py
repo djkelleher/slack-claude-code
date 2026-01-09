@@ -65,7 +65,7 @@ def plan_ready_message(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f":white_check_mark: *Plan created successfully*\n\nApproval ID: `{approval_id}`",
+                "text": f":heavy_check_mark: *Plan created successfully*\n\nApproval ID: `{approval_id}`",
             },
         },
     ]
@@ -166,7 +166,7 @@ def plan_execution_complete(
     ]
 
     # Add footer with metadata
-    footer_parts = [":white_check_mark: Plan execution complete"]
+    footer_parts = [":heavy_check_mark: Plan execution complete"]
     if duration_ms:
         footer_parts.append(f":stopwatch: {duration_ms / 1000:.1f}s")
     if cost_usd:

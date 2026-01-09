@@ -68,7 +68,7 @@ def format_tool_status(tool: "ToolActivity") -> str:
     Returns
     -------
     str
-        Status string like ":white_check_mark: (12ms)" or ":hourglass:"
+        Status string like ":heavy_check_mark: (12ms)" or ":hourglass:"
     """
     if tool.result is None and not tool.is_error:
         # Still running
@@ -77,7 +77,7 @@ def format_tool_status(tool: "ToolActivity") -> str:
     if tool.is_error:
         status = ":x:"
     else:
-        status = ":white_check_mark:"
+        status = ":heavy_check_mark:"
 
     if tool.duration_ms is not None:
         return f"{status} ({tool.duration_ms}ms)"
@@ -95,7 +95,7 @@ def format_tool_activity_line(tool: "ToolActivity") -> str:
     Returns
     -------
     str
-        Full formatted line like ":page_facing_up: *Read* `src/app.py` :white_check_mark: (12ms)"
+        Full formatted line like ":page_facing_up: *Read* `src/app.py` :heavy_check_mark: (12ms)"
     """
     inline = format_tool_inline(tool)
     status = format_tool_status(tool)

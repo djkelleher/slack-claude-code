@@ -272,7 +272,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             if len(output) > 500:
                 output = output[:500] + "\n... (truncated)"
 
-            status = ":white_check_mark:" if result.get("success") else ":x:"
+            status = ":heavy_check_mark:" if result.get("success") else ":x:"
 
             blocks.append(
                 {
