@@ -294,6 +294,18 @@ def _format_tool_input_detail(tool_name: str, input_dict: dict) -> str:
             result += f"\nsubagent_type: {subagent}"
         return result.strip()
 
+    elif tool_name == "AskUserQuestion":
+        questions = input_dict.get("questions", [])
+        lines = []
+        for i, q in enumerate(questions):
+            header = q.get("header", f"Question {i+1}")
+            question = q.get("question", "?")
+            options = q.get("options", [])
+            option_labels = [o.get("label", "?") for o in options]
+            lines.append(f"{header}: {question}")
+            lines.append(f"  Options: {', '.join(option_labels)}")
+        return "\n".join(lines)
+
     else:
         # Generic formatting
         lines = []

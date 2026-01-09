@@ -64,6 +64,12 @@ class ToolActivity:
         elif name == "TodoWrite":
             todos = input_dict.get("todos", [])
             return f"`{len(todos)} items`"
+        elif name == "AskUserQuestion":
+            questions = input_dict.get("questions", [])
+            if questions:
+                first_q = questions[0].get("question", "?")
+                return f"`{first_q[:40]}{'...' if len(first_q) > 40 else ''}`"
+            return ""
         else:
             # Generic summary
             return ""

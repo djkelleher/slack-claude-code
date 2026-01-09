@@ -203,6 +203,13 @@ class SubprocessExecutor:
                                 elif tool_name == "Bash":
                                     command = tool_input.get("command", "")[:50]
                                     logger.info(f"Tool: Bash '{command}...'")
+                                elif tool_name == "AskUserQuestion":
+                                    questions = tool_input.get("questions", [])
+                                    if questions:
+                                        first_q = questions[0].get("question", "?")[:80]
+                                        logger.info(f"Tool: AskUserQuestion - '{first_q}...' ({len(questions)} question(s))")
+                                    else:
+                                        logger.info(f"Tool: AskUserQuestion")
                                 else:
                                     logger.info(f"Tool: {tool_name}")
                 elif msg.type == "user" and msg.raw:

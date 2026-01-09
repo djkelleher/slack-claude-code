@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import uuid
 
 from slack_bolt.async_app import AsyncApp
@@ -619,3 +620,159 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 "blocks": detail_blocks[:50],  # Modal block limit
             },
         )
+
+    # -------------------------------------------------------------------------
+    # Question handlers (AskUserQuestion tool)
+    # -------------------------------------------------------------------------
+
+    @app.action("question_custom_answer")
+    async def handle_question_custom_answer(ack, action, body, client, logger):
+        """Handle custom answer button - open modal for text input."""
+        await ack()
+
+        from src.question import QuestionManager, build_custom_answer_modal
+
+        question_id = action["value"]
+
+        # Check if question still exists
+        pending = QuestionManager.get_pending(question_id)
+        if not pending:
+            await client.chat_postEphemeral(
+                channel=body["channel"]["id"],
+                user=body["user"]["id"],
+                text="This question has already been answered or timed out.",
+            )
+            return
+
+        # Open modal for custom answer
+        await client.views_open(
+            trigger_id=body["trigger_id"],
+            view=build_custom_answer_modal(question_id),
+        )
+
+    # Register handlers for question option buttons (question_select_*)
+    # We use a regex pattern to match all question select actions
+    @app.action(re.compile(r"^question_select_\d+_\d+$"))
+    async def handle_question_select(ack, action, body, client, logger):
+        """Handle single-select question button click."""
+        await ack()
+
+        from src.question import QuestionManager, build_question_result_blocks
+
+        try:
+            data = json.loads(action["value"])
+            question_id = data["q"]
+            question_index = data["i"]
+            selected_label = data["l"]
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Invalid question action data: {e}")
+            return
+
+        pending = QuestionManager.get_pending(question_id)
+        if not pending:
+            await client.chat_postEphemeral(
+                channel=body["channel"]["id"],
+                user=body["user"]["id"],
+                text="This question has already been answered or timed out.",
+            )
+            return
+
+        # Set the answer for this question
+        QuestionManager.set_answer(question_id, question_index, [selected_label])
+
+        # Check if all questions are answered
+        if QuestionManager.is_complete(question_id):
+            # Resolve the question
+            resolved = await QuestionManager.resolve(question_id)
+            if resolved:
+                user_id = body["user"]["id"]
+                channel_id = body["channel"]["id"]
+                message_ts = body["message"]["ts"]
+
+                # Update the message to show answered state
+                try:
+                    await client.chat_update(
+                        channel=channel_id,
+                        ts=message_ts,
+                        blocks=build_question_result_blocks(resolved, user_id),
+                        text="Question answered",
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update question message: {e}")
+
+                logger.info(f"Question {question_id} answered by {user_id}: {resolved.answers}")
+
+    @app.action(re.compile(r"^question_multiselect_\d+$"))
+    async def handle_question_multiselect(ack, action, body, client, logger):
+        """Handle multi-select checkbox change."""
+        await ack()
+
+        from src.question import QuestionManager
+
+        # Extract question info from block_id
+        block_id = action.get("block_id", "")
+        # Format: question_checkbox_{question_id}_{question_index}
+        parts = block_id.split("_")
+        if len(parts) < 4:
+            logger.error(f"Invalid checkbox block_id: {block_id}")
+            return
+
+        question_id = parts[2]
+        question_index = int(parts[3])
+
+        # Get selected options
+        selected_options = action.get("selected_options", [])
+        selected_labels = [opt.get("value", "") for opt in selected_options]
+
+        pending = QuestionManager.get_pending(question_id)
+        if not pending:
+            await client.chat_postEphemeral(
+                channel=body["channel"]["id"],
+                user=body["user"]["id"],
+                text="This question has already been answered or timed out.",
+            )
+            return
+
+        # Set the answer for this question
+        QuestionManager.set_answer(question_id, question_index, selected_labels)
+
+        # For multi-select, we need a submit button - checkboxes alone don't trigger completion
+        # The user needs to click a "Submit" button after selecting checkboxes
+        # This is handled separately
+
+    @app.view("question_custom_submit")
+    async def handle_question_custom_submit(ack, body, client, view, logger):
+        """Handle custom answer modal submission."""
+        await ack()
+
+        from src.question import QuestionManager, build_question_result_blocks
+
+        question_id = view["private_metadata"]
+        custom_answer = view["state"]["values"]["custom_answer_block"]["custom_answer_input"]["value"]
+
+        pending = QuestionManager.get_pending(question_id)
+        if not pending:
+            # Question already resolved or timed out
+            return
+
+        # Set custom answer for all questions (treat as single combined answer)
+        for i in range(len(pending.questions)):
+            QuestionManager.set_answer(question_id, i, [custom_answer])
+
+        # Resolve the question
+        resolved = await QuestionManager.resolve(question_id)
+        if resolved and resolved.message_ts:
+            user_id = body["user"]["id"]
+
+            # Update the original message
+            try:
+                await client.chat_update(
+                    channel=resolved.channel_id,
+                    ts=resolved.message_ts,
+                    blocks=build_question_result_blocks(resolved, user_id),
+                    text="Question answered",
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update question message: {e}")
+
+            logger.info(f"Question {question_id} custom answered by {user_id}: {custom_answer[:50]}...")

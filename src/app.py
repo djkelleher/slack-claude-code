@@ -320,12 +320,14 @@ async def main():
         accumulated_tools: dict[str, "ToolActivity"] = {}  # tool_id -> ToolActivity
         last_update_time = 0
         execution_id = str(uuid.uuid4())
+        pending_question = None  # Track if we detect an AskUserQuestion
 
         # Import here to avoid circular imports
         from src.claude.streaming import ToolActivity
+        from src.question import QuestionManager
 
         async def on_chunk(msg):
-            nonlocal accumulated_output, last_update_time
+            nonlocal accumulated_output, last_update_time, pending_question
 
             # Accumulate text content
             if msg.type == "assistant" and msg.content:
@@ -347,6 +349,18 @@ async def main():
                     else:
                         # Add new tool
                         accumulated_tools[tool.id] = tool
+
+                    # Detect AskUserQuestion tool
+                    if tool.name == "AskUserQuestion" and tool.result is None:
+                        # Create pending question when we first see the tool
+                        pending_question = await QuestionManager.create_pending_question(
+                            session_id=str(session.id),
+                            channel_id=channel_id,
+                            thread_ts=thread_ts,
+                            tool_use_id=tool.id,
+                            tool_input=tool.input,
+                        )
+                        logger.info(f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}")
 
             # Rate limit updates to avoid Slack API limits
             current_time = asyncio.get_running_loop().time()
@@ -384,6 +398,66 @@ async def main():
             # Update session with Claude session ID for resume
             if result.session_id:
                 await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
+
+            # Handle AskUserQuestion - if Claude asked a question, wait for user response
+            if pending_question and result.session_id:
+                logger.info(f"Claude asked a question, posting to Slack and waiting for response")
+
+                # Update the main message to show Claude is waiting
+                try:
+                    await client.chat_update(
+                        channel=channel_id,
+                        ts=message_ts,
+                        text=accumulated_output[:100] + "..." if len(accumulated_output) > 100 else accumulated_output,
+                        blocks=SlackFormatter.streaming_update(
+                            prompt,
+                            accumulated_output + "\n\n_Waiting for your response..._",
+                            tool_activities=list(accumulated_tools.values()),
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update message: {e}")
+
+                # Post the question to Slack
+                await QuestionManager.post_question_to_slack(
+                    pending_question,
+                    client,
+                    deps.db,
+                )
+
+                # Wait for user to answer (with timeout)
+                answers = await QuestionManager.wait_for_answer(
+                    pending_question.question_id,
+                    timeout=config.timeouts.execution.permission,
+                )
+
+                if answers:
+                    # User answered - format and send as follow-up to Claude
+                    answer_text = QuestionManager.format_answer_for_claude(pending_question)
+                    logger.info(f"User answered question, sending to Claude: {answer_text[:100]}")
+
+                    # Continue the conversation with the user's answer
+                    # This will resume the session
+                    continuation_result = await executor.execute(
+                        prompt=answer_text,
+                        working_directory=session.working_directory,
+                        session_id=channel_id,
+                        resume_session_id=result.session_id,  # Resume the same session
+                        execution_id=str(uuid.uuid4()),
+                        on_chunk=on_chunk,  # Reuse the same chunk handler
+                        permission_mode=session.permission_mode,
+                        db_session_id=session.id,
+                    )
+
+                    # Use the continuation result instead
+                    result = continuation_result
+                    if result.session_id:
+                        await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
+                else:
+                    # Timeout or cancelled - update message
+                    logger.info(f"Question timed out or cancelled")
+                    result.output = accumulated_output + "\n\n_Question timed out - no response received._"
+                    result.success = False
 
             # Update command history
             if result.success:
