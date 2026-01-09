@@ -9,6 +9,7 @@ from slack_bolt.async_app import AsyncApp
 from src.config import config
 from src.utils.formatting import SlackFormatter
 from src.utils.slack_helpers import upload_text_file, post_text_snippet
+from src.utils.detail_cache import DetailCache
 
 from .base import CommandContext, HandlerDependencies, slack_command
 
@@ -244,14 +245,31 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                         content=file_content,
                         title="📄 Response summary",
                     )
-                    # Post detailed output as collapsed file (appears minimized by default)
+                    # Store detailed output and post button to view it
                     if result.detailed_output and result.detailed_output != output:
-                        await upload_text_file(
-                            client=ctx.client,
-                            channel_id=ctx.channel_id,
-                            content=result.detailed_output,
-                            filename=f"claude_detailed_{cmd_history.id}.txt",
-                            title="📋 Complete response with tool use and results",
+                        DetailCache.store(cmd_history.id, result.detailed_output)
+                        await ctx.client.chat_postMessage(
+                            channel=ctx.channel_id,
+                            text="📋 Detailed output available",
+                            blocks=[
+                                {
+                                    "type": "section",
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": f"📋 *Detailed output* ({len(result.detailed_output):,} chars)",
+                                    },
+                                    "accessory": {
+                                        "type": "button",
+                                        "text": {
+                                            "type": "plain_text",
+                                            "text": "View Details",
+                                            "emoji": True,
+                                        },
+                                        "action_id": "view_detailed_output",
+                                        "value": str(cmd_history.id),
+                                    },
+                                },
+                            ],
                         )
                 except Exception as post_error:
                     ctx.logger.error(f"Failed to post snippet: {post_error}")

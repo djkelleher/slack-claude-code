@@ -29,6 +29,7 @@ from src.utils.file_downloader import (
     download_slack_file,
 )
 from src.utils.slack_helpers import upload_text_file, post_text_snippet
+from src.utils.detail_cache import DetailCache
 from src.utils.formatting import SlackFormatter
 
 # Configure logging
@@ -498,15 +499,32 @@ async def main():
                         title="📄 Response summary",
                         thread_ts=thread_ts,
                     )
-                    # Post detailed output as collapsed file (appears minimized by default)
+                    # Store detailed output in cache and post button to view it
                     if result.detailed_output and result.detailed_output != output:
-                        await upload_text_file(
-                            client=client,
-                            channel_id=channel_id,
-                            content=result.detailed_output,
-                            filename=f"claude_detailed_{cmd_history.id}.txt",
-                            title="📋 Complete response with tool use and results",
+                        DetailCache.store(cmd_history.id, result.detailed_output)
+                        await client.chat_postMessage(
+                            channel=channel_id,
                             thread_ts=thread_ts,
+                            text="📋 Detailed output available",
+                            blocks=[
+                                {
+                                    "type": "section",
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": f"📋 *Detailed output* ({len(result.detailed_output):,} chars)",
+                                    },
+                                    "accessory": {
+                                        "type": "button",
+                                        "text": {
+                                            "type": "plain_text",
+                                            "text": "View Details",
+                                            "emoji": True,
+                                        },
+                                        "action_id": "view_detailed_output",
+                                        "value": str(cmd_history.id),
+                                    },
+                                },
+                            ],
                         )
                 except Exception as post_error:
                     logger.error(f"Failed to post snippet: {post_error}")
@@ -529,11 +547,6 @@ async def main():
                         is_error=not result.success,
                     ),
                 )
-
-            # Post channel notification (triggers sound + unread badge)
-            await post_channel_notification(
-                client, deps.db, channel_id, thread_ts, "completion"
-            )
 
         except Exception as e:
             logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")

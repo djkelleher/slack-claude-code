@@ -776,3 +776,80 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 logger.warning(f"Failed to update question message: {e}")
 
             logger.info(f"Question {question_id} custom answered by {user_id}: {custom_answer[:50]}...")
+
+    # -------------------------------------------------------------------------
+    # Detailed output viewer
+    # -------------------------------------------------------------------------
+
+    @app.action("view_detailed_output")
+    async def handle_view_detailed_output(ack, action, body, client, logger):
+        """Handle View Details button - show detailed output in modal."""
+        await ack()
+
+        from src.utils.detail_cache import DetailCache
+
+        command_id = int(action["value"])
+        content = DetailCache.get(command_id)
+
+        if not content:
+            # Content expired or not found
+            await client.chat_postEphemeral(
+                channel=body["channel"]["id"],
+                user=body["user"]["id"],
+                text="Detailed output is no longer available (expired after 1 hour).",
+            )
+            return
+
+        # Slack modal text blocks have a 3000 char limit
+        # Split content into multiple blocks if needed
+        MAX_BLOCK_SIZE = 2900
+        blocks = []
+
+        if len(content) <= MAX_BLOCK_SIZE:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"```{content}```"},
+            })
+        else:
+            # Split into chunks
+            remaining = content
+            part = 1
+            while remaining:
+                chunk_size = MAX_BLOCK_SIZE - 6  # Account for ```
+                if len(remaining) <= chunk_size:
+                    chunk = remaining
+                    remaining = ""
+                else:
+                    # Try to break at newline
+                    break_point = remaining.rfind("\n", 0, chunk_size)
+                    if break_point == -1 or break_point < chunk_size // 2:
+                        break_point = chunk_size
+                    chunk = remaining[:break_point]
+                    remaining = remaining[break_point:].lstrip("\n")
+
+                blocks.append({
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
+                })
+                part += 1
+
+                # Modal has a limit of ~100 blocks
+                if len(blocks) >= 50:
+                    blocks.append({
+                        "type": "context",
+                        "elements": [{
+                            "type": "mrkdwn",
+                            "text": f"_... truncated ({len(remaining):,} more chars)_",
+                        }],
+                    })
+                    break
+
+        await client.views_open(
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "title": {"type": "plain_text", "text": "Detailed Output"},
+                "close": {"type": "plain_text", "text": "Close"},
+                "blocks": blocks[:50],  # Modal block limit
+            },
+        )
