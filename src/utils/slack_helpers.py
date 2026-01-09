@@ -2,6 +2,7 @@
 
 from typing import Any, Optional
 
+from src.config import config
 from src.utils.formatting import SlackFormatter
 
 
@@ -205,11 +206,8 @@ async def post_text_snippet(
     dict
         The Slack API response from the last message posted.
     """
-    # Slack block text limit is ~3000 chars, use 2800 to be safe
-    MAX_BLOCK_SIZE = 2800
-
     # If content is small enough, post as single message with code block
-    if len(content) <= MAX_BLOCK_SIZE:
+    if len(content) <= config.SLACK_BLOCK_TEXT_LIMIT:
         blocks = [
             {
                 "type": "section",
@@ -236,7 +234,7 @@ async def post_text_snippet(
     remaining = content
     while remaining:
         # Account for ``` markers (6 chars)
-        chunk_size = MAX_BLOCK_SIZE - 6
+        chunk_size = config.SLACK_BLOCK_TEXT_LIMIT - 6
         if len(remaining) <= chunk_size:
             chunks.append(remaining)
             break

@@ -3,10 +3,11 @@
 import re
 from datetime import datetime
 
+from src.config import config
 
-# Constants
-MAX_TEXT_LENGTH = 2900  # Leave room for formatting
-FILE_THRESHOLD = 2000  # Attach as file if longer than this
+# Re-export for backward compatibility (used by other formatters)
+MAX_TEXT_LENGTH = config.SLACK_BLOCK_TEXT_LIMIT
+FILE_THRESHOLD = config.SLACK_FILE_THRESHOLD
 
 
 def escape_markdown(text: str) -> str:
@@ -44,8 +45,6 @@ def markdown_to_mrkdwn(text: str) -> str:
     Note: In standard Markdown, **text** is bold and *text* is italic.
     In Slack mrkdwn, *text* is bold and _text_ is italic.
     """
-    import re
-    
     # Protect code blocks and inline code first
     protected_content = []
     

@@ -139,7 +139,8 @@ class TestConfig:
 
     def test_default_slack_limits(self):
         """Config has correct Slack output limits."""
-        assert config.MAX_OUTPUT_LENGTH == 2900
+        assert config.SLACK_BLOCK_TEXT_LIMIT == 2900
+        assert config.SLACK_FILE_THRESHOLD == 2000
 
     def test_validate_missing_tokens(self):
         """validate() catches missing required config."""

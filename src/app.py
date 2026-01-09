@@ -29,7 +29,8 @@ from src.utils.file_downloader import (
     FileDownloadError,
     download_slack_file,
 )
-from src.utils.slack_helpers import upload_text_file, post_text_snippet
+from src.utils.slack_helpers import post_text_snippet
+from src.utils.streaming import StreamingMessageState
 from src.utils.detail_cache import DetailCache
 from src.utils.formatting import SlackFormatter
 
@@ -316,73 +317,44 @@ async def main():
         )
         message_ts = response["ts"]
 
-        # Execute command with streaming updates
-        accumulated_output = ""
-        accumulated_tools: dict[str, "ToolActivity"] = {}  # tool_id -> ToolActivity
-        last_update_time = 0
+        # Setup streaming state with tool tracking
         execution_id = str(uuid.uuid4())
+        streaming_state = StreamingMessageState(
+            channel_id=channel_id,
+            message_ts=message_ts,
+            prompt=prompt,
+            client=client,
+            logger=logger,
+            track_tools=True,
+        )
         pending_question = None  # Track if we detect an AskUserQuestion
 
         # Import here to avoid circular imports
-        from src.claude.streaming import ToolActivity
         from src.question import QuestionManager
 
         async def on_chunk(msg):
-            nonlocal accumulated_output, last_update_time, pending_question
+            nonlocal pending_question
 
-            # Accumulate text content
-            if msg.type == "assistant" and msg.content:
-                # Limit accumulated output to prevent memory issues
-                if len(accumulated_output) < config.timeouts.streaming.max_accumulated_size:
-                    accumulated_output += msg.content
-
-            # Track tool activities
+            # Detect AskUserQuestion tool before updating state
             if msg.tool_activities:
                 for tool in msg.tool_activities:
-                    if tool.id in accumulated_tools:
-                        # Update existing tool with result
-                        existing = accumulated_tools[tool.id]
-                        if tool.result is not None:
-                            existing.result = tool.result
-                            existing.full_result = tool.full_result
-                            existing.is_error = tool.is_error
-                            existing.duration_ms = tool.duration_ms
-                    else:
-                        # Add new tool
-                        accumulated_tools[tool.id] = tool
-
-                    # Detect AskUserQuestion tool
                     if tool.name == "AskUserQuestion" and tool.result is None:
-                        # Create pending question when we first see the tool
-                        pending_question = await QuestionManager.create_pending_question(
-                            session_id=str(session.id),
-                            channel_id=channel_id,
-                            thread_ts=thread_ts,
-                            tool_use_id=tool.id,
-                            tool_input=tool.input,
-                        )
-                        logger.info(f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}")
+                        if tool.id not in streaming_state.tool_activities:
+                            # Create pending question when we first see the tool
+                            pending_question = await QuestionManager.create_pending_question(
+                                session_id=str(session.id),
+                                channel_id=channel_id,
+                                thread_ts=thread_ts,
+                                tool_use_id=tool.id,
+                                tool_input=tool.input,
+                            )
+                            logger.info(f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}")
 
-            # Rate limit updates to avoid Slack API limits
-            current_time = asyncio.get_running_loop().time()
-            if current_time - last_update_time > config.timeouts.slack.message_update_throttle:
-                last_update_time = current_time
-                try:
-                    # Get tool list (most recent last)
-                    tool_list = list(accumulated_tools.values())
-
-                    await client.chat_update(
-                        channel=channel_id,
-                        ts=message_ts,
-                        text=accumulated_output[:100] + "..." if len(accumulated_output) > 100 else accumulated_output,
-                        blocks=SlackFormatter.streaming_update(
-                            prompt,
-                            accumulated_output,
-                            tool_activities=tool_list,
-                        ),
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to update message: {e}")
+            # Update streaming state
+            content = msg.content if msg.type == "assistant" else ""
+            tools = msg.tool_activities
+            if content or tools:
+                await streaming_state.append_and_update(content or "", tools)
 
         try:
             result = await executor.execute(
@@ -406,14 +378,15 @@ async def main():
 
                 # Update the main message to show Claude is waiting
                 try:
+                    text_preview = streaming_state.accumulated_output[:100] + "..." if len(streaming_state.accumulated_output) > 100 else streaming_state.accumulated_output
                     await client.chat_update(
                         channel=channel_id,
                         ts=message_ts,
-                        text=accumulated_output[:100] + "..." if len(accumulated_output) > 100 else accumulated_output,
+                        text=text_preview,
                         blocks=SlackFormatter.streaming_update(
                             prompt,
-                            accumulated_output + "\n\n_Waiting for your response..._",
-                            tool_activities=list(accumulated_tools.values()),
+                            streaming_state.accumulated_output + "\n\n_Waiting for your response..._",
+                            tool_activities=streaming_state.get_tool_list(),
                         ),
                     )
                 except Exception as e:
@@ -457,7 +430,7 @@ async def main():
                 else:
                     # Timeout or cancelled - update message
                     logger.info(f"Question timed out or cancelled")
-                    result.output = accumulated_output + "\n\n_Question timed out - no response received._"
+                    result.output = streaming_state.accumulated_output + "\n\n_Question timed out - no response received._"
                     result.success = False
 
             # Update command history

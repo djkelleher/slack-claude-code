@@ -78,11 +78,16 @@ class Config:
     DEFAULT_WORKING_DIR: str = os.getenv("DEFAULT_WORKING_DIR", str(Path.home()))
 
     # Claude Code configuration
-    # Valid modes: acceptEdits, bypassPermissions, default, delegate, dontAsk, plan
     CLAUDE_PERMISSION_MODE: str = os.getenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
 
-    # Slack output limits
-    MAX_OUTPUT_LENGTH: int = 2900  # Slack block limit is 3000, leave room for formatting
+    # Slack API limits (block text limit is 3000 chars)
+    SLACK_BLOCK_TEXT_LIMIT: int = 2900  # Leave room for formatting
+    SLACK_FILE_THRESHOLD: int = 2000  # Attach as file if output exceeds this
+
+    # Valid permission modes for Claude Code CLI
+    VALID_PERMISSION_MODES: tuple[str, ...] = (
+        "acceptEdits", "bypassPermissions", "default", "delegate", "dontAsk", "plan"
+    )
 
     # Multi-agent workflow
     PLANNER_MAX_TURNS: int = int(os.getenv("PLANNER_MAX_TURNS", "10"))

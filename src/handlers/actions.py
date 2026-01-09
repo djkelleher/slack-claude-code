@@ -1,6 +1,5 @@
 """Interactive component action handlers."""
 
-import asyncio
 import json
 import re
 import uuid
@@ -16,12 +15,62 @@ from src.config import config
 from src.pty.pool import PTYSessionPool
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.formatting import SlackFormatter
+from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from .base import HandlerDependencies
 
 
-# Reference to message update throttle for convenience
-_msg_throttle = config.timeouts.slack.message_update_throttle
+async def _handle_approval_action(
+    body: dict,
+    action: dict,
+    client,
+    logger,
+    resolver,
+    block_builder,
+    approval_type: str,
+) -> None:
+    """Generic handler for approval/denial actions.
+
+    Parameters
+    ----------
+    body : dict
+        Slack action body.
+    action : dict
+        Action data containing approval_id.
+    client : Any
+        Slack WebClient.
+    logger : Any
+        Logger instance.
+    resolver : Callable
+        Async function to resolve approval, returns resolved data or None.
+    block_builder : Callable
+        Function to build result blocks from resolved data and user_id.
+    approval_type : str
+        Type for logging/error messages (e.g., "Tool", "Plan").
+    """
+    channel_id = body["channel"]["id"]
+    message_ts = body["message"]["ts"]
+    user_id = body["user"]["id"]
+    approval_id = action["value"]
+
+    resolved = await resolver(approval_id, user_id)
+
+    if resolved:
+        try:
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                blocks=block_builder(resolved, user_id),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to update {approval_type.lower()} message: {e}")
+        logger.info(f"{approval_type} {approval_id} resolved by {user_id}")
+    else:
+        await client.chat_postEphemeral(
+            channel=channel_id,
+            user=user_id,
+            text=f"{approval_type} request `{approval_id}` not found or already resolved.",
+        )
 
 
 def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
@@ -75,33 +124,16 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
         message_ts = response["ts"]
 
-        # Execute command
+        # Setup streaming state
         execution_id = str(uuid.uuid4())
-
-        accumulated_output = ""
-        last_update_time = 0
-
-        async def on_chunk(msg):
-            nonlocal accumulated_output, last_update_time
-
-            if msg.type == "assistant" and msg.content:
-                # Limit accumulated output to prevent memory issues
-                if len(accumulated_output) < config.timeouts.streaming.max_accumulated_size:
-                    accumulated_output += msg.content
-
-                current_time = asyncio.get_running_loop().time()
-                if current_time - last_update_time > _msg_throttle:
-                    last_update_time = current_time
-                    try:
-                        await client.chat_update(
-                            channel=channel_id,
-                            ts=message_ts,
-                            blocks=SlackFormatter.streaming_update(
-                                cmd.command, accumulated_output
-                            ),
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to update message: {e}")
+        streaming_state = StreamingMessageState(
+            channel_id=channel_id,
+            message_ts=message_ts,
+            prompt=cmd.command,
+            client=client,
+            logger=logger,
+        )
+        on_chunk = create_streaming_callback(streaming_state)
 
         try:
             result = await deps.executor.execute(
@@ -363,154 +395,78 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle tool approval button click."""
         await ack()
 
-        channel_id = body["channel"]["id"]
-        message_ts = body["message"]["ts"]
-        user_id = body["user"]["id"]
-        approval_id = action["value"]
+        async def resolver(approval_id, user_id):
+            return await PermissionManager.resolve(approval_id, approved=True)
 
-        # Resolve the approval
-        resolved = await PermissionManager.resolve(approval_id, approved=True)
-
-        if resolved:
-            # Update the message to show approved status
-            try:
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    blocks=build_approval_result_blocks(
-                        approval_id=approval_id,
-                        tool_name=resolved.tool_name,
-                        approved=True,
-                        user_id=user_id,
-                    ),
-                )
-            except Exception as e:
-                logger.warning(f"Failed to update approval message: {e}")
-
-            logger.info(f"Tool {resolved.tool_name} approved by {user_id}")
-        else:
-            await client.chat_postEphemeral(
-                channel=channel_id,
-                user=user_id,
-                text=f"Approval request `{approval_id}` not found or already resolved.",
+        def block_builder(resolved, user_id):
+            return build_approval_result_blocks(
+                approval_id=action["value"],
+                tool_name=resolved.tool_name,
+                approved=True,
+                user_id=user_id,
             )
+
+        await _handle_approval_action(
+            body, action, client, logger, resolver, block_builder, "Tool approval"
+        )
 
     @app.action("deny_tool")
     async def handle_deny_tool(ack, action, body, client, logger):
         """Handle tool denial button click."""
         await ack()
 
-        channel_id = body["channel"]["id"]
-        message_ts = body["message"]["ts"]
-        user_id = body["user"]["id"]
-        approval_id = action["value"]
+        async def resolver(approval_id, user_id):
+            return await PermissionManager.resolve(approval_id, approved=False)
 
-        # Resolve the approval (denied)
-        resolved = await PermissionManager.resolve(approval_id, approved=False)
-
-        if resolved:
-            # Update the message to show denied status
-            try:
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    blocks=build_approval_result_blocks(
-                        approval_id=approval_id,
-                        tool_name=resolved.tool_name,
-                        approved=False,
-                        user_id=user_id,
-                    ),
-                )
-            except Exception as e:
-                logger.warning(f"Failed to update denial message: {e}")
-
-            logger.info(f"Tool {resolved.tool_name} denied by {user_id}")
-        else:
-            await client.chat_postEphemeral(
-                channel=channel_id,
-                user=user_id,
-                text=f"Approval request `{approval_id}` not found or already resolved.",
+        def block_builder(resolved, user_id):
+            return build_approval_result_blocks(
+                approval_id=action["value"],
+                tool_name=resolved.tool_name,
+                approved=False,
+                user_id=user_id,
             )
+
+        await _handle_approval_action(
+            body, action, client, logger, resolver, block_builder, "Tool denial"
+        )
 
     @app.action("approve_plan")
     async def handle_approve_plan(ack, action, body, client, logger):
         """Handle plan approval button click."""
         await ack()
 
-        channel_id = body["channel"]["id"]
-        message_ts = body["message"]["ts"]
-        user_id = body["user"]["id"]
-        approval_id = action["value"]
-
-        # Resolve the approval
-        resolved = await PlanApprovalManager.resolve(
-            approval_id=approval_id,
-            approved=True,
-            resolved_by=user_id,
-        )
-
-        if resolved:
-            # Update the message to show approved status
-            try:
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    blocks=build_plan_result_blocks(
-                        approval_id=approval_id,
-                        approved=True,
-                        user_id=user_id,
-                    ),
-                )
-            except Exception as e:
-                logger.warning(f"Failed to update plan approval message: {e}")
-
-            logger.info(f"Plan {approval_id} approved by {user_id}")
-        else:
-            await client.chat_postEphemeral(
-                channel=channel_id,
-                user=user_id,
-                text=f"Plan approval request `{approval_id}` not found or already resolved.",
+        async def resolver(approval_id, user_id):
+            return await PlanApprovalManager.resolve(
+                approval_id=approval_id, approved=True, resolved_by=user_id
             )
+
+        def block_builder(resolved, user_id):
+            return build_plan_result_blocks(
+                approval_id=action["value"], approved=True, user_id=user_id
+            )
+
+        await _handle_approval_action(
+            body, action, client, logger, resolver, block_builder, "Plan approval"
+        )
 
     @app.action("reject_plan")
     async def handle_reject_plan(ack, action, body, client, logger):
         """Handle plan rejection button click."""
         await ack()
 
-        channel_id = body["channel"]["id"]
-        message_ts = body["message"]["ts"]
-        user_id = body["user"]["id"]
-        approval_id = action["value"]
-
-        # Resolve the approval (rejected)
-        resolved = await PlanApprovalManager.resolve(
-            approval_id=approval_id,
-            approved=False,
-            resolved_by=user_id,
-        )
-
-        if resolved:
-            # Update the message to show rejected status
-            try:
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    blocks=build_plan_result_blocks(
-                        approval_id=approval_id,
-                        approved=False,
-                        user_id=user_id,
-                    ),
-                )
-            except Exception as e:
-                logger.warning(f"Failed to update plan rejection message: {e}")
-
-            logger.info(f"Plan {approval_id} rejected by {user_id}")
-        else:
-            await client.chat_postEphemeral(
-                channel=channel_id,
-                user=user_id,
-                text=f"Plan approval request `{approval_id}` not found or already resolved.",
+        async def resolver(approval_id, user_id):
+            return await PlanApprovalManager.resolve(
+                approval_id=approval_id, approved=False, resolved_by=user_id
             )
+
+        def block_builder(resolved, user_id):
+            return build_plan_result_blocks(
+                approval_id=action["value"], approved=False, user_id=user_id
+            )
+
+        await _handle_approval_action(
+            body, action, client, logger, resolver, block_builder, "Plan rejection"
+        )
 
     # -------------------------------------------------------------------------
     # Task management handlers
@@ -859,10 +815,9 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         # Slack modal text blocks have a 3000 char limit
         # Split content into multiple blocks if needed
-        MAX_BLOCK_SIZE = 2900
         blocks = []
 
-        if len(content) <= MAX_BLOCK_SIZE:
+        if len(content) <= config.SLACK_BLOCK_TEXT_LIMIT:
             blocks.append({
                 "type": "section",
                 "text": {"type": "mrkdwn", "text": f"```{content}```"},
@@ -872,7 +827,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             remaining = content
             part = 1
             while remaining:
-                chunk_size = MAX_BLOCK_SIZE - 6  # Account for ```
+                chunk_size = config.SLACK_BLOCK_TEXT_LIMIT - 6  # Account for ```
                 if len(remaining) <= chunk_size:
                     chunk = remaining
                     remaining = ""

@@ -1,6 +1,5 @@
 """Basic command handlers: /cd, /ls, /c."""
 
-import asyncio
 import uuid
 from pathlib import Path
 
@@ -8,7 +7,8 @@ from slack_bolt.async_app import AsyncApp
 
 from src.config import config
 from src.utils.formatting import SlackFormatter
-from src.utils.slack_helpers import upload_text_file, post_text_snippet
+from src.utils.slack_helpers import post_text_snippet
+from src.utils.streaming import StreamingMessageState, create_streaming_callback
 from src.utils.detail_cache import DetailCache
 
 from .base import CommandContext, HandlerDependencies, slack_command
@@ -151,45 +151,17 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
         message_ts = response["ts"]
 
-        # Execute command with streaming updates
-        accumulated_output = ""
-        last_update_time = 0
+        # Setup streaming state
         execution_id = str(uuid.uuid4())
-        last_chunk_was_newline = False
-
-        async def on_chunk(msg):
-            nonlocal accumulated_output, last_update_time, last_chunk_was_newline
-
-            if msg.type == "assistant" and msg.content:
-                # Limit accumulated output to prevent memory issues
-                if len(accumulated_output) < config.timeouts.streaming.max_accumulated_size:
-                    # Smart chunk concatenation:
-                    # - Add newline between distinct chunks unless last chunk ended with newline
-                    # - Don't add extra newlines if chunk is very small (< 10 chars)
-                    chunk = msg.content
-                    if accumulated_output and not last_chunk_was_newline:
-                        # Add spacing between chunks for readability
-                        if len(chunk) >= 10 or chunk.strip():  # Non-trivial chunk
-                            if not accumulated_output.endswith(('\n', ' ', '\t')):
-                                accumulated_output += "\n\n"
-                    accumulated_output += chunk
-                    last_chunk_was_newline = chunk.endswith('\n')
-
-                # Rate limit updates to avoid Slack API limits
-                current_time = asyncio.get_running_loop().time()
-                if current_time - last_update_time > config.timeouts.slack.message_update_throttle:
-                    last_update_time = current_time
-                    try:
-                        await ctx.client.chat_update(
-                            channel=ctx.channel_id,
-                            ts=message_ts,
-                            text=accumulated_output[:100] + "..." if len(accumulated_output) > 100 else accumulated_output,
-                            blocks=SlackFormatter.streaming_update(
-                                prompt, accumulated_output
-                            ),
-                        )
-                    except Exception as e:
-                        ctx.logger.warning(f"Failed to update message: {e}")
+        streaming_state = StreamingMessageState(
+            channel_id=ctx.channel_id,
+            message_ts=message_ts,
+            prompt=prompt,
+            client=ctx.client,
+            logger=ctx.logger,
+            smart_concat=True,
+        )
+        on_chunk = create_streaming_callback(streaming_state)
 
         try:
             result = await deps.executor.execute(

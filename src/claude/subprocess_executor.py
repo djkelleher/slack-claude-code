@@ -91,8 +91,7 @@ class SubprocessExecutor:
 
         # Determine permission mode: explicit > config default
         mode = permission_mode or config.CLAUDE_PERMISSION_MODE
-        valid_modes = ["acceptEdits", "bypassPermissions", "default", "delegate", "dontAsk", "plan"]
-        if mode in valid_modes:
+        if mode in config.VALID_PERMISSION_MODES:
             cmd.extend(["--permission-mode", mode])
             logger.info(f"Using --permission-mode {mode}")
         else:

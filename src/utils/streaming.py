@@ -2,10 +2,13 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from src.config import config
 from src.utils.formatting import SlackFormatter
+
+if TYPE_CHECKING:
+    from src.claude.streaming import ToolActivity
 
 
 @dataclass
@@ -26,6 +29,10 @@ class StreamingMessageState:
         The Slack WebClient for API calls.
     logger : Any
         Logger instance for this request.
+    smart_concat : bool
+        If True, add newlines between chunks for better readability.
+    track_tools : bool
+        If True, track tool activities for display.
     """
 
     channel_id: str
@@ -33,19 +40,53 @@ class StreamingMessageState:
     prompt: str
     client: Any
     logger: Any
+    smart_concat: bool = False
+    track_tools: bool = False
     accumulated_output: str = ""
     last_update_time: float = field(default=0.0)
+    tool_activities: dict = field(default_factory=dict)
+    _last_chunk_was_newline: bool = field(default=False)
 
-    async def append_and_update(self, content: str) -> None:
+    def get_tool_list(self) -> list["ToolActivity"]:
+        """Get list of tracked tool activities."""
+        return list(self.tool_activities.values())
+
+    async def append_and_update(
+        self,
+        content: str,
+        tools: list["ToolActivity"] = None,
+    ) -> None:
         """Append content and update Slack message if throttle allows.
 
         Parameters
         ----------
         content : str
             New content to append to accumulated output.
+        tools : list[ToolActivity], optional
+            Tool activities to track.
         """
+        # Track tool activities
+        if self.track_tools and tools:
+            for tool in tools:
+                if tool.id in self.tool_activities:
+                    existing = self.tool_activities[tool.id]
+                    if tool.result is not None:
+                        existing.result = tool.result
+                        existing.full_result = tool.full_result
+                        existing.is_error = tool.is_error
+                        existing.duration_ms = tool.duration_ms
+                else:
+                    self.tool_activities[tool.id] = tool
+
         # Limit accumulated output to prevent memory exhaustion
         if len(self.accumulated_output) < config.timeouts.streaming.max_accumulated_size:
+            if self.smart_concat and content:
+                # Smart chunk concatenation: add newlines between chunks for readability
+                if self.accumulated_output and not self._last_chunk_was_newline:
+                    if len(content) >= 10 or content.strip():
+                        if not self.accumulated_output.endswith(('\n', ' ', '\t')):
+                            self.accumulated_output += "\n\n"
+                self._last_chunk_was_newline = content.endswith('\n') if content else False
             self.accumulated_output += content
 
         # Rate limit updates to avoid Slack API limits
@@ -62,11 +103,16 @@ class StreamingMessageState:
                 if len(self.accumulated_output) > 100
                 else self.accumulated_output
             )
+            tool_list = self.get_tool_list() if self.track_tools else None
             await self.client.chat_update(
                 channel=self.channel_id,
                 ts=self.message_ts,
                 text=text_preview,
-                blocks=SlackFormatter.streaming_update(self.prompt, self.accumulated_output),
+                blocks=SlackFormatter.streaming_update(
+                    self.prompt,
+                    self.accumulated_output,
+                    tool_activities=tool_list,
+                ),
             )
         except Exception as e:
             self.logger.warning(f"Failed to update message: {e}")
@@ -79,12 +125,13 @@ class StreamingMessageState:
                 if len(self.accumulated_output) > 100
                 else self.accumulated_output
             )
+            tool_list = self.get_tool_list() if self.track_tools else None
             await self.client.chat_update(
                 channel=self.channel_id,
                 ts=self.message_ts,
                 text=text_preview,
                 blocks=SlackFormatter.streaming_update(
-                    self.prompt, self.accumulated_output, is_complete=True
+                    self.prompt, self.accumulated_output, tool_activities=tool_list, is_complete=True
                 ),
             )
         except Exception as e:
@@ -106,7 +153,9 @@ def create_streaming_callback(state: StreamingMessageState) -> Callable:
     """
 
     async def on_chunk(msg) -> None:
-        if msg.type == "assistant" and msg.content:
-            await state.append_and_update(msg.content)
+        content = msg.content if msg.type == "assistant" else ""
+        tools = msg.tool_activities if state.track_tools else None
+        if content or tools:
+            await state.append_and_update(content or "", tools)
 
     return on_chunk
