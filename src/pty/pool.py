@@ -124,10 +124,11 @@ class PTYSessionPool:
         return False
 
     @classmethod
-    def list_sessions(cls) -> list[str]:
-        """List all session IDs."""
-        # Safe to read without lock - just returns a snapshot
-        return list(cls._sessions.keys())
+    async def list_sessions(cls) -> list[str]:
+        """List all session IDs (thread-safe)."""
+        lock = cls._get_lock()
+        async with lock:
+            return list(cls._sessions.keys())
 
     @classmethod
     def get_session_info(cls, session_id: Optional[str] = None) -> Optional[dict] | list[dict]:

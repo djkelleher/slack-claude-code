@@ -13,6 +13,7 @@ import signal
 import sys
 import traceback
 import uuid
+from datetime import datetime, timezone
 
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -271,7 +272,6 @@ async def main():
                 )[:5]
 
                 # Build context summary
-                from datetime import datetime, timezone
                 context_lines = []
                 for fc in relevant_files:
                     # Calculate time ago
@@ -547,6 +547,9 @@ async def main():
                         is_error=not result.success,
                     ),
                 )
+
+            # Post completion notification to channel (triggers sound/badge)
+            await post_channel_notification(client, db, channel_id, thread_ts, "completion")
 
         except Exception as e:
             logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")

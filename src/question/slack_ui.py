@@ -72,6 +72,25 @@ def build_question_blocks(pending: "PendingQuestion") -> list[dict]:
         if i < len(pending.questions) - 1:
             blocks.append({"type": "divider"})
 
+    # Add submit button for multi-select questions
+    has_multiselect = any(q.multi_select for q in pending.questions)
+    if has_multiselect:
+        blocks.append({
+            "type": "actions",
+            "block_id": f"question_submit_{pending.question_id}",
+            "elements": [{
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Submit Selections",
+                    "emoji": True,
+                },
+                "style": "primary",
+                "action_id": "question_multiselect_submit",
+                "value": pending.question_id,
+            }],
+        })
+
     # Add "Other" text input option
     blocks.append({"type": "divider"})
     blocks.append({
@@ -154,22 +173,20 @@ def _build_checkbox_block(
     """
     options = []
     for opt in question.options:
-        options.append({
+        option_dict = {
             "text": {
                 "type": "mrkdwn",
                 "text": f"*{opt.label}*",
             },
-            "description": {
-                "type": "mrkdwn",
-                "text": opt.description[:75] if opt.description else " ",
-            } if opt.description else None,
             "value": opt.label,
-        })
-
-    # Remove None descriptions
-    for opt in options:
-        if opt.get("description") is None:
-            del opt["description"]
+        }
+        # Only add description if it's a non-empty string
+        if opt.description:
+            option_dict["description"] = {
+                "type": "mrkdwn",
+                "text": opt.description[:75],
+            }
+        options.append(option_dict)
 
     # Value encodes question_id and question_index
     action_value = json.dumps({

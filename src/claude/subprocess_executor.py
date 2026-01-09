@@ -266,7 +266,8 @@ class SubprocessExecutor:
                 stderr_str = stderr.decode('utf-8', errors='replace').strip()
                 if stderr_str:
                     logger.warning(f"Claude stderr: {stderr_str}")
-                    if not error_msg:
+                    # Only treat stderr as error if process failed
+                    if process.returncode != 0 and not error_msg:
                         error_msg = stderr_str
 
             success = process.returncode == 0 and not error_msg

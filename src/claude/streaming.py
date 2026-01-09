@@ -285,6 +285,8 @@ class StreamParser:
 
         elif msg_type == "result":
             # Final result message
+            # Clear pending tools to prevent memory accumulation across sessions
+            self.pending_tools.clear()
             return StreamMessage(
                 type="result",
                 content=self.accumulated_content,

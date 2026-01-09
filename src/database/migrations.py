@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS parallel_jobs (
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
--- PTY sessions tracking
+-- PTY sessions tracking (UNUSED: currently tracked in-memory by PTYSessionPool)
+-- Reserved for future persistence feature
 CREATE TABLE IF NOT EXISTS pty_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT UNIQUE NOT NULL,
@@ -55,7 +56,8 @@ CREATE TABLE IF NOT EXISTS pty_sessions (
     last_activity TIMESTAMP
 );
 
--- Agent tasks for multi-agent workflow
+-- Agent tasks for multi-agent workflow (UNUSED: currently tracked in-memory by MultiAgentOrchestrator)
+-- Reserved for future persistence feature
 CREATE TABLE IF NOT EXISTS agent_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL,
@@ -78,7 +80,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
--- Agent turn tracking
+-- Agent turn tracking (UNUSED: reserved for future cost/history tracking)
 CREATE TABLE IF NOT EXISTS agent_turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL,
@@ -93,7 +95,8 @@ CREATE TABLE IF NOT EXISTS agent_turns (
     FOREIGN KEY (task_id) REFERENCES agent_tasks(id)
 );
 
--- Permission requests
+-- Permission requests (UNUSED: currently tracked in-memory by PermissionManager)
+-- Reserved for future audit/history feature
 CREATE TABLE IF NOT EXISTS permission_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     approval_id TEXT UNIQUE NOT NULL,
@@ -131,7 +134,7 @@ CREATE TABLE IF NOT EXISTS budget_config (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Hook events log
+-- Hook events log (UNUSED: reserved for future event audit trail)
 CREATE TABLE IF NOT EXISTS hook_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_type TEXT NOT NULL,

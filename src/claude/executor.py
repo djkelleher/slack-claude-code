@@ -244,7 +244,7 @@ class ClaudeExecutor:
 
     async def cancel_all(self) -> int:
         """Cancel all active sessions. Returns count of cancelled."""
-        sessions = PTYSessionPool.list_sessions()
+        sessions = await PTYSessionPool.list_sessions()
         count = 0
         for session_id in sessions:
             if await PTYSessionPool.interrupt_session(session_id):

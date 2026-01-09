@@ -67,9 +67,10 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         new_cmd = await deps.db.add_command(session.id, cmd.command)
         await deps.db.update_command_status(new_cmd.id, "running")
 
-        # Send processing message
+        # Send processing message (in thread if original was in thread)
         response = await client.chat_postMessage(
             channel=channel_id,
+            thread_ts=thread_ts,
             blocks=SlackFormatter.processing_message(cmd.command),
         )
         message_ts = response["ts"]
@@ -736,9 +737,61 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         # Set the answer for this question
         QuestionManager.set_answer(question_id, question_index, selected_labels)
 
-        # For multi-select, we need a submit button - checkboxes alone don't trigger completion
-        # The user needs to click a "Submit" button after selecting checkboxes
-        # This is handled separately
+        # For multi-select, the user needs to click "Submit Selections" button
+        # to complete the question (see question_multiselect_submit handler below)
+
+    @app.action("question_multiselect_submit")
+    async def handle_question_multiselect_submit(ack, action, body, client, logger):
+        """Handle multi-select submit button click."""
+        await ack()
+
+        from src.question import QuestionManager, build_question_result_blocks
+
+        question_id = action["value"]
+
+        pending = QuestionManager.get_pending(question_id)
+        if not pending:
+            await client.chat_postEphemeral(
+                channel=body["channel"]["id"],
+                user=body["user"]["id"],
+                text="This question has already been answered or timed out.",
+            )
+            return
+
+        # For multi-select questions without any selections, set empty list
+        for i, question in enumerate(pending.questions):
+            if question.multi_select and i not in pending.answers:
+                QuestionManager.set_answer(question_id, i, [])
+
+        # Check if all questions have been answered
+        if not QuestionManager.is_complete(question_id):
+            # Some single-select questions haven't been answered yet
+            await client.chat_postEphemeral(
+                channel=body["channel"]["id"],
+                user=body["user"]["id"],
+                text="Please answer all questions before submitting.",
+            )
+            return
+
+        # Resolve the question
+        resolved = await QuestionManager.resolve(question_id)
+        if resolved:
+            user_id = body["user"]["id"]
+            channel_id = body["channel"]["id"]
+            message_ts = body["message"]["ts"]
+
+            # Update the message to show answered state
+            try:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    blocks=build_question_result_blocks(resolved, user_id),
+                    text="Question answered",
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update question message: {e}")
+
+            logger.info(f"Question {question_id} submitted by {user_id}: {resolved.answers}")
 
     @app.view("question_custom_submit")
     async def handle_question_custom_submit(ack, body, client, view, logger):
@@ -755,9 +808,13 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             # Question already resolved or timed out
             return
 
-        # Set custom answer for all questions (treat as single combined answer)
+        # Set custom answer - for multi-question prompts, prefix to indicate it's combined
+        if len(pending.questions) > 1:
+            prefixed_answer = f"[Custom answer for all questions] {custom_answer}"
+        else:
+            prefixed_answer = custom_answer
         for i in range(len(pending.questions)):
-            QuestionManager.set_answer(question_id, i, [custom_answer])
+            QuestionManager.set_answer(question_id, i, [prefixed_answer])
 
         # Resolve the question
         resolved = await QuestionManager.resolve(question_id)
