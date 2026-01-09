@@ -128,6 +128,18 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             blocks=SlackFormatter.cwd_updated(str(target_path)),
         )
 
+    @app.command("/pwd")
+    @slack_command()
+    async def handle_pwd(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /pwd command - print current working directory."""
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
+        )
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            text=f":file_folder: Current working directory: `{session.working_directory}`",
+        )
+
     @app.command("/c")
     @slack_command(require_text=True, usage_hint="Usage: /c <prompt>")
     async def handle_claude(ctx: CommandContext, deps: HandlerDependencies = deps):
