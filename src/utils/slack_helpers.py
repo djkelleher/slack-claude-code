@@ -112,7 +112,7 @@ async def upload_text_file(
 ) -> dict:
     """Upload a text file to Slack as a proper text snippet.
 
-    Uses snippet_type to ensure the file is displayed as text, not binary.
+    Uses filetype="text" to ensure the file is displayed as text, not binary.
 
     Parameters
     ----------
@@ -134,11 +134,33 @@ async def upload_text_file(
     dict
         The Slack API response.
     """
+    # Sanitize content to remove control characters that might cause
+    # Slack to treat the file as binary (keep printable ASCII + Unicode + whitespace)
+    def is_safe_char(char: str) -> bool:
+        code = ord(char)
+        # Allow: tab, newline, carriage return
+        if char in "\n\r\t":
+            return True
+        # Allow: printable ASCII (space through tilde)
+        if 32 <= code <= 126:
+            return True
+        # Allow: Unicode characters (Latin-1 Supplement and beyond)
+        if code >= 160:
+            return True
+        # Block: null bytes, control chars (0-31 except above), DEL (127), C1 controls (128-159)
+        return False
+
+    sanitized_content = "".join(
+        char if is_safe_char(char) else " "
+        for char in content
+    )
+
     kwargs = {
         "channel": channel_id,
-        "content": content,
+        "content": sanitized_content,
         "filename": filename,
         "title": title,
+        "filetype": "text",  # Explicitly set filetype to text
         "snippet_type": "text",
     }
     if initial_comment:
