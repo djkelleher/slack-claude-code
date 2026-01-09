@@ -96,11 +96,13 @@ class SubprocessExecutor:
             logger.info("Using --permission-mode plan for planning phase")
         else:
             # Use standard permission mode
-            if config.CLAUDE_PERMISSION_MODE in ["approve-all", "prompt", "deny"]:
+            # Valid modes: acceptEdits, bypassPermissions, default, delegate, dontAsk, plan
+            valid_modes = ["acceptEdits", "bypassPermissions", "default", "delegate", "dontAsk", "plan"]
+            if config.CLAUDE_PERMISSION_MODE in valid_modes:
                 cmd.extend(["--permission-mode", config.CLAUDE_PERMISSION_MODE])
             else:
-                logger.warning(f"Invalid CLAUDE_PERMISSION_MODE: {config.CLAUDE_PERMISSION_MODE}, using approve-all")
-                cmd.extend(["--permission-mode", "approve-all"])
+                logger.warning(f"Invalid CLAUDE_PERMISSION_MODE: {config.CLAUDE_PERMISSION_MODE}, using bypassPermissions")
+                cmd.extend(["--permission-mode", "bypassPermissions"])
 
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):
