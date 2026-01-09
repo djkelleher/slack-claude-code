@@ -97,10 +97,10 @@ class SubprocessExecutor:
         else:
             # Use standard permission mode
             if config.CLAUDE_PERMISSION_MODE in ["approve-all", "prompt", "deny"]:
-                cmd.extend(["--permissions", config.CLAUDE_PERMISSION_MODE])
+                cmd.extend(["--permission-mode", config.CLAUDE_PERMISSION_MODE])
             else:
                 logger.warning(f"Invalid CLAUDE_PERMISSION_MODE: {config.CLAUDE_PERMISSION_MODE}, using approve-all")
-                cmd.extend(["--permissions", "approve-all"])
+                cmd.extend(["--permission-mode", "approve-all"])
 
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):
