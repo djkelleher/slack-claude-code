@@ -81,6 +81,7 @@ poetry install
    | `/plan` | Plan mode - review implementation plan before execution |
    | `/ls` | List directory contents (shows cwd when no argument) |
    | `/cd` | Change working directory (supports relative paths) |
+   | `/pwd` | Print current working directory |
    | `/q` | Add command to FIFO queue |
    | `/qv` | View queue status |
    | `/qc` | Clear pending queue items |
@@ -397,6 +398,12 @@ Includes a "Restart Session" button to force-restart the session.
 ### Filesystem Navigation
 
 ```
+/pwd
+```
+
+Prints the current working directory.
+
+```
 /ls
 ```
 
@@ -662,7 +669,7 @@ MAX_UPLOAD_STORAGE_MB=100  # Total storage limit for uploads
 - **Multi-agent tasks**: Use `/task` for complex work that benefits from planning and evaluation.
 - **Night mode**: Higher usage thresholds at night allow more intensive work during off-hours.
 - **Command queue**: Use `/q` to queue multiple commands that will execute sequentially.
-- **Filesystem**: Use `/ls` to see cwd and contents, `/cd` to navigate directories.
+- **Filesystem**: Use `/pwd` to see current directory, `/ls` to list contents, `/cd` to navigate directories.
 - **Session management**: Use `/clear` to reset conversation and cancel processes, `/compact` to reduce context size.
 - **Session cleanup**: Use `/session-cleanup` to remove inactive sessions and free up resources.
 
