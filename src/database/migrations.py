@@ -226,29 +226,11 @@ CREATE INDEX IF NOT EXISTS idx_git_checkpoints_session ON git_checkpoints(sessio
 """
 
 
-async def _migrate_sessions_table(db: aiosqlite.Connection) -> None:
-    """Add missing columns to sessions table for backwards compatibility."""
-    cursor = await db.execute("PRAGMA table_info(sessions)")
-    columns = {row[1] for row in await cursor.fetchall()}
-
-    migrations = [
-        ("permission_mode", "TEXT DEFAULT NULL"),
-        ("last_active", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-    ]
-
-    for column_name, column_def in migrations:
-        if column_name not in columns:
-            await db.execute(f"ALTER TABLE sessions ADD COLUMN {column_name} {column_def}")
-
-
 async def init_database(db_path: str) -> None:
     """Initialize the database with the schema."""
-    # Ensure directory exists
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA)
-        await _migrate_sessions_table(db)
         await db.commit()
 
 
