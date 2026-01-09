@@ -201,6 +201,16 @@ CREATE TABLE IF NOT EXISTS git_checkpoints (
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
+-- Notification settings per channel (enabled by default)
+CREATE TABLE IF NOT EXISTS notification_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id TEXT NOT NULL UNIQUE,
+    notify_on_completion INTEGER DEFAULT 1,
+    notify_on_permission INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread ON sessions(channel_id, thread_ts);
@@ -223,6 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_file_context_session ON file_context(session_id);
 CREATE INDEX IF NOT EXISTS idx_file_context_use_count ON file_context(use_count DESC);
 CREATE INDEX IF NOT EXISTS idx_git_checkpoints_channel ON git_checkpoints(channel_id);
 CREATE INDEX IF NOT EXISTS idx_git_checkpoints_session ON git_checkpoints(session_id);
+CREATE INDEX IF NOT EXISTS idx_notification_settings_channel ON notification_settings(channel_id);
 """
 
 
@@ -238,6 +249,7 @@ async def reset_database(db_path: str) -> None:
     """Drop all tables and reinitialize (for development)."""
     async with aiosqlite.connect(db_path) as db:
         await db.executescript("""
+            DROP TABLE IF EXISTS notification_settings;
             DROP TABLE IF EXISTS git_checkpoints;
             DROP TABLE IF EXISTS file_context;
             DROP TABLE IF EXISTS uploaded_files;

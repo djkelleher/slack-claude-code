@@ -13,11 +13,44 @@ from typing import Optional
 from slack_sdk.web.async_client import AsyncWebClient
 
 from ..config import config
+from ..database.repository import DatabaseRepository
 from ..hooks.registry import HookRegistry, create_context
 from ..hooks.types import HookEvent, HookEventType
 from .slack_ui import build_approval_blocks
 
 logger = logging.getLogger(__name__)
+
+
+async def _post_permission_notification(
+    slack_client: AsyncWebClient,
+    channel_id: str,
+    thread_ts: Optional[str],
+    db: Optional[DatabaseRepository] = None,
+) -> None:
+    """Post channel notification for permission request."""
+    try:
+        # Check settings
+        if db:
+            settings = await db.get_notification_settings(channel_id)
+            if not settings.notify_on_permission:
+                return
+
+        # Build thread link
+        if thread_ts:
+            thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
+            message = f"⚠️ Claude needs permission • <{thread_link}|Respond in thread>"
+        else:
+            message = "⚠️ Claude needs permission"
+
+        # Post to channel (NOT thread) - triggers sound + unread badge
+        await slack_client.chat_postMessage(
+            channel=channel_id,
+            text=message,
+        )
+        logger.debug(f"Posted permission notification to channel {channel_id}")
+
+    except Exception as e:
+        logger.warning(f"Failed to post permission notification: {e}")
 
 
 @dataclass
@@ -60,6 +93,7 @@ class PermissionManager:
         thread_ts: Optional[str] = None,
         slack_client: Optional[AsyncWebClient] = None,
         timeout: int = None,
+        db: Optional[DatabaseRepository] = None,
     ) -> bool:
         """Request approval via Slack and wait for response.
 
@@ -72,6 +106,7 @@ class PermissionManager:
             thread_ts: Optional thread to post in
             slack_client: Slack client for posting message
             timeout: Timeout in seconds (defaults to config)
+            db: Optional database repository for notification settings
 
         Returns:
             True if approved, False if denied or timed out
@@ -127,6 +162,11 @@ class PermissionManager:
                 )
 
                 approval.message_ts = result.get("ts")
+
+                # Post channel notification (triggers sound + unread badge)
+                await _post_permission_notification(
+                    slack_client, channel_id, thread_ts, db
+                )
 
             # Wait for response with timeout
             approved = await asyncio.wait_for(

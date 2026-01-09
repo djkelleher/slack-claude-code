@@ -46,6 +46,56 @@ async def shutdown(executor: SubprocessExecutor) -> None:
     logger.info("All processes terminated")
 
 
+async def post_channel_notification(
+    client,
+    db: DatabaseRepository,
+    channel_id: str,
+    thread_ts: str | None,
+    notification_type: str,
+) -> None:
+    """
+    Post a brief notification to the channel (not thread) to trigger Slack sounds and unread badges.
+
+    Args:
+        client: Slack WebClient
+        db: Database repository
+        channel_id: Slack channel ID
+        thread_ts: Thread timestamp (for linking)
+        notification_type: "completion" or "permission"
+    """
+    try:
+        settings = await db.get_notification_settings(channel_id)
+
+        if notification_type == "completion" and not settings.notify_on_completion:
+            return
+        elif notification_type == "permission" and not settings.notify_on_permission:
+            return
+
+        # Build thread link if we have a thread_ts
+        if thread_ts:
+            thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
+            if notification_type == "completion":
+                message = f"✅ Claude finished • <{thread_link}|View thread>"
+            else:
+                message = f"⚠️ Claude needs permission • <{thread_link}|Respond in thread>"
+        else:
+            if notification_type == "completion":
+                message = "✅ Claude finished"
+            else:
+                message = "⚠️ Claude needs permission"
+
+        # Post to channel (NOT to thread) - this triggers sound + unread badge
+        await client.chat_postMessage(
+            channel=channel_id,
+            text=message,
+        )
+        logger.debug(f"Posted {notification_type} notification to channel {channel_id}")
+
+    except Exception as e:
+        # Don't fail the main operation if notification fails
+        logger.warning(f"Failed to post channel notification: {e}")
+
+
 async def main():
     """Main application entry point."""
     # Validate configuration
@@ -413,6 +463,11 @@ async def main():
                         is_error=not result.success,
                     ),
                 )
+
+            # Post channel notification (triggers sound + unread badge)
+            await post_channel_notification(
+                client, deps.db, channel_id, thread_ts, "completion"
+            )
 
         except Exception as e:
             logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")

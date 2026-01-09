@@ -685,3 +685,64 @@ class DatabaseRepository:
             )
             await db.commit()
             return cursor.rowcount
+
+    # -------------------------------------------------------------------------
+    # Notification Settings
+    # -------------------------------------------------------------------------
+
+    async def get_notification_settings(
+        self, channel_id: str
+    ) -> "NotificationSettings":
+        """
+        Get notification settings for a channel.
+
+        Returns default settings (all enabled) if no record exists.
+        """
+        from .models import NotificationSettings
+
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "SELECT * FROM notification_settings WHERE channel_id = ?",
+                (channel_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                return NotificationSettings.from_row(row)
+            # Return defaults (all notifications enabled)
+            return NotificationSettings.default(channel_id)
+
+    async def update_notification_settings(
+        self,
+        channel_id: str,
+        notify_on_completion: bool,
+        notify_on_permission: bool,
+    ) -> "NotificationSettings":
+        """
+        Update notification settings for a channel (upsert).
+
+        Creates the record if it doesn't exist.
+        """
+        from .models import NotificationSettings
+
+        async with self._transact() as db:
+            # Try to update first
+            cursor = await db.execute(
+                """UPDATE notification_settings
+                   SET notify_on_completion = ?,
+                       notify_on_permission = ?,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE channel_id = ?""",
+                (notify_on_completion, notify_on_permission, channel_id),
+            )
+
+            if cursor.rowcount == 0:
+                # Insert new record
+                await db.execute(
+                    """INSERT INTO notification_settings
+                       (channel_id, notify_on_completion, notify_on_permission)
+                       VALUES (?, ?, ?)""",
+                    (channel_id, notify_on_completion, notify_on_permission),
+                )
+
+        # Return the updated settings
+        return await self.get_notification_settings(channel_id)

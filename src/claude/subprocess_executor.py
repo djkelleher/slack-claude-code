@@ -264,6 +264,20 @@ class SubprocessExecutor:
 
             success = process.returncode == 0 and not error_msg
 
+            # Check if session not found - retry without resume
+            if not success and resume_session_id and "No conversation found with session ID" in (error_msg or ""):
+                logger.info(f"Session {resume_session_id} not found, retrying without resume")
+                return await self.execute(
+                    prompt=prompt,
+                    working_directory=working_directory,
+                    session_id=session_id,
+                    resume_session_id=None,  # Don't resume
+                    execution_id=execution_id,
+                    on_chunk=on_chunk,
+                    permission_mode=permission_mode,
+                    db_session_id=db_session_id,
+                )
+
             return ExecutionResult(
                 success=success,
                 output=accumulated_output,

@@ -211,3 +211,31 @@ class GitCheckpoint:
             created_at=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
             is_auto=bool(row[8]),
         )
+
+
+@dataclass
+class NotificationSettings:
+    """Per-channel notification settings."""
+
+    id: Optional[int] = None
+    channel_id: str = ""
+    notify_on_completion: bool = True  # Default enabled
+    notify_on_permission: bool = True  # Default enabled
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "NotificationSettings":
+        return cls(
+            id=row[0],
+            channel_id=row[1],
+            notify_on_completion=bool(row[2]),
+            notify_on_permission=bool(row[3]),
+            created_at=datetime.fromisoformat(row[4]) if row[4] else datetime.now(),
+            updated_at=datetime.fromisoformat(row[5]) if row[5] else datetime.now(),
+        )
+
+    @classmethod
+    def default(cls, channel_id: str) -> "NotificationSettings":
+        """Return default settings for a channel (all notifications enabled)."""
+        return cls(channel_id=channel_id)

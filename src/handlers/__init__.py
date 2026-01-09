@@ -12,6 +12,7 @@ from .budget import register_budget_commands
 from .claude_cli import register_claude_cli_commands
 from .git import register_git_commands
 from .mode import register_mode_command
+from .notifications import register_notifications_command
 from .parallel import register_parallel_commands
 from .pty import register_pty_commands
 from .queue import register_queue_commands
@@ -49,6 +50,7 @@ def register_commands(
     register_budget_commands(app, deps)
     register_pty_commands(app, deps)
     register_mode_command(app, deps)
+    register_notifications_command(app, deps)
     register_session_commands(app, deps)
     register_git_commands(app, deps)
 
