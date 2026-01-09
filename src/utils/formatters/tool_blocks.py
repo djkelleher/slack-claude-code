@@ -21,7 +21,7 @@ TOOL_ICONS = {
     "Glob": ":mag:",
     "Grep": ":mag_right:",
     "WebFetch": ":globe_with_meridians:",
-    "WebSearch": ":magnifying_glass_tilted_left:",
+    "WebSearch": ":mag:",
     "LSP": ":electric_plug:",
     "TodoWrite": ":ballot_box_with_check:",
     "Task": ":robot_face:",
