@@ -189,20 +189,22 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 permission_mode=session.permission_mode,
             )
 
-            current_model = "sonnet-4.5"  # default
+            current_model = "opus-4.5"  # default to opus
             if result.output:
-                # Parse current model from output
-                if "opus" in result.output.lower():
+                output_lower = result.output.lower()
+                # Parse current model from output - check for specific patterns
+                # Look for "current model" or similar indicators
+                if "opus-4" in output_lower or "claude-opus-4" in output_lower:
                     current_model = "opus-4.5"
-                elif "haiku" in result.output.lower():
+                elif "haiku-4" in output_lower or "claude-haiku-4" in output_lower:
                     current_model = "haiku-4"
-                elif "sonnet" in result.output.lower():
+                elif "sonnet-4" in output_lower or "claude-sonnet-4" in output_lower:
                     current_model = "sonnet-4.5"
 
-            # Available models
+            # Available models (opus first as default)
             models = [
-                {"name": "sonnet-4.5", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
                 {"name": "opus-4.5", "display": "Claude Opus 4.5", "desc": "Most capable model"},
+                {"name": "sonnet-4.5", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
                 {"name": "haiku-4", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
             ]
 
