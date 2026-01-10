@@ -95,6 +95,7 @@ poetry install
    | `/budget` | Configure usage thresholds |
    | `/pty` | Show PTY session status |
    | `/clear` | Reset Claude conversation and cancel processes |
+   | `/esc` | Interrupt current operation (like pressing Escape) |
    | `/add-dir` | Add directory to Claude context |
    | `/compact` | Compact conversation |
    | `/cost` | Show session cost |

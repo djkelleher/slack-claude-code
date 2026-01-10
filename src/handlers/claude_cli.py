@@ -121,6 +121,39 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 text=f"Cancelled {cancelled_count} active process(es) and cleared Claude session.",
             )
 
+    @app.command("/esc")
+    @slack_command()
+    async def handle_esc(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /esc command - interrupt current operation (like pressing Escape)."""
+        import signal
+
+        # Cancel all active executor processes for this channel
+        cancelled_count = 0
+        active_processes = getattr(deps.executor, '_active_processes', None)
+        if active_processes is not None:
+            # Cancel processes where execution_id contains channel_id
+            for exec_id, process in list(active_processes.items()):
+                if ctx.channel_id in exec_id:
+                    # Send SIGINT first (like Ctrl+C / Escape)
+                    try:
+                        process.send_signal(signal.SIGINT)
+                    except (ProcessLookupError, OSError):
+                        # Process already terminated
+                        pass
+                    cancelled_count += 1
+                    ctx.logger.info(f"Sent interrupt to process: {exec_id}")
+
+        if cancelled_count > 0:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f":stop_sign: Interrupted {cancelled_count} running operation(s).",
+            )
+        else:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=":information_source: No active operations to interrupt.",
+            )
+
     @app.command("/add-dir")
     @slack_command(require_text=True, usage_hint="Usage: /add-dir <path>")
     async def handle_add_dir(ctx: CommandContext, deps: HandlerDependencies = deps):
