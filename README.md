@@ -619,7 +619,7 @@ SLACK_SIGNING_SECRET=...
 
 # Paths
 DATABASE_PATH=./data/slack_claude.db
-DEFAULT_WORKING_DIR=/home/dan/projects
+DEFAULT_WORKING_DIR=/path/to/projects  # Defaults to directory where server is started
 
 # PTY Sessions
 SESSION_IDLE_TIMEOUT=1800  # 30 minutes

@@ -75,7 +75,7 @@ class Config:
     DATABASE_PATH: str = os.getenv(
         "DATABASE_PATH", str(PACKAGE_ROOT / "data" / "slack_claude.db")
     )
-    DEFAULT_WORKING_DIR: str = os.getenv("DEFAULT_WORKING_DIR", str(Path.home()))
+    DEFAULT_WORKING_DIR: str = os.getenv("DEFAULT_WORKING_DIR", os.getcwd())
 
     # Claude Code configuration
     CLAUDE_PERMISSION_MODE: str = os.getenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
