@@ -171,9 +171,81 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_model(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /model [name] command - show or change AI model."""
         if ctx.text:
+            # Direct model selection via command argument
             await _send_claude_command(ctx, f"/model {ctx.text}", deps)
         else:
-            await _send_claude_command(ctx, "/model", deps)
+            # Show current model and allow selection via buttons
+            session = await deps.db.get_or_create_session(
+                ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
+            )
+
+            # First get current model
+            result = await deps.executor.execute(
+                prompt="/model",
+                working_directory=session.working_directory,
+                session_id=ctx.channel_id,
+                resume_session_id=session.claude_session_id,
+                execution_id=str(uuid.uuid4()),
+                permission_mode=session.permission_mode,
+            )
+
+            current_model = "sonnet-4.5"  # default
+            if result.output:
+                # Parse current model from output
+                if "opus" in result.output.lower():
+                    current_model = "opus-4.5"
+                elif "haiku" in result.output.lower():
+                    current_model = "haiku-4"
+                elif "sonnet" in result.output.lower():
+                    current_model = "sonnet-4.5"
+
+            # Available models
+            models = [
+                {"name": "sonnet-4.5", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
+                {"name": "opus-4.5", "display": "Claude Opus 4.5", "desc": "Most capable model"},
+                {"name": "haiku-4", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
+            ]
+
+            # Build button blocks
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Current Model:* {current_model}\n\nSelect a model:",
+                    },
+                },
+                {"type": "divider"},
+            ]
+
+            for model in models:
+                is_current = model["name"] == current_model
+                button_text = f"{'✓ ' if is_current else ''}{model['display']}"
+
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*{model['display']}*\n{model['desc']}",
+                    },
+                    "accessory": {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": button_text,
+                            "emoji": True,
+                        },
+                        "action_id": f"select_model_{model['name']}",
+                        "value": f"{ctx.channel_id}|{ctx.thread_ts or ''}",
+                        "style": "primary" if is_current else None,
+                    },
+                })
+
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Current model: {current_model}",
+                blocks=blocks,
+            )
 
     @app.command("/resume")
     @slack_command()
