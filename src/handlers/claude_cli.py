@@ -222,23 +222,29 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 is_current = model["name"] == current_model
                 button_text = f"{'✓ ' if is_current else ''}{model['display']}"
 
+                # Build button accessory
+                button_accessory = {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": button_text,
+                        "emoji": True,
+                    },
+                    "action_id": f"select_model_{model['name']}",
+                    "value": f"{ctx.channel_id}|{ctx.thread_ts or ''}",
+                }
+
+                # Only add style if it's the current model
+                if is_current:
+                    button_accessory["style"] = "primary"
+
                 blocks.append({
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
                         "text": f"*{model['display']}*\n{model['desc']}",
                     },
-                    "accessory": {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": button_text,
-                            "emoji": True,
-                        },
-                        "action_id": f"select_model_{model['name']}",
-                        "value": f"{ctx.channel_id}|{ctx.thread_ts or ''}",
-                        "style": "primary" if is_current else None,
-                    },
+                    "accessory": button_accessory,
                 })
 
             await ctx.client.chat_postMessage(
