@@ -104,6 +104,7 @@ poetry install
    | `/claude-config` | Show Claude Code config |
    | `/context` | Visualize context usage |
    | `/model` | Show or change AI model |
+   | `/mode` | View or set permission mode (bypass, accept, plan, ask, default, delegate) |
    | `/resume` | Resume a previous session |
    | `/init` | Initialize project with CLAUDE.md |
    | `/memory` | Edit CLAUDE.md memory files |
@@ -470,6 +471,7 @@ Access Claude Code CLI commands directly from Slack:
 /claude-config      # Show config
 /context            # Visualize context usage
 /model              # Show or change AI model
+/mode               # View or set permission mode
 /resume             # Resume a previous session
 /init               # Initialize project with CLAUDE.md
 /memory             # Edit CLAUDE.md memory files
