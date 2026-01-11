@@ -400,10 +400,9 @@ async def main():
                     deps.db,
                 )
 
-                # Wait for user to answer (with timeout)
+                # Wait for user to answer (no timeout)
                 answers = await QuestionManager.wait_for_answer(
                     pending_question.question_id,
-                    timeout=config.timeouts.execution.question,
                 )
 
                 if answers:

@@ -290,31 +290,22 @@ class QuestionManager:
     async def wait_for_answer(
         cls,
         question_id: str,
-        timeout: int = None,
     ) -> Optional[dict[int, list[str]]]:
         """Wait for user to answer the question.
 
         Args:
             question_id: The question ID
-            timeout: Timeout in seconds
 
         Returns:
-            Dict of answers (question_index -> selected labels), or None on timeout
+            Dict of answers (question_index -> selected labels), or None if cancelled
         """
-        if timeout is None:
-            timeout = config.timeouts.execution.question
-
         pending = cls._pending.get(question_id)
         if not pending:
             return None
 
         try:
-            answers = await asyncio.wait_for(pending.future, timeout=timeout)
+            answers = await pending.future
             return answers
-
-        except asyncio.TimeoutError:
-            logger.info(f"Question {question_id} timed out after {timeout}s")
-            return None
 
         except asyncio.CancelledError:
             logger.info(f"Question {question_id} was cancelled")

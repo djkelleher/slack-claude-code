@@ -27,7 +27,6 @@ class ExecutionTimeouts:
 
     command: int = 300  # max command runtime (5 min)
     permission: int = 300  # permission request timeout
-    question: int = 86400  # question timeout (24 hours - effectively no timeout)
     usage_check: int = 30  # usage CLI command timeout
     plan_approval: int = 600  # plan approval timeout (10 min)
 
@@ -123,7 +122,6 @@ class Config:
         execution=ExecutionTimeouts(
             command=int(os.getenv("COMMAND_TIMEOUT", "300")),
             permission=int(os.getenv("PERMISSION_TIMEOUT", "300")),
-            question=int(os.getenv("QUESTION_TIMEOUT", "86400")),
             usage_check=int(os.getenv("USAGE_CHECK_TIMEOUT", "30")),
             plan_approval=int(os.getenv("PLAN_APPROVAL_TIMEOUT", "600")),
         ),
