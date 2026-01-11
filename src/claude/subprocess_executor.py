@@ -83,6 +83,9 @@ class SubprocessExecutor:
         Returns:
             ExecutionResult with the command output
         """
+        # Create log prefix for this session
+        log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
+
         # Build command
         cmd = [
             "claude",
@@ -94,28 +97,28 @@ class SubprocessExecutor:
         # Add model flag if specified
         if model:
             cmd.extend(["--model", model])
-            logger.info(f"Using --model {model}")
+            logger.info(f"{log_prefix}Using --model {model}")
 
         # Determine permission mode: explicit > config default
         mode = permission_mode or config.CLAUDE_PERMISSION_MODE
         if mode in config.VALID_PERMISSION_MODES:
             cmd.extend(["--permission-mode", mode])
-            logger.info(f"Using --permission-mode {mode}")
+            logger.info(f"{log_prefix}Using --permission-mode {mode}")
         else:
-            logger.warning(f"Invalid permission mode: {mode}, using bypassPermissions")
+            logger.warning(f"{log_prefix}Invalid permission mode: {mode}, using bypassPermissions")
             cmd.extend(["--permission-mode", "bypassPermissions"])
 
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):
             cmd.extend(["--resume", resume_session_id])
-            logger.info(f"Resuming session {resume_session_id}")
+            logger.info(f"{log_prefix}Resuming session {resume_session_id}")
         elif resume_session_id:
-            logger.warning(f"Invalid session ID format (not UUID): {resume_session_id}")
+            logger.warning(f"{log_prefix}Invalid session ID format (not UUID): {resume_session_id}")
 
         # Add the prompt
         cmd.append(prompt)
 
-        logger.info(f"Executing: {' '.join(cmd[:5])}... (prompt: {prompt[:50]}...)")
+        logger.info(f"{log_prefix}Executing: {' '.join(cmd[:5])}... (prompt: {prompt[:50]}...)")
 
         # Start subprocess with increased line limit (default is 64KB)
         # Large files can produce JSON lines exceeding this limit
@@ -129,7 +132,7 @@ class SubprocessExecutor:
                 limit=limit,
             )
         except Exception as e:
-            logger.error(f"Failed to start Claude process: {e}")
+            logger.error(f"{log_prefix}Failed to start Claude process: {e}")
             return ExecutionResult(
                 success=False,
                 output="",
@@ -157,7 +160,7 @@ class SubprocessExecutor:
                         timeout=self.timeout
                     )
                 except asyncio.TimeoutError:
-                    logger.warning("Timeout waiting for Claude output")
+                    logger.warning(f"{log_prefix}Timeout waiting for Claude output")
                     process.terminate()
                     await process.wait()  # Prevent zombie process
                     return ExecutionResult(
@@ -185,7 +188,7 @@ class SubprocessExecutor:
                     # Log text content
                     if msg.content:
                         preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
-                        logger.debug(f"Claude: {preview}")
+                        logger.debug(f"{log_prefix}Claude: {preview}")
                     # Log tool use and track file context
                     if msg.raw:
                         message = msg.raw.get("message", {})
@@ -196,28 +199,28 @@ class SubprocessExecutor:
                                 # Log tool use summary and track file operations
                                 if tool_name == "Read":
                                     file_path = tool_input.get("file_path", "")
-                                    logger.info(f"Tool: Read {file_path}")
+                                    logger.info(f"{log_prefix}Tool: Read {file_path}")
                                     self._track_file_context(db_session_id, file_path, "read")
                                 elif tool_name == "Edit":
                                     file_path = tool_input.get("file_path", "")
-                                    logger.info(f"Tool: Edit {file_path}")
+                                    logger.info(f"{log_prefix}Tool: Edit {file_path}")
                                     self._track_file_context(db_session_id, file_path, "modified")
                                 elif tool_name == "Write":
                                     file_path = tool_input.get("file_path", "")
-                                    logger.info(f"Tool: Write {file_path}")
+                                    logger.info(f"{log_prefix}Tool: Write {file_path}")
                                     self._track_file_context(db_session_id, file_path, "created")
                                 elif tool_name == "Bash":
                                     command = tool_input.get("command", "")[:50]
-                                    logger.info(f"Tool: Bash '{command}...'")
+                                    logger.info(f"{log_prefix}Tool: Bash '{command}...'")
                                 elif tool_name == "AskUserQuestion":
                                     questions = tool_input.get("questions", [])
                                     if questions:
                                         first_q = questions[0].get("question", "?")[:80]
-                                        logger.info(f"Tool: AskUserQuestion - '{first_q}...' ({len(questions)} question(s))")
+                                        logger.info(f"{log_prefix}Tool: AskUserQuestion - '{first_q}...' ({len(questions)} question(s))")
                                     else:
-                                        logger.info(f"Tool: AskUserQuestion")
+                                        logger.info(f"{log_prefix}Tool: AskUserQuestion")
                                 else:
-                                    logger.info(f"Tool: {tool_name}")
+                                    logger.info(f"{log_prefix}Tool: {tool_name}")
                 elif msg.type == "user" and msg.raw:
                     # Log tool results summary
                     message = msg.raw.get("message", {})
@@ -226,16 +229,16 @@ class SubprocessExecutor:
                             tool_use_id = block.get("tool_use_id", "")[:8]
                             is_error = block.get("is_error", False)
                             status = "ERROR" if is_error else "OK"
-                            logger.info(f"Tool result [{tool_use_id}]: {status}")
+                            logger.info(f"{log_prefix}Tool result [{tool_use_id}]: {status}")
                 elif msg.type == "init":
-                    logger.info(f"Session initialized: {msg.session_id}")
+                    logger.info(f"{log_prefix}Session initialized: {msg.session_id}")
                 elif msg.type == "error":
-                    logger.error(f"Error: {msg.content}")
+                    logger.error(f"{log_prefix}Error: {msg.content}")
                 elif msg.type == "result":
                     if msg.cost_usd:
-                        logger.info(f"Claude Finished - completed in {msg.duration_ms}ms, cost ${msg.cost_usd:.4f}")
+                        logger.info(f"{log_prefix}Claude Finished - completed in {msg.duration_ms}ms, cost ${msg.cost_usd:.4f}")
                     else:
-                        logger.info(f"Claude Finished - completed in {msg.duration_ms}ms")
+                        logger.info(f"{log_prefix}Claude Finished - completed in {msg.duration_ms}ms")
 
                 # Track session ID
                 if msg.session_id:
@@ -274,7 +277,7 @@ class SubprocessExecutor:
             if stderr:
                 stderr_str = stderr.decode('utf-8', errors='replace').strip()
                 if stderr_str:
-                    logger.warning(f"Claude stderr: {stderr_str}")
+                    logger.warning(f"{log_prefix}Claude stderr: {stderr_str}")
                     # Only treat stderr as error if process failed
                     if process.returncode != 0 and not error_msg:
                         error_msg = stderr_str
@@ -283,7 +286,7 @@ class SubprocessExecutor:
 
             # Check if session not found - retry without resume
             if not success and resume_session_id and "No conversation found with session ID" in (error_msg or ""):
-                logger.info(f"Session {resume_session_id} not found, retrying without resume")
+                logger.info(f"{log_prefix}Session {resume_session_id} not found, retrying without resume")
                 return await self.execute(
                     prompt=prompt,
                     working_directory=working_directory,
@@ -317,7 +320,7 @@ class SubprocessExecutor:
                 was_cancelled=True,
             )
         except Exception as e:
-            logger.error(f"Error during execution: {e}")
+            logger.error(f"{log_prefix}Error during execution: {e}")
             process.terminate()
             await process.wait()  # Prevent zombie process
             return ExecutionResult(
