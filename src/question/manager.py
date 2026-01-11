@@ -302,7 +302,7 @@ class QuestionManager:
             Dict of answers (question_index -> selected labels), or None on timeout
         """
         if timeout is None:
-            timeout = config.timeouts.execution.permission  # Reuse permission timeout
+            timeout = config.timeouts.execution.question
 
         pending = cls._pending.get(question_id)
         if not pending:

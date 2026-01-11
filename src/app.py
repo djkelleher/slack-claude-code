@@ -403,7 +403,7 @@ async def main():
                 # Wait for user to answer (with timeout)
                 answers = await QuestionManager.wait_for_answer(
                     pending_question.question_id,
-                    timeout=config.timeouts.execution.permission,
+                    timeout=config.timeouts.execution.question,
                 )
 
                 if answers:
