@@ -18,17 +18,36 @@ class Session:
 
     @classmethod
     def from_row(cls, row: tuple) -> "Session":
-        return cls(
-            id=row[0],
-            channel_id=row[1],
-            thread_ts=row[2],
-            working_directory=row[3],
-            claude_session_id=row[4],
-            permission_mode=row[5],
-            model=row[6] if len(row) > 8 else None,  # Handle old schema
-            created_at=datetime.fromisoformat(row[7 if len(row) > 8 else 6]) if row[7 if len(row) > 8 else 6] else datetime.now(),
-            last_active=datetime.fromisoformat(row[8 if len(row) > 8 else 7]) if row[8 if len(row) > 8 else 7] else datetime.now(),
-        )
+        # Handle both old (8 columns) and new (9 columns with model) schemas
+        # When model column is added via ALTER TABLE ADD COLUMN, it's appended at the END
+        # So column order for migrated DBs is: id, channel_id, thread_ts, working_directory,
+        # claude_session_id, permission_mode, created_at, last_active, model (at position 8)
+        if len(row) > 8:
+            # New schema with model column at position 8 (from migration)
+            return cls(
+                id=row[0],
+                channel_id=row[1],
+                thread_ts=row[2],
+                working_directory=row[3],
+                claude_session_id=row[4],
+                permission_mode=row[5],
+                model=row[8],  # model is at the END due to ALTER TABLE ADD COLUMN
+                created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
+                last_active=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
+            )
+        else:
+            # Old schema without model column
+            return cls(
+                id=row[0],
+                channel_id=row[1],
+                thread_ts=row[2],
+                working_directory=row[3],
+                claude_session_id=row[4],
+                permission_mode=row[5],
+                model=None,
+                created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
+                last_active=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
+            )
 
     def is_thread_session(self) -> bool:
         """Check if this is a thread-scoped session."""

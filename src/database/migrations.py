@@ -262,6 +262,15 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT NULL")
         await db.commit()
 
+    # Clean up invalid model values (timestamps that were incorrectly stored as model names)
+    # Valid models are: opus, sonnet, haiku, or NULL
+    await db.execute(
+        """UPDATE sessions SET model = NULL
+           WHERE model IS NOT NULL
+           AND model NOT IN ('opus', 'sonnet', 'haiku')"""
+    )
+    await db.commit()
+
 
 async def reset_database(db_path: str) -> None:
     """Drop all tables and reinitialize (for development)."""
