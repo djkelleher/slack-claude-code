@@ -373,8 +373,8 @@ async def main():
             if result.session_id:
                 await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
-            # Handle AskUserQuestion - if Claude asked a question, wait for user response
-            if pending_question and result.session_id:
+            # Handle AskUserQuestion - loop to handle multiple questions
+            while pending_question and result.session_id:
                 logger.info(f"Claude asked a question, posting to Slack and waiting for response")
 
                 # Update the main message to show Claude is waiting
@@ -410,9 +410,12 @@ async def main():
                     answer_text = QuestionManager.format_answer_for_claude(pending_question)
                     logger.info(f"User answered question, sending to Claude: {answer_text[:100]}")
 
+                    # Reset pending_question before continuing - on_chunk may set a new one
+                    pending_question = None
+
                     # Continue the conversation with the user's answer
                     # This will resume the session
-                    continuation_result = await executor.execute(
+                    result = await executor.execute(
                         prompt=answer_text,
                         working_directory=session.working_directory,
                         session_id=channel_id,
@@ -424,15 +427,16 @@ async def main():
                         model=session.model,
                     )
 
-                    # Use the continuation result instead
-                    result = continuation_result
+                    # Update session with new Claude session ID
                     if result.session_id:
                         await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
+                    # Loop continues - will check if pending_question was set by on_chunk
                 else:
-                    # Timeout or cancelled - update message
+                    # Timeout or cancelled - update message and break
                     logger.info(f"Question timed out or cancelled")
                     result.output = streaming_state.accumulated_output + "\n\n_Question timed out - no response received._"
                     result.success = False
+                    break
 
             # Update command history
             if result.success:
