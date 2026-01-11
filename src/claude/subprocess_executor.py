@@ -232,7 +232,10 @@ class SubprocessExecutor:
                 elif msg.type == "error":
                     logger.error(f"Error: {msg.content}")
                 elif msg.type == "result":
-                    logger.info(f"Completed in {msg.duration_ms}ms, cost ${msg.cost_usd:.4f}" if msg.cost_usd else f"Completed in {msg.duration_ms}ms")
+                    if msg.cost_usd:
+                        logger.info(f"Claude Finished - completed in {msg.duration_ms}ms, cost ${msg.cost_usd:.4f}")
+                    else:
+                        logger.info(f"Claude Finished - completed in {msg.duration_ms}ms")
 
                 # Track session ID
                 if msg.session_id:
