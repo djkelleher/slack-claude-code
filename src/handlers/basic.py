@@ -185,6 +185,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 on_chunk=on_chunk,
                 permission_mode=session.permission_mode,  # Per-session mode
                 db_session_id=session.id,  # Smart context tracking
+                model=session.model,  # Per-session model
             )
 
             # Update session with Claude session ID for resume

@@ -65,6 +65,7 @@ class SubprocessExecutor:
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]] = None,
         permission_mode: Optional[str] = None,
         db_session_id: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> ExecutionResult:
         """Execute a prompt via Claude Code subprocess.
 
@@ -77,6 +78,7 @@ class SubprocessExecutor:
             on_chunk: Async callback for each streamed message
             permission_mode: Permission mode to use (overrides config default)
             db_session_id: Database session ID for smart context tracking (optional)
+            model: Model to use (e.g., "opus", "sonnet", "haiku")
 
         Returns:
             ExecutionResult with the command output
@@ -88,6 +90,11 @@ class SubprocessExecutor:
             "--verbose",  # Required for stream-json
             "--output-format", "stream-json",
         ]
+
+        # Add model flag if specified
+        if model:
+            cmd.extend(["--model", model])
+            logger.info(f"Using --model {model}")
 
         # Determine permission mode: explicit > config default
         mode = permission_mode or config.CLAUDE_PERMISSION_MODE

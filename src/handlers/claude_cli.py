@@ -59,6 +59,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 resume_session_id=session.claude_session_id,
                 execution_id=str(uuid.uuid4()),
                 permission_mode=session.permission_mode,
+                model=session.model,
             )
 
             # Update session if needed
@@ -203,42 +204,50 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @slack_command()
     async def handle_model(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /model [name] command - show or change AI model."""
+        # Get session to check/update model
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
+        )
+
         if ctx.text:
             # Direct model selection via command argument
-            await _send_claude_command(ctx, f"/model {ctx.text}", deps)
+            model_name = ctx.text.strip().lower()
+            # Normalize model names
+            model_map = {
+                "opus": "opus",
+                "opus-4": "opus",
+                "opus-4.5": "opus",
+                "sonnet": "sonnet",
+                "sonnet-4": "sonnet",
+                "sonnet-4.5": "sonnet",
+                "haiku": "haiku",
+                "haiku-4": "haiku",
+            }
+            normalized = model_map.get(model_name, model_name)
+            await deps.db.update_session_model(ctx.channel_id, ctx.thread_ts, normalized)
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f":heavy_check_mark: Model changed to *{normalized}*",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f":heavy_check_mark: Model changed to *{normalized}*",
+                        },
+                    }
+                ],
+            )
         else:
             # Show current model and allow selection via buttons
-            session = await deps.db.get_or_create_session(
-                ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
-            )
-
-            # First get current model
-            result = await deps.executor.execute(
-                prompt="/model",
-                working_directory=session.working_directory,
-                session_id=ctx.channel_id,
-                resume_session_id=session.claude_session_id,
-                execution_id=str(uuid.uuid4()),
-                permission_mode=session.permission_mode,
-            )
-
-            current_model = "opus-4.5"  # default to opus
-            if result.output:
-                output_lower = result.output.lower()
-                # Parse current model from output - check for specific patterns
-                # Look for "current model" or similar indicators
-                if "opus-4" in output_lower or "claude-opus-4" in output_lower:
-                    current_model = "opus-4.5"
-                elif "haiku-4" in output_lower or "claude-haiku-4" in output_lower:
-                    current_model = "haiku-4"
-                elif "sonnet-4" in output_lower or "claude-sonnet-4" in output_lower:
-                    current_model = "sonnet-4.5"
+            # Get current model from session (default to opus)
+            current_model = session.model or "opus"
 
             # Available models (opus first as default)
             models = [
-                {"name": "opus-4.5", "display": "Claude Opus 4.5", "desc": "Most capable model"},
-                {"name": "sonnet-4.5", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
-                {"name": "haiku-4", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
+                {"name": "opus", "display": "Claude Opus 4.5", "desc": "Most capable model"},
+                {"name": "sonnet", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
+                {"name": "haiku", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
             ]
 
             # Build button blocks

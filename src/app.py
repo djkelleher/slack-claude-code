@@ -366,6 +366,7 @@ async def main():
                 on_chunk=on_chunk,
                 permission_mode=session.permission_mode,  # Use session's mode (falls back to config)
                 db_session_id=session.id,  # Pass for smart context tracking
+                model=session.model,  # Use session's selected model
             )
 
             # Update session with Claude session ID for resume
@@ -421,6 +422,7 @@ async def main():
                         on_chunk=on_chunk,  # Reuse the same chunk handler
                         permission_mode=session.permission_mode,
                         db_session_id=session.id,
+                        model=session.model,
                     )
 
                     # Use the continuation result instead

@@ -145,6 +145,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 on_chunk=on_chunk,
                 permission_mode=session.permission_mode,
                 db_session_id=session.id,  # Smart context tracking
+                model=session.model,  # Per-session model
             )
 
             if result.session_id:
@@ -875,7 +876,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle model selection button click."""
         await ack()
 
-        # Extract model name from action_id (select_model_sonnet-4.5 -> sonnet-4.5)
+        # Extract model name from action_id (select_model_opus -> opus)
         action_id = action["action_id"]
         model_name = action_id.replace("select_model_", "")
 
@@ -884,56 +885,40 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         channel_id = value_parts[0]
         thread_ts = value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
 
-        # Get session
-        session = await deps.db.get_or_create_session(
-            channel_id, thread_ts=thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
-        )
-
-        # Send model change command
-        response = await client.chat_postMessage(
-            channel=channel_id,
-            thread_ts=thread_ts,
-            text=f"Switching to model: {model_name}",
-            blocks=SlackFormatter.processing_message(f"Switching to {model_name}"),
-        )
-        message_ts = response["ts"]
+        # Model display names
+        model_display = {
+            "opus": "Claude Opus 4.5",
+            "sonnet": "Claude Sonnet 4.5",
+            "haiku": "Claude Haiku 4",
+        }
+        display_name = model_display.get(model_name, model_name)
 
         try:
-            result = await deps.executor.execute(
-                prompt=f"/model {model_name}",
-                working_directory=session.working_directory,
-                session_id=channel_id,
-                resume_session_id=session.claude_session_id,
-                execution_id=str(uuid.uuid4()),
-                permission_mode=session.permission_mode,
-            )
+            # Update session with the selected model
+            await deps.db.update_session_model(channel_id, thread_ts, model_name)
 
-            # Update session if needed
-            if result.session_id:
-                await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
-
-            output = result.output or result.error or "Model changed"
-
-            await client.chat_update(
+            # Post confirmation message
+            await client.chat_postMessage(
                 channel=channel_id,
-                ts=message_ts,
-                text=f"Switched to {model_name}",
+                thread_ts=thread_ts,
+                text=f"Model changed to {display_name}",
                 blocks=[
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":white_check_mark: Model changed to *{model_name}*",
+                            "text": f":heavy_check_mark: Model changed to *{display_name}*",
                         },
                     }
                 ],
             )
+            logger.info(f"Model changed to {model_name} for channel {channel_id}")
 
         except Exception as e:
             logger.error(f"Model change failed: {e}")
-            await client.chat_update(
+            await client.chat_postMessage(
                 channel=channel_id,
-                ts=message_ts,
-                text=f"Error: {str(e)}",
+                thread_ts=thread_ts,
+                text=f"Error changing model: {str(e)}",
                 blocks=SlackFormatter.error_message(str(e)),
             )

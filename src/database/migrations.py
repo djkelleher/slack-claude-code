@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     working_directory TEXT DEFAULT '~',
     claude_session_id TEXT,
     permission_mode TEXT DEFAULT NULL,
+    model TEXT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -245,6 +246,20 @@ async def init_database(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA)
+        await db.commit()
+        # Run migrations for existing databases
+        await _run_migrations(db)
+
+
+async def _run_migrations(db: aiosqlite.Connection) -> None:
+    """Run any necessary migrations for schema updates."""
+    # Check if model column exists in sessions table
+    cursor = await db.execute("PRAGMA table_info(sessions)")
+    columns = await cursor.fetchall()
+    column_names = [col[1] for col in columns]
+
+    if "model" not in column_names:
+        await db.execute("ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT NULL")
         await db.commit()
 
 

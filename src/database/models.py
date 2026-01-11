@@ -12,6 +12,7 @@ class Session:
     working_directory: str = "~"
     claude_session_id: Optional[str] = None  # For --resume flag
     permission_mode: Optional[str] = None  # Per-session permission mode override
+    model: Optional[str] = None  # Model to use (e.g., "opus", "sonnet", "haiku")
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
 
@@ -24,8 +25,9 @@ class Session:
             working_directory=row[3],
             claude_session_id=row[4],
             permission_mode=row[5],
-            created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
-            last_active=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
+            model=row[6] if len(row) > 8 else None,  # Handle old schema
+            created_at=datetime.fromisoformat(row[7 if len(row) > 8 else 6]) if row[7 if len(row) > 8 else 6] else datetime.now(),
+            last_active=datetime.fromisoformat(row[8 if len(row) > 8 else 7]) if row[8 if len(row) > 8 else 7] else datetime.now(),
         )
 
     def is_thread_session(self) -> bool:
