@@ -173,6 +173,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             logger=ctx.logger,
             smart_concat=True,
         )
+        streaming_state.start_heartbeat()
         on_chunk = create_streaming_callback(streaming_state)
 
         try:
@@ -207,8 +208,21 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
             # In plan mode, use detailed output (includes tool use details) if available
             display_output = output
+            plan_file_path = None
             if session.permission_mode == "plan" and result.detailed_output:
                 display_output = result.detailed_output
+
+                # Try to find the plan file that was created
+                import os
+                from pathlib import Path
+
+                plan_dir = Path.home() / ".claude" / "plans"
+                if plan_dir.exists():
+                    # Find the most recently modified .md file
+                    plan_files = list(plan_dir.glob("*.md"))
+                    if plan_files:
+                        plan_file_path = max(plan_files, key=lambda p: p.stat().st_mtime)
+                        ctx.logger.info(f"Found plan file: {plan_file_path}")
 
             if SlackFormatter.should_attach_file(display_output):
                 # Large response - attach as file
@@ -223,7 +237,11 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ctx.client.chat_update(
                     channel=ctx.channel_id,
                     ts=message_ts,
-                    text=display_output[:100] + "..." if len(display_output) > 100 else display_output,
+                    text=(
+                        display_output[:100] + "..."
+                        if len(display_output) > 100
+                        else display_output
+                    ),
                     blocks=blocks,
                 )
                 # Post response content
@@ -271,7 +289,11 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ctx.client.chat_update(
                     channel=ctx.channel_id,
                     ts=message_ts,
-                    text=display_output[:100] + "..." if len(display_output) > 100 else display_output,
+                    text=(
+                        display_output[:100] + "..."
+                        if len(display_output) > 100
+                        else display_output
+                    ),
                     blocks=SlackFormatter.command_response(
                         prompt=prompt,
                         output=display_output,
@@ -281,6 +303,27 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                         is_error=not result.success,
                     ),
                 )
+
+            # Attach plan file if in plan mode and file was found
+            if plan_file_path and plan_file_path.exists():
+                try:
+                    with open(plan_file_path, "r") as f:
+                        plan_content = f.read()
+
+                    await ctx.client.files_upload_v2(
+                        channel=ctx.channel_id,
+                        file=str(plan_file_path),
+                        title=f"📋 Implementation Plan: {plan_file_path.stem}",
+                        initial_comment="*Implementation Plan*",
+                        filename=plan_file_path.name,
+                    )
+                    ctx.logger.info(f"Uploaded plan file to Slack: {plan_file_path}")
+                except Exception as upload_error:
+                    ctx.logger.error(f"Failed to upload plan file: {upload_error}")
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        text=f"⚠️ Could not attach plan file: {str(upload_error)[:100]}",
+                    )
 
         except Exception as e:
             ctx.logger.error(f"Error executing command: {e}")

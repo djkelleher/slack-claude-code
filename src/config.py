@@ -38,6 +38,8 @@ class SlackTimeouts:
     """Timeout configuration for Slack message updates."""
 
     message_update_throttle: float = 2.0  # min seconds between streaming updates
+    heartbeat_interval: float = 15.0  # seconds between heartbeat updates when idle
+    heartbeat_threshold: float = 20.0  # show "still working" after this many idle seconds
 
 
 @dataclass

@@ -44,12 +44,49 @@ class StreamingMessageState:
     track_tools: bool = False
     accumulated_output: str = ""
     last_update_time: float = field(default=0.0)
+    last_activity_time: float = field(default=0.0)
     tool_activities: dict = field(default_factory=dict)
     _last_chunk_was_newline: bool = field(default=False)
+    _heartbeat_task: asyncio.Task = field(default=None, repr=False)
+    _is_idle: bool = field(default=False)
 
     def get_tool_list(self) -> list["ToolActivity"]:
         """Get list of tracked tool activities."""
         return list(self.tool_activities.values())
+
+    def start_heartbeat(self) -> None:
+        """Start the heartbeat task to show progress during idle periods."""
+        if self._heartbeat_task is None:
+            loop = asyncio.get_running_loop()
+            self.last_activity_time = loop.time()
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+    def stop_heartbeat(self) -> None:
+        """Stop the heartbeat task."""
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+
+    async def _heartbeat_loop(self) -> None:
+        """Background task that updates message during idle periods."""
+        try:
+            while True:
+                await asyncio.sleep(config.timeouts.slack.heartbeat_interval)
+
+                loop = asyncio.get_running_loop()
+                current_time = loop.time()
+                idle_time = current_time - self.last_activity_time
+
+                # If we've been idle for a while, show "still working" indicator
+                if idle_time >= config.timeouts.slack.heartbeat_threshold:
+                    if not self._is_idle:
+                        self._is_idle = True
+                        await self._send_update(show_idle=True)
+                        self.logger.debug(
+                            f"Showing idle indicator after {idle_time:.1f}s of inactivity"
+                        )
+        except asyncio.CancelledError:
+            pass
 
     async def append_and_update(
         self,
@@ -65,6 +102,14 @@ class StreamingMessageState:
         tools : list[ToolActivity], optional
             Tool activities to track.
         """
+        # Record activity time and reset idle state
+        loop = asyncio.get_running_loop()
+        current_time = loop.time()
+        if content or tools:
+            self.last_activity_time = current_time
+            if self._is_idle:
+                self._is_idle = False
+
         # Track tool activities
         if self.track_tools and tools:
             for tool in tools:
@@ -90,13 +135,18 @@ class StreamingMessageState:
             self.accumulated_output += content
 
         # Rate limit updates to avoid Slack API limits
-        current_time = asyncio.get_running_loop().time()
         if current_time - self.last_update_time > config.timeouts.slack.message_update_throttle:
             self.last_update_time = current_time
             await self._send_update()
 
-    async def _send_update(self) -> None:
-        """Send throttled update to Slack."""
+    async def _send_update(self, show_idle: bool = False) -> None:
+        """Send throttled update to Slack.
+
+        Parameters
+        ----------
+        show_idle : bool
+            If True, append an idle indicator to show we're still working.
+        """
         try:
             text_preview = (
                 self.accumulated_output[:100] + "..."
@@ -104,13 +154,19 @@ class StreamingMessageState:
                 else self.accumulated_output
             )
             tool_list = self.get_tool_list() if self.track_tools else None
+
+            # Add idle indicator to output if needed
+            output = self.accumulated_output
+            if show_idle:
+                output += "\n\n_:hourglass_flowing_sand: Still working..._"
+
             await self.client.chat_update(
                 channel=self.channel_id,
                 ts=self.message_ts,
                 text=text_preview,
                 blocks=SlackFormatter.streaming_update(
                     self.prompt,
-                    self.accumulated_output,
+                    output,
                     tool_activities=tool_list,
                 ),
             )
@@ -119,6 +175,9 @@ class StreamingMessageState:
 
     async def finalize(self) -> None:
         """Send final update to mark streaming as complete."""
+        # Stop heartbeat task
+        self.stop_heartbeat()
+
         try:
             text_preview = (
                 self.accumulated_output[:100] + "..."

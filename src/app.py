@@ -329,6 +329,8 @@ async def main():
             logger=logger,
             track_tools=True,
         )
+        # Start heartbeat to show progress during idle periods
+        streaming_state.start_heartbeat()
         pending_question = None  # Track if we detect an AskUserQuestion
 
         # Import here to avoid circular imports

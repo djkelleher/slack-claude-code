@@ -132,6 +132,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             client=client,
             logger=logger,
         )
+        streaming_state.start_heartbeat()
         on_chunk = create_streaming_callback(streaming_state)
 
         try:
