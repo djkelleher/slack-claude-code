@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -78,6 +79,7 @@ class Config:
 
     # Claude Code configuration
     CLAUDE_PERMISSION_MODE: str = os.getenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
+    DEFAULT_MODEL: Optional[str] = os.getenv("DEFAULT_MODEL")  # opus, sonnet, or haiku
 
     # Slack API limits (block text limit is 3000 chars)
     SLACK_BLOCK_TEXT_LIMIT: int = 2900  # Leave room for formatting

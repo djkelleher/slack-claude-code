@@ -5,6 +5,7 @@ from typing import Optional
 
 import aiosqlite
 
+from ..config import config
 from .models import (
     CommandHistory,
     FileContext,
@@ -61,10 +62,11 @@ class DatabaseRepository:
         """
         async with self._get_connection() as db:
             # Atomic insert-or-ignore (composite UNIQUE constraint handles duplicates)
+            # Apply DEFAULT_MODEL if configured
             await db.execute(
-                """INSERT OR IGNORE INTO sessions (channel_id, thread_ts, working_directory)
-                   VALUES (?, ?, ?)""",
-                (channel_id, thread_ts, default_cwd),
+                """INSERT OR IGNORE INTO sessions (channel_id, thread_ts, working_directory, model)
+                   VALUES (?, ?, ?, ?)""",
+                (channel_id, thread_ts, default_cwd, config.DEFAULT_MODEL),
             )
             # Update last_active timestamp
             # Handle NULL properly: WHERE clause matches NULL when both are NULL
