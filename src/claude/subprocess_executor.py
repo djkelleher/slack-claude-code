@@ -129,7 +129,10 @@ class SubprocessExecutor:
         # Add the prompt
         cmd.append(prompt)
 
-        logger.info(f"{log_prefix}Executing: {' '.join(cmd)}")
+        # Log full command with all flags, but truncate prompt for readability
+        cmd_without_prompt = ' '.join(cmd[:-1])
+        prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+        logger.info(f"{log_prefix}Executing: {cmd_without_prompt} '{prompt_preview}'")
 
         # Start subprocess with increased line limit (default is 64KB)
         # Large files can produce JSON lines exceeding this limit
