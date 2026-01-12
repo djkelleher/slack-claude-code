@@ -112,10 +112,19 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             if cancelled_count > 0:
                 await asyncio.sleep(0.5)
 
-        # Step 2: Send /clear command to Claude CLI (existing flow)
+        # Step 2: Get session to clear file context
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
+        )
+
+        # Step 3: Clear file context for this session
+        cleared_files = await deps.db.clear_file_context(session.id)
+        ctx.logger.info(f"Cleared {cleared_files} file context entries for session {session.id}")
+
+        # Step 4: Send /clear command to Claude CLI (existing flow)
         await _send_claude_command(ctx, "/clear", deps)
 
-        # Step 3: Notify user if processes were cancelled
+        # Step 5: Notify user if processes were cancelled
         if cancelled_count > 0:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,

@@ -617,6 +617,16 @@ class DatabaseRepository:
             )
             await db.commit()
 
+    async def clear_file_context(self, session_id: int) -> int:
+        """Clear all file context for a session (used when resetting a session)."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "DELETE FROM file_context WHERE session_id = ?",
+                (session_id,),
+            )
+            await db.commit()
+            return cursor.rowcount
+
     # Git checkpoint operations
     async def create_checkpoint(
         self,
