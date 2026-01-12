@@ -123,6 +123,10 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         cleared_files = await deps.db.clear_file_context(session.id)
         ctx.logger.info(f"Cleared {cleared_files} file context entries for session {session.id}")
 
+        # Step 3.5: Clear the Claude session ID so next message starts fresh
+        await deps.db.clear_session_claude_id(ctx.channel_id, ctx.thread_ts)
+        ctx.logger.info(f"Cleared Claude session ID for session {session.id}")
+
         # Step 4: Send /clear command to Claude CLI (existing flow)
         await _send_claude_command(ctx, "/clear", deps)
 

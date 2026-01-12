@@ -138,6 +138,27 @@ class DatabaseRepository:
             )
             await db.commit()
 
+    async def clear_session_claude_id(
+        self, channel_id: str, thread_ts: Optional[str] = None
+    ) -> None:
+        """Clear the Claude session ID to start fresh (used by /clear command)."""
+        async with self._get_connection() as db:
+            await db.execute(
+                """UPDATE sessions SET claude_session_id = NULL, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    datetime.now().isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )
+            await db.commit()
+
     async def update_session_mode(
         self, channel_id: str, thread_ts: Optional[str], permission_mode: str
     ) -> None:

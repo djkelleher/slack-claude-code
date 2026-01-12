@@ -205,11 +205,16 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             # Send final response
             output = result.output or result.error or "No output"
 
-            if SlackFormatter.should_attach_file(output):
+            # In plan mode, use detailed output (includes tool use details) if available
+            display_output = output
+            if session.permission_mode == "plan" and result.detailed_output:
+                display_output = result.detailed_output
+
+            if SlackFormatter.should_attach_file(display_output):
                 # Large response - attach as file
                 blocks, file_content, file_title = SlackFormatter.command_response_with_file(
                     prompt=prompt,
-                    output=output,
+                    output=display_output,
                     command_id=cmd_history.id,
                     duration_ms=result.duration_ms,
                     cost_usd=result.cost_usd,
@@ -218,7 +223,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ctx.client.chat_update(
                     channel=ctx.channel_id,
                     ts=message_ts,
-                    text=output[:100] + "..." if len(output) > 100 else output,
+                    text=display_output[:100] + "..." if len(display_output) > 100 else display_output,
                     blocks=blocks,
                 )
                 # Post response content
@@ -266,10 +271,10 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ctx.client.chat_update(
                     channel=ctx.channel_id,
                     ts=message_ts,
-                    text=output[:100] + "..." if len(output) > 100 else output,
+                    text=display_output[:100] + "..." if len(display_output) > 100 else display_output,
                     blocks=SlackFormatter.command_response(
                         prompt=prompt,
-                        output=output,
+                        output=display_output,
                         command_id=cmd_history.id,
                         duration_ms=result.duration_ms,
                         cost_usd=result.cost_usd,
