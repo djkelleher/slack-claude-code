@@ -129,7 +129,7 @@ class SubprocessExecutor:
         # Add the prompt
         cmd.append(prompt)
 
-        logger.info(f"{log_prefix}Executing: {' '.join(cmd[:5])}... (prompt: {prompt[:50]}...)")
+        logger.info(f"{log_prefix}Executing: {' '.join(cmd)}")
 
         # Start subprocess with increased line limit (default is 64KB)
         # Large files can produce JSON lines exceeding this limit
