@@ -338,6 +338,7 @@ async def main():
             # Detect AskUserQuestion tool before updating state
             if msg.tool_activities:
                 for tool in msg.tool_activities:
+                    logger.debug(f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})")
                     if tool.name == "AskUserQuestion" and tool.result is None:
                         if tool.id not in streaming_state.tool_activities:
                             # Create pending question when we first see the tool
@@ -349,6 +350,8 @@ async def main():
                                 tool_input=tool.input,
                             )
                             logger.info(f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}")
+                        else:
+                            logger.debug(f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping")
 
             # Update streaming state
             content = msg.content if msg.type == "assistant" else ""

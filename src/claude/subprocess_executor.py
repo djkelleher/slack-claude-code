@@ -108,6 +108,17 @@ class SubprocessExecutor:
             logger.warning(f"{log_prefix}Invalid permission mode: {mode}, using bypassPermissions")
             cmd.extend(["--permission-mode", "bypassPermissions"])
 
+        # In plan mode, inject instructions to ask clarifying questions
+        if mode == "plan":
+            plan_instructions = (
+                "When in plan mode, you MUST ask clarifying questions using the AskUserQuestion tool "
+                "before creating your implementation plan. Do not proceed to write the plan until you "
+                "have gathered enough information from the user about their requirements, preferences, "
+                "and constraints. Ask 2-4 focused questions to understand the scope and approach."
+            )
+            cmd.extend(["--append-system-prompt", plan_instructions])
+            logger.info(f"{log_prefix}Added plan mode question instructions")
+
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):
             cmd.extend(["--resume", resume_session_id])
