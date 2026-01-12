@@ -54,9 +54,7 @@ def queue_status(pending: list, running: Any) -> list[dict]:
             blocks.append(
                 {
                     "type": "context",
-                    "elements": [
-                        {"type": "mrkdwn", "text": f"_... and {len(pending) - 10} more_"}
-                    ],
+                    "elements": [{"type": "mrkdwn", "text": f"_... and {len(pending) - 10} more_"}],
                 }
             )
 

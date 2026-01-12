@@ -23,7 +23,7 @@ class UsageSnapshot:
     usage_percent: float
     reset_time: Optional[datetime] = None
     is_paused: bool = False
-    checked_at: datetime = None
+    checked_at: Optional[datetime] = None
 
     def __post_init__(self):
         if self.checked_at is None:
@@ -36,7 +36,7 @@ class UsageChecker:
     Caches results to avoid excessive CLI calls.
     """
 
-    def __init__(self, cache_duration: int = None) -> None:
+    def __init__(self, cache_duration: Optional[int] = None) -> None:
         """Initialize usage checker.
 
         Args:

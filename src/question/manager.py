@@ -17,7 +17,6 @@ from typing import Optional
 
 from slack_sdk.web.async_client import AsyncWebClient
 
-from ..config import config
 from ..database.repository import DatabaseRepository
 
 logger = logging.getLogger(__name__)
@@ -96,17 +95,21 @@ class QuestionManager:
         for q in raw_questions:
             options = []
             for opt in q.get("options", []):
-                options.append(QuestionOption(
-                    label=opt.get("label", ""),
-                    description=opt.get("description", ""),
-                ))
+                options.append(
+                    QuestionOption(
+                        label=opt.get("label", ""),
+                        description=opt.get("description", ""),
+                    )
+                )
 
-            questions.append(Question(
-                question=q.get("question", ""),
-                header=q.get("header", ""),
-                options=options,
-                multi_select=q.get("multiSelect", False),
-            ))
+            questions.append(
+                Question(
+                    question=q.get("question", ""),
+                    header=q.get("header", ""),
+                    options=options,
+                    multi_select=q.get("multiSelect", False),
+                )
+            )
 
         return questions
 
@@ -176,9 +179,7 @@ class QuestionManager:
         pending.message_ts = result.get("ts")
 
         # Post channel notification if configured
-        await cls._post_notification(
-            slack_client, pending.channel_id, pending.thread_ts, db
-        )
+        await cls._post_notification(slack_client, pending.channel_id, pending.thread_ts, db)
 
     @classmethod
     async def _post_notification(
@@ -199,7 +200,9 @@ class QuestionManager:
 
             # Build thread link
             if thread_ts:
-                thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
+                thread_link = (
+                    f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
+                )
                 message = f":question: Claude has a question • <{thread_link}|Answer in thread>"
             else:
                 message = ":question: Claude has a question"
@@ -349,10 +352,7 @@ class QuestionManager:
         Returns:
             Number of questions cancelled
         """
-        to_cancel = [
-            qid for qid, q in cls._pending.items()
-            if q.session_id == session_id
-        ]
+        to_cancel = [qid for qid, q in cls._pending.items() if q.session_id == session_id]
 
         for question_id in to_cancel:
             cls.cancel(question_id)
@@ -378,9 +378,9 @@ class QuestionManager:
                 response_parts.append(f"**{question.header}**: {', '.join(selected)}")
             else:
                 # Single question - just the answer
-                response_parts.append(', '.join(selected))
+                response_parts.append(", ".join(selected))
 
-        return '\n'.join(response_parts)
+        return "\n".join(response_parts)
 
     @classmethod
     def count_pending(cls) -> int:

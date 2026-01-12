@@ -156,9 +156,7 @@ def slack_command(
             if require_text and not ctx.text:
                 await client.chat_postMessage(
                     channel=ctx.channel_id,
-                    blocks=SlackFormatter.error_message(
-                        f"Please provide input. {usage_hint}"
-                    ),
+                    blocks=SlackFormatter.error_message(f"Please provide input. {usage_hint}"),
                 )
                 return
 

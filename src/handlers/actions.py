@@ -7,9 +7,8 @@ import uuid
 from slack_bolt.async_app import AsyncApp
 
 from src.approval.handler import PermissionManager
-from src.approval.slack_ui import build_approval_result_blocks
 from src.approval.plan_manager import PlanApprovalManager
-from src.approval.slack_ui import build_plan_result_blocks
+from src.approval.slack_ui import build_approval_result_blocks, build_plan_result_blocks
 from src.claude.streaming import ToolActivity
 from src.config import config
 from src.pty.pool import PTYSessionPool
@@ -152,9 +151,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
             if result.success:
-                await deps.db.update_command_status(
-                    new_cmd.id, "completed", result.output
-                )
+                await deps.db.update_command_status(new_cmd.id, "completed", result.output)
             else:
                 await deps.db.update_command_status(
                     new_cmd.id, "failed", result.output, result.error
@@ -175,9 +172,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         except Exception as e:
             logger.error(f"Error rerunning command: {e}")
-            await deps.db.update_command_status(
-                new_cmd.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_command_status(new_cmd.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
@@ -588,7 +583,8 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle custom answer button - open modal for text input."""
         await ack()
 
-        from src.question import QuestionManager, build_custom_answer_modal
+        from src.question.manager import QuestionManager
+        from src.question.slack_ui import build_custom_answer_modal
 
         question_id = action["value"]
 
@@ -615,7 +611,8 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle single-select question button click."""
         await ack()
 
-        from src.question import QuestionManager, build_question_result_blocks
+        from src.question.manager import QuestionManager
+        from src.question.slack_ui import build_question_result_blocks
 
         try:
             data = json.loads(action["value"])
@@ -665,7 +662,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle multi-select checkbox change."""
         await ack()
 
-        from src.question import QuestionManager
+        from src.question.manager import QuestionManager
 
         # Extract question info from block_id
         block_id = action.get("block_id", "")
@@ -702,7 +699,8 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle multi-select submit button click."""
         await ack()
 
-        from src.question import QuestionManager, build_question_result_blocks
+        from src.question.manager import QuestionManager
+        from src.question.slack_ui import build_question_result_blocks
 
         question_id = action["value"]
 
@@ -755,10 +753,13 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle custom answer modal submission."""
         await ack()
 
-        from src.question import QuestionManager, build_question_result_blocks
+        from src.question.manager import QuestionManager
+        from src.question.slack_ui import build_question_result_blocks
 
         question_id = view["private_metadata"]
-        custom_answer = view["state"]["values"]["custom_answer_block"]["custom_answer_input"]["value"]
+        custom_answer = view["state"]["values"]["custom_answer_block"]["custom_answer_input"][
+            "value"
+        ]
 
         pending = QuestionManager.get_pending(question_id)
         if not pending:
@@ -789,7 +790,9 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             except Exception as e:
                 logger.warning(f"Failed to update question message: {e}")
 
-            logger.info(f"Question {question_id} custom answered by {user_id}: {custom_answer[:50]}...")
+            logger.info(
+                f"Question {question_id} custom answered by {user_id}: {custom_answer[:50]}..."
+            )
 
     # -------------------------------------------------------------------------
     # Detailed output viewer
@@ -819,10 +822,12 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         blocks = []
 
         if len(content) <= config.SLACK_BLOCK_TEXT_LIMIT:
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"```{content}```"},
-            })
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"```{content}```"},
+                }
+            )
         else:
             # Split into chunks
             remaining = content
@@ -840,21 +845,27 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     chunk = remaining[:break_point]
                     remaining = remaining[break_point:].lstrip("\n")
 
-                blocks.append({
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
-                })
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
+                    }
+                )
                 part += 1
 
                 # Modal has a limit of ~100 blocks
                 if len(blocks) >= 50:
-                    blocks.append({
-                        "type": "context",
-                        "elements": [{
-                            "type": "mrkdwn",
-                            "text": f"_... truncated ({len(remaining):,} more chars)_",
-                        }],
-                    })
+                    blocks.append(
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"_... truncated ({len(remaining):,} more chars)_",
+                                }
+                            ],
+                        }
+                    )
                     break
 
         await client.views_open(

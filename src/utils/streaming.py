@@ -84,9 +84,9 @@ class StreamingMessageState:
                 # Smart chunk concatenation: add newlines between chunks for readability
                 if self.accumulated_output and not self._last_chunk_was_newline:
                     if len(content) >= 10 or content.strip():
-                        if not self.accumulated_output.endswith(('\n', ' ', '\t')):
+                        if not self.accumulated_output.endswith(("\n", " ", "\t")):
                             self.accumulated_output += "\n\n"
-                self._last_chunk_was_newline = content.endswith('\n') if content else False
+                self._last_chunk_was_newline = content.endswith("\n") if content else False
             self.accumulated_output += content
 
         # Rate limit updates to avoid Slack API limits
@@ -131,7 +131,10 @@ class StreamingMessageState:
                 ts=self.message_ts,
                 text=text_preview,
                 blocks=SlackFormatter.streaming_update(
-                    self.prompt, self.accumulated_output, tool_activities=tool_list, is_complete=True
+                    self.prompt,
+                    self.accumulated_output,
+                    tool_activities=tool_list,
+                    is_complete=True,
                 ),
             )
         except Exception as e:

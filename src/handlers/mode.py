@@ -36,7 +36,9 @@ def register_mode_command(app: AsyncApp, deps: HandlerDependencies) -> None:
     """
 
     @app.command("/mode")
-    @slack_command(require_text=False, usage_hint="Usage: /mode [bypass|accept|plan|ask|default|delegate]")
+    @slack_command(
+        require_text=False, usage_hint="Usage: /mode [bypass|accept|plan|ask|default|delegate]"
+    )
     async def handle_mode(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /mode command - view or set permission mode for session."""
         text = ctx.text.strip().lower() if ctx.text else ""
@@ -52,8 +54,7 @@ def register_mode_command(app: AsyncApp, deps: HandlerDependencies) -> None:
             display_mode = MODE_DISPLAY.get(current_mode, current_mode)
 
             mode_list = "\n".join(
-                f"• `{alias}` - {_get_mode_description(alias)}"
-                for alias in MODE_ALIASES
+                f"• `{alias}` - {_get_mode_description(alias)}" for alias in MODE_ALIASES
             )
 
             await ctx.client.chat_postMessage(

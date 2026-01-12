@@ -3,7 +3,7 @@
 from slack_bolt.async_app import AsyncApp
 
 from src.config import config
-from src.git.service import GitService, GitError
+from src.git.service import GitError, GitService
 from src.utils.formatting import SlackFormatter
 
 from .base import CommandContext, HandlerDependencies, slack_command
@@ -68,7 +68,9 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             max_length = 2800
             if len(diff) > max_length:
                 diff_truncated = diff[:max_length]
-                diff_display = f"```\n{diff_truncated}\n```\n\n_... (diff truncated, {len(diff)} chars total)_"
+                diff_display = (
+                    f"```\n{diff_truncated}\n```\n\n_... (diff truncated, {len(diff)} chars total)_"
+                )
             else:
                 diff_display = f"```\n{diff}\n```"
 
@@ -195,9 +197,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 return
 
             # Commit changes
-            commit_sha = await git_service.commit_changes(
-                session.working_directory, ctx.text
-            )
+            commit_sha = await git_service.commit_changes(session.working_directory, ctx.text)
 
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
@@ -284,9 +284,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
             elif subcommand == "switch" and len(parts) >= 2:
                 branch_name = parts[1]
-                success = await git_service.switch_branch(
-                    session.working_directory, branch_name
-                )
+                success = await git_service.switch_branch(session.working_directory, branch_name)
                 if success:
                     await ctx.client.chat_postMessage(
                         channel=ctx.channel_id,

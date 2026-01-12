@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional, Iterator
+from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class ToolActivity:
         """Truncate file path, keeping filename visible."""
         if len(path) <= max_len:
             return path
-        return "..." + path[-(max_len - 3):]
+        return "..." + path[-(max_len - 3) :]
 
     @staticmethod
     def _truncate_cmd(cmd: str, max_len: int = 50) -> str:

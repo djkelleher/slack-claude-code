@@ -1,8 +1,8 @@
 """Streaming message formatting."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
-from .base import escape_markdown, truncate_from_start, markdown_to_mrkdwn
+from .base import escape_markdown, markdown_to_mrkdwn, truncate_from_start
 from .tool_blocks import format_tool_activity_section
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ def processing_message(prompt: str) -> list[dict]:
 def streaming_update(
     prompt: str,
     current_output: str,
-    tool_activities: list["ToolActivity"] = None,
+    tool_activities: Optional[list["ToolActivity"]] = None,
     is_complete: bool = False,
     max_tools_display: int = 8,
 ) -> list[dict]:
@@ -49,12 +49,16 @@ def streaming_update(
     list[dict]
         Slack blocks for the streaming message.
     """
-    status = ":heavy_check_mark: Complete" if is_complete else ":arrows_counterclockwise: Streaming..."
+    status = (
+        ":heavy_check_mark: Complete" if is_complete else ":arrows_counterclockwise: Streaming..."
+    )
 
     # Truncate and convert to Slack mrkdwn format
     current_output = truncate_from_start(current_output)
     # Convert any standard markdown to Slack mrkdwn
-    formatted_output = markdown_to_mrkdwn(current_output) if current_output else "_Waiting for response..._"
+    formatted_output = (
+        markdown_to_mrkdwn(current_output) if current_output else "_Waiting for response..._"
+    )
 
     blocks = [
         {

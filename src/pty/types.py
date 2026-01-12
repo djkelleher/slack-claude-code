@@ -28,9 +28,7 @@ class PTYSessionConfig:
     """
 
     working_directory: str = "~"
-    inactivity_timeout: float = field(
-        default_factory=lambda: config.timeouts.pty.inactivity
-    )
+    inactivity_timeout: float = field(default_factory=lambda: config.timeouts.pty.inactivity)
     read_timeout: float = field(default_factory=lambda: config.timeouts.pty.read)
     startup_timeout: float = field(default_factory=lambda: config.timeouts.pty.startup)
     cols: int = 120

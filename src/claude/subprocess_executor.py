@@ -19,8 +19,7 @@ logger = logging.getLogger(__name__)
 
 # UUID pattern for validating session IDs
 UUID_PATTERN = re.compile(
-    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-    re.IGNORECASE
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
 )
 
 
@@ -91,7 +90,8 @@ class SubprocessExecutor:
             "claude",
             "-p",
             "--verbose",  # Required for stream-json
-            "--output-format", "stream-json",
+            "--output-format",
+            "stream-json",
         ]
 
         # Add model flag if specified
@@ -166,10 +166,7 @@ class SubprocessExecutor:
             # Read stdout line by line
             while True:
                 try:
-                    line = await asyncio.wait_for(
-                        process.stdout.readline(),
-                        timeout=self.timeout
-                    )
+                    line = await asyncio.wait_for(process.stdout.readline(), timeout=self.timeout)
                 except asyncio.TimeoutError:
                     logger.warning(f"{log_prefix}Timeout waiting for Claude output")
                     process.terminate()
@@ -185,7 +182,7 @@ class SubprocessExecutor:
                 if not line:
                     break
 
-                line_str = line.decode('utf-8', errors='replace').strip()
+                line_str = line.decode("utf-8", errors="replace").strip()
                 if not line_str:
                     continue
 
@@ -198,7 +195,9 @@ class SubprocessExecutor:
                 if msg.type == "assistant":
                     # Log text content
                     if msg.content:
-                        preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                        preview = (
+                            msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                        )
                         logger.debug(f"{log_prefix}Claude: {preview}")
                     # Log tool use and track file context
                     if msg.raw:
@@ -227,7 +226,9 @@ class SubprocessExecutor:
                                     questions = tool_input.get("questions", [])
                                     if questions:
                                         first_q = questions[0].get("question", "?")[:80]
-                                        logger.info(f"{log_prefix}Tool: AskUserQuestion - '{first_q}...' ({len(questions)} question(s))")
+                                        logger.info(
+                                            f"{log_prefix}Tool: AskUserQuestion - '{first_q}...' ({len(questions)} question(s))"
+                                        )
                                     else:
                                         logger.info(f"{log_prefix}Tool: AskUserQuestion")
                                 else:
@@ -247,9 +248,13 @@ class SubprocessExecutor:
                     logger.error(f"{log_prefix}Error: {msg.content}")
                 elif msg.type == "result":
                     if msg.cost_usd:
-                        logger.info(f"{log_prefix}Claude Finished - completed in {msg.duration_ms}ms, cost ${msg.cost_usd:.4f}")
+                        logger.info(
+                            f"{log_prefix}Claude Finished - completed in {msg.duration_ms}ms, cost ${msg.cost_usd:.4f}"
+                        )
                     else:
-                        logger.info(f"{log_prefix}Claude Finished - completed in {msg.duration_ms}ms")
+                        logger.info(
+                            f"{log_prefix}Claude Finished - completed in {msg.duration_ms}ms"
+                        )
 
                 # Track session ID
                 if msg.session_id:
@@ -286,7 +291,7 @@ class SubprocessExecutor:
             # Check stderr for errors
             stderr = await process.stderr.read()
             if stderr:
-                stderr_str = stderr.decode('utf-8', errors='replace').strip()
+                stderr_str = stderr.decode("utf-8", errors="replace").strip()
                 if stderr_str:
                     logger.warning(f"{log_prefix}Claude stderr: {stderr_str}")
                     # Only treat stderr as error if process failed
@@ -296,8 +301,14 @@ class SubprocessExecutor:
             success = process.returncode == 0 and not error_msg
 
             # Check if session not found - retry without resume
-            if not success and resume_session_id and "No conversation found with session ID" in (error_msg or ""):
-                logger.info(f"{log_prefix}Session {resume_session_id} not found, retrying without resume")
+            if (
+                not success
+                and resume_session_id
+                and "No conversation found with session ID" in (error_msg or "")
+            ):
+                logger.info(
+                    f"{log_prefix}Session {resume_session_id} not found, retrying without resume"
+                )
                 return await self.execute(
                     prompt=prompt,
                     working_directory=working_directory,

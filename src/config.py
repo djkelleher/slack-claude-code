@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -72,9 +73,7 @@ class Config:
     SLACK_SIGNING_SECRET: str = os.getenv("SLACK_SIGNING_SECRET", "")
 
     # Database - use absolute path based on package location
-    DATABASE_PATH: str = os.getenv(
-        "DATABASE_PATH", str(PACKAGE_ROOT / "data" / "slack_claude.db")
-    )
+    DATABASE_PATH: str = os.getenv("DATABASE_PATH", str(PACKAGE_ROOT / "data" / "slack_claude.db"))
     DEFAULT_WORKING_DIR: str = os.getenv("DEFAULT_WORKING_DIR", os.getcwd())
 
     # Claude Code configuration
@@ -86,7 +85,12 @@ class Config:
 
     # Valid permission modes for Claude Code CLI
     VALID_PERMISSION_MODES: tuple[str, ...] = (
-        "acceptEdits", "bypassPermissions", "default", "delegate", "dontAsk", "plan"
+        "acceptEdits",
+        "bypassPermissions",
+        "default",
+        "delegate",
+        "dontAsk",
+        "plan",
     )
 
     # Multi-agent workflow
@@ -102,9 +106,7 @@ class Config:
 
     # Permissions
     AUTO_APPROVE_TOOLS: list[str] = (
-        os.getenv("AUTO_APPROVE_TOOLS", "").split(",")
-        if os.getenv("AUTO_APPROVE_TOOLS")
-        else []
+        os.getenv("AUTO_APPROVE_TOOLS", "").split(",") if os.getenv("AUTO_APPROVE_TOOLS") else []
     )
 
     # File upload configuration

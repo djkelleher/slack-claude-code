@@ -6,10 +6,10 @@ from pathlib import Path
 from slack_bolt.async_app import AsyncApp
 
 from src.config import config
+from src.utils.detail_cache import DetailCache
 from src.utils.formatting import SlackFormatter
 from src.utils.slack_helpers import post_text_snippet
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
-from src.utils.detail_cache import DetailCache
 
 from .base import CommandContext, HandlerDependencies, slack_command
 
@@ -190,13 +190,13 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
             # Update session with Claude session ID for resume
             if result.session_id:
-                await deps.db.update_session_claude_id(ctx.channel_id, ctx.thread_ts, result.session_id)
+                await deps.db.update_session_claude_id(
+                    ctx.channel_id, ctx.thread_ts, result.session_id
+                )
 
             # Update command history
             if result.success:
-                await deps.db.update_command_status(
-                    cmd_history.id, "completed", result.output
-                )
+                await deps.db.update_command_status(cmd_history.id, "completed", result.output)
             else:
                 await deps.db.update_command_status(
                     cmd_history.id, "failed", result.output, result.error
@@ -279,9 +279,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         except Exception as e:
             ctx.logger.error(f"Error executing command: {e}")
-            await deps.db.update_command_status(
-                cmd_history.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await ctx.client.chat_update(
                 channel=ctx.channel_id,
                 ts=message_ts,

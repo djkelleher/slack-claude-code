@@ -66,14 +66,16 @@ class PTYSession:
             await self.process.flush_startup_output()
             await self._set_state(SessionState.IDLE)
 
-            await HookRegistry.emit(HookEvent(
-                event_type=HookEventType.SESSION_START,
-                context=create_context(
-                    session_id=self.session_id,
-                    working_directory=self.config.working_directory,
-                ),
-                data={"pid": self.pid},
-            ))
+            await HookRegistry.emit(
+                HookEvent(
+                    event_type=HookEventType.SESSION_START,
+                    context=create_context(
+                        session_id=self.session_id,
+                        working_directory=self.config.working_directory,
+                    ),
+                    data={"pid": self.pid},
+                )
+            )
 
             return True
 
@@ -203,14 +205,16 @@ class PTYSession:
         await self.process.terminate()
         await self._set_state(SessionState.STOPPED)
 
-        await HookRegistry.emit(HookEvent(
-            event_type=HookEventType.SESSION_END,
-            context=create_context(
-                session_id=self.session_id,
-                working_directory=self.config.working_directory,
-            ),
-            data={"duration_seconds": (datetime.now() - self.created_at).total_seconds()},
-        ))
+        await HookRegistry.emit(
+            HookEvent(
+                event_type=HookEventType.SESSION_END,
+                context=create_context(
+                    session_id=self.session_id,
+                    working_directory=self.config.working_directory,
+                ),
+                data={"duration_seconds": (datetime.now() - self.created_at).total_seconds()},
+            )
+        )
 
     def is_alive(self) -> bool:
         """Check if the session process is still running."""
@@ -263,7 +267,9 @@ class PTYSession:
                 last_output_time = current_time
                 self.accumulated_output += data
 
-                logger.debug(f"PTY output: {data[:100]}..." if len(data) > 100 else f"PTY output: {data}")
+                logger.debug(
+                    f"PTY output: {data[:100]}..." if len(data) > 100 else f"PTY output: {data}"
+                )
 
                 if self.on_output:
                     await self.on_output(data)

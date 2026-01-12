@@ -6,10 +6,10 @@ Uses a simple dict-based registry with async-safe operations.
 import asyncio
 import threading
 from datetime import datetime, timedelta
-from typing import Callable, Awaitable, Optional
+from typing import Awaitable, Callable, Optional
 
 from ..config import config
-from .session import PTYSession, PTYSessionConfig, SessionState, SessionResponse
+from .session import PTYSession, PTYSessionConfig, SessionResponse, SessionState
 
 
 class PTYSessionPool:
@@ -63,8 +63,12 @@ class PTYSessionPool:
                 if session.is_alive():
                     # Return existing session regardless of state (IDLE, BUSY, etc.)
                     # The session's internal lock will serialize access
-                    if session.state in (SessionState.IDLE, SessionState.BUSY,
-                                        SessionState.AWAITING_APPROVAL, SessionState.STARTING):
+                    if session.state in (
+                        SessionState.IDLE,
+                        SessionState.BUSY,
+                        SessionState.AWAITING_APPROVAL,
+                        SessionState.STARTING,
+                    ):
                         return session
                 # Clean up dead/stopped/error sessions
                 await session.stop()

@@ -15,24 +15,24 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 
-from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
+from slack_bolt.async_app import AsyncApp
 
+from src.claude.subprocess_executor import SubprocessExecutor
 from src.config import config
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
-from src.claude.subprocess_executor import SubprocessExecutor
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
+from src.utils.detail_cache import DetailCache
 from src.utils.file_downloader import (
-    FileTooLargeError,
     FileDownloadError,
+    FileTooLargeError,
     download_slack_file,
 )
+from src.utils.formatting import SlackFormatter
 from src.utils.slack_helpers import post_text_snippet
 from src.utils.streaming import StreamingMessageState
-from src.utils.detail_cache import DetailCache
-from src.utils.formatting import SlackFormatter
 
 # Configure logging
 logging.basicConfig(
@@ -131,9 +131,7 @@ async def main():
     @app.event("app_mention")
     async def handle_mention(event, say, logger):
         """Respond to @mentions."""
-        await say(
-            text="Hi! I'm Claude Code Bot. Just send me a message to run commands."
-        )
+        await say(text="Hi! I'm Claude Code Bot. Just send me a message to run commands.")
 
     @app.event("message")
     async def handle_message(event, client, logger):
@@ -142,7 +140,9 @@ async def main():
 
         # Ignore bot messages to avoid responding to ourselves
         if event.get("bot_id") or event.get("subtype"):
-            logger.debug(f"Ignoring bot/subtype message: bot_id={event.get('bot_id')}, subtype={event.get('subtype')}")
+            logger.debug(
+                f"Ignoring bot/subtype message: bot_id={event.get('bot_id')}, subtype={event.get('subtype')}"
+            )
             return
 
         channel_id = event.get("channel")
@@ -196,9 +196,7 @@ async def main():
                     logger.info(f"File downloaded and tracked: {local_path}")
 
                     # Track in file context for smart context
-                    await deps.db.track_file_context(
-                        session.id, local_path, "uploaded"
-                    )
+                    await deps.db.track_file_context(session.id, local_path, "uploaded")
 
                     # For images, show thumbnail in thread
                     if file_info.get("mimetype", "").startswith("image/"):
@@ -206,7 +204,8 @@ async def main():
                         if thumb_url:
                             await client.chat_postMessage(
                                 channel=channel_id,
-                                thread_ts=thread_ts or event.get("ts"),  # Use message ts if not in thread
+                                thread_ts=thread_ts
+                                or event.get("ts"),  # Use message ts if not in thread
                                 text=f"📎 Uploaded: {file_info['name']}",
                                 blocks=[
                                     {
@@ -239,7 +238,9 @@ async def main():
                         text=f"⚠️ Failed to download file: {file_info['name']} - {str(e)}",
                     )
                 except Exception as e:
-                    logger.error(f"Unexpected error processing file {file_info.get('name')}: {e}\n{traceback.format_exc()}")
+                    logger.error(
+                        f"Unexpected error processing file {file_info.get('name')}: {e}\n{traceback.format_exc()}"
+                    )
                     await client.chat_postMessage(
                         channel=channel_id,
                         thread_ts=thread_ts or event.get("ts"),
@@ -248,10 +249,7 @@ async def main():
 
         # Enhance prompt with uploaded file references
         if uploaded_files:
-            file_refs = "\n".join([
-                f"- {f.filename} (at {f.local_path})"
-                for f in uploaded_files
-            ])
+            file_refs = "\n".join([f"- {f.filename} (at {f.local_path})" for f in uploaded_files])
 
             if prompt:
                 prompt = f"{prompt}\n\nUploaded files:\n{file_refs}"
@@ -267,9 +265,7 @@ async def main():
             if file_contexts:
                 # Limit to top 5 most relevant files
                 relevant_files = sorted(
-                    file_contexts,
-                    key=lambda f: (f.use_count, f.last_used),
-                    reverse=True
+                    file_contexts, key=lambda f: (f.use_count, f.last_used), reverse=True
                 )[:5]
 
                 # Build context summary
@@ -278,7 +274,11 @@ async def main():
                     # Calculate time ago
                     # Ensure both datetimes are timezone-aware for comparison
                     now_utc = datetime.now(timezone.utc)
-                    last_used_utc = fc.last_used.replace(tzinfo=timezone.utc) if fc.last_used.tzinfo is None else fc.last_used
+                    last_used_utc = (
+                        fc.last_used.replace(tzinfo=timezone.utc)
+                        if fc.last_used.tzinfo is None
+                        else fc.last_used
+                    )
                     time_delta = now_utc - last_used_utc
                     if time_delta.total_seconds() < 60:
                         time_str = "just now"
@@ -298,7 +298,9 @@ async def main():
 
                 if context_lines:
                     context_summary = "\n".join(context_lines)
-                    prompt = f"{prompt}\n\n[Recently accessed files in this session:]\n{context_summary}"
+                    prompt = (
+                        f"{prompt}\n\n[Recently accessed files in this session:]\n{context_summary}"
+                    )
                     logger.info(f"Enhanced prompt with {len(relevant_files)} file context(s)")
 
         except Exception as e:
@@ -330,7 +332,7 @@ async def main():
         pending_question = None  # Track if we detect an AskUserQuestion
 
         # Import here to avoid circular imports
-        from src.question import QuestionManager
+        from src.question.manager import QuestionManager
 
         async def on_chunk(msg):
             nonlocal pending_question
@@ -338,7 +340,9 @@ async def main():
             # Detect AskUserQuestion tool before updating state
             if msg.tool_activities:
                 for tool in msg.tool_activities:
-                    logger.debug(f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})")
+                    logger.debug(
+                        f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})"
+                    )
                     if tool.name == "AskUserQuestion" and tool.result is None:
                         if tool.id not in streaming_state.tool_activities:
                             # Create pending question when we first see the tool
@@ -349,9 +353,13 @@ async def main():
                                 tool_use_id=tool.id,
                                 tool_input=tool.input,
                             )
-                            logger.info(f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}")
+                            logger.info(
+                                f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}"
+                            )
                         else:
-                            logger.debug(f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping")
+                            logger.debug(
+                                f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping"
+                            )
 
             # Update streaming state
             content = msg.content if msg.type == "assistant" else ""
@@ -378,18 +386,23 @@ async def main():
 
             # Handle AskUserQuestion - loop to handle multiple questions
             while pending_question and result.session_id:
-                logger.info(f"Claude asked a question, posting to Slack and waiting for response")
+                logger.info("Claude asked a question, posting to Slack and waiting for response")
 
                 # Update the main message to show Claude is waiting
                 try:
-                    text_preview = streaming_state.accumulated_output[:100] + "..." if len(streaming_state.accumulated_output) > 100 else streaming_state.accumulated_output
+                    text_preview = (
+                        streaming_state.accumulated_output[:100] + "..."
+                        if len(streaming_state.accumulated_output) > 100
+                        else streaming_state.accumulated_output
+                    )
                     await client.chat_update(
                         channel=channel_id,
                         ts=message_ts,
                         text=text_preview,
                         blocks=SlackFormatter.streaming_update(
                             prompt,
-                            streaming_state.accumulated_output + "\n\n_Waiting for your response..._",
+                            streaming_state.accumulated_output
+                            + "\n\n_Waiting for your response..._",
                             tool_activities=streaming_state.get_tool_list(),
                         ),
                     )
@@ -432,20 +445,23 @@ async def main():
 
                     # Update session with new Claude session ID
                     if result.session_id:
-                        await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
+                        await deps.db.update_session_claude_id(
+                            channel_id, thread_ts, result.session_id
+                        )
                     # Loop continues - will check if pending_question was set by on_chunk
                 else:
                     # Timeout or cancelled - update message and break
-                    logger.info(f"Question timed out or cancelled")
-                    result.output = streaming_state.accumulated_output + "\n\n_Question timed out - no response received._"
+                    logger.info("Question timed out or cancelled")
+                    result.output = (
+                        streaming_state.accumulated_output
+                        + "\n\n_Question timed out - no response received._"
+                    )
                     result.success = False
                     break
 
             # Update command history
             if result.success:
-                await deps.db.update_command_status(
-                    cmd_history.id, "completed", result.output
-                )
+                await deps.db.update_command_status(cmd_history.id, "completed", result.output)
             else:
                 await deps.db.update_command_status(
                     cmd_history.id, "failed", result.output, result.error
@@ -531,9 +547,7 @@ async def main():
 
         except Exception as e:
             logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")
-            await deps.db.update_command_status(
-                cmd_history.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,

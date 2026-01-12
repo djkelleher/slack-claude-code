@@ -88,7 +88,7 @@ def command_response_with_file(
     preview = "\n".join(preview_lines)
     if len(output) > len(preview):
         preview += "\n\n_... (see attached file for full response)_"
-    
+
     # Convert preview to Slack mrkdwn
     formatted_preview = markdown_to_mrkdwn(preview) if preview else "_No output_"
 

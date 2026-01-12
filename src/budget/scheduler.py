@@ -5,7 +5,7 @@ Provides different usage thresholds for night vs day hours.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Tuple
+from typing import Optional, Tuple
 
 from ..config import config
 
@@ -29,10 +29,10 @@ class BudgetScheduler:
 
     def __init__(
         self,
-        day_threshold: float = None,
-        night_threshold: float = None,
-        night_start: int = None,
-        night_end: int = None,
+        day_threshold: Optional[float] = None,
+        night_threshold: Optional[float] = None,
+        night_start: Optional[int] = None,
+        night_end: Optional[int] = None,
     ) -> None:
         """Initialize scheduler with thresholds.
 
@@ -49,7 +49,7 @@ class BudgetScheduler:
             night_end_hour=night_end or config.NIGHT_END_HOUR,
         )
 
-    def is_nighttime(self, dt: datetime = None) -> bool:
+    def is_nighttime(self, dt: Optional[datetime] = None) -> bool:
         """Check if current time is within night hours.
 
         Args:
@@ -71,7 +71,7 @@ class BudgetScheduler:
         else:
             return start <= hour < end
 
-    def get_current_threshold(self, dt: datetime = None) -> float:
+    def get_current_threshold(self, dt: Optional[datetime] = None) -> float:
         """Get the appropriate threshold for current time.
 
         Args:
@@ -84,7 +84,7 @@ class BudgetScheduler:
             return self.thresholds.night_threshold
         return self.thresholds.day_threshold
 
-    def get_schedule_info(self, dt: datetime = None) -> dict:
+    def get_schedule_info(self, dt: Optional[datetime] = None) -> dict:
         """Get current schedule information.
 
         Args:
@@ -109,7 +109,9 @@ class BudgetScheduler:
             "night_end": self.thresholds.night_end_hour,
         }
 
-    def should_pause_for_usage(self, usage_percent: float, dt: datetime = None) -> Tuple[bool, str]:
+    def should_pause_for_usage(
+        self, usage_percent: float, dt: Optional[datetime] = None
+    ) -> Tuple[bool, str]:
         """Check if work should pause based on usage and time.
 
         Args:
@@ -128,7 +130,7 @@ class BudgetScheduler:
 
         return False, ""
 
-    def get_time_until_threshold_change(self, dt: datetime = None) -> int:
+    def get_time_until_threshold_change(self, dt: Optional[datetime] = None) -> int:
         """Get minutes until threshold changes.
 
         Args:

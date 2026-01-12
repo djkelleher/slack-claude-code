@@ -45,13 +45,15 @@ def build_approval_blocks(
         if len(tool_input) > 500:
             display_input += "..."
 
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"```{display_input}```",
-            },
-        })
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"```{display_input}```",
+                },
+            }
+        )
 
     # Add context
     context_elements = [
@@ -62,47 +64,53 @@ def build_approval_blocks(
     ]
 
     if session_id:
-        context_elements.append({
-            "type": "mrkdwn",
-            "text": f"Session: `{session_id[:8]}`",
-        })
+        context_elements.append(
+            {
+                "type": "mrkdwn",
+                "text": f"Session: `{session_id[:8]}`",
+            }
+        )
 
-    blocks.append({
-        "type": "context",
-        "elements": context_elements,
-    })
+    blocks.append(
+        {
+            "type": "context",
+            "elements": context_elements,
+        }
+    )
 
     # Add divider
     blocks.append({"type": "divider"})
 
     # Add approval buttons
-    blocks.append({
-        "type": "actions",
-        "elements": [
-            {
-                "type": "button",
-                "text": {
-                    "type": "plain_text",
-                    "text": "Approve",
-                    "emoji": True,
+    blocks.append(
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "Approve",
+                        "emoji": True,
+                    },
+                    "style": "primary",
+                    "value": approval_id,
+                    "action_id": "approve_tool",
                 },
-                "style": "primary",
-                "value": approval_id,
-                "action_id": "approve_tool",
-            },
-            {
-                "type": "button",
-                "text": {
-                    "type": "plain_text",
-                    "text": "Deny",
-                    "emoji": True,
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "Deny",
+                        "emoji": True,
+                    },
+                    "style": "danger",
+                    "value": approval_id,
+                    "action_id": "deny_tool",
                 },
-                "style": "danger",
-                "value": approval_id,
-                "action_id": "deny_tool",
-            },
-        ],
-    })
+            ],
+        }
+    )
 
     return blocks
 
@@ -145,15 +153,19 @@ def build_approval_result_blocks(
     ]
 
     if resolved_by:
-        context_elements.append({
-            "type": "mrkdwn",
-            "text": f"By: <@{resolved_by}>",
-        })
+        context_elements.append(
+            {
+                "type": "mrkdwn",
+                "text": f"By: <@{resolved_by}>",
+            }
+        )
 
-    blocks.append({
-        "type": "context",
-        "elements": context_elements,
-    })
+    blocks.append(
+        {
+            "type": "context",
+            "elements": context_elements,
+        }
+    )
 
     return blocks
 
@@ -196,56 +208,62 @@ def build_plan_approval_blocks(
     if len(plan_content) > 2000:
         display_plan += "\n\n... _(truncated, see full plan below)_"
 
-    blocks.append({
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": f"```{display_plan}```",
-        },
-    })
+    blocks.append(
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"```{display_plan}```",
+            },
+        }
+    )
 
     # Add context
-    blocks.append({
-        "type": "context",
-        "elements": [
-            {
-                "type": "mrkdwn",
-                "text": f"Approval ID: `{approval_id}` | Session: `{session_id[:8]}`",
-            },
-        ],
-    })
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"Approval ID: `{approval_id}` | Session: `{session_id[:8]}`",
+                },
+            ],
+        }
+    )
 
     # Add divider
     blocks.append({"type": "divider"})
 
     # Add approval buttons
-    blocks.append({
-        "type": "actions",
-        "elements": [
-            {
-                "type": "button",
-                "text": {
-                    "type": "plain_text",
-                    "text": "✅ Approve Plan",
-                    "emoji": True,
+    blocks.append(
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "✅ Approve Plan",
+                        "emoji": True,
+                    },
+                    "style": "primary",
+                    "value": approval_id,
+                    "action_id": "approve_plan",
                 },
-                "style": "primary",
-                "value": approval_id,
-                "action_id": "approve_plan",
-            },
-            {
-                "type": "button",
-                "text": {
-                    "type": "plain_text",
-                    "text": "❌ Reject Plan",
-                    "emoji": True,
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "❌ Reject Plan",
+                        "emoji": True,
+                    },
+                    "style": "danger",
+                    "value": approval_id,
+                    "action_id": "reject_plan",
                 },
-                "style": "danger",
-                "value": approval_id,
-                "action_id": "reject_plan",
-            },
-        ],
-    })
+            ],
+        }
+    )
 
     return blocks
 

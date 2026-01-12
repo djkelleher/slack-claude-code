@@ -134,9 +134,7 @@ def register_agent_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         # Run workflow in background
         async def run_workflow():
             try:
-                result = await deps.orchestrator.execute_workflow(
-                    task, on_status_update
-                )
+                result = await deps.orchestrator.execute_workflow(task, on_status_update)
 
                 # Send final result
                 if result.success:

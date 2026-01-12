@@ -118,9 +118,7 @@ def plan_execution_update(
         blocks.append(
             {
                 "type": "context",
-                "elements": [
-                    {"type": "mrkdwn", "text": f":stopwatch: {duration_ms / 1000:.1f}s"}
-                ],
+                "elements": [{"type": "mrkdwn", "text": f":stopwatch: {duration_ms / 1000:.1f}s"}],
             }
         )
 

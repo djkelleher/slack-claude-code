@@ -81,8 +81,14 @@ class ClaudeProcess:
                 return True
             except pexpect.TIMEOUT:
                 if self.child.before:
-                    before_text = self.child.before if isinstance(self.child.before, str) else self.child.before.decode('utf-8', errors='replace')
-                    logger.info(f"No prompt match but got output ({len(before_text)} chars), assuming ready")
+                    before_text = (
+                        self.child.before
+                        if isinstance(self.child.before, str)
+                        else self.child.before.decode("utf-8", errors="replace")
+                    )
+                    logger.info(
+                        f"No prompt match but got output ({len(before_text)} chars), assuming ready"
+                    )
                     if "Claude" in before_text or ">" in before_text or "help" in before_text:
                         return True
                 logger.warning("Startup timeout with no recognizable output")

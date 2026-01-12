@@ -64,7 +64,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
             # Update session if needed
             if result.session_id:
-                await deps.db.update_session_claude_id(ctx.channel_id, ctx.thread_ts, result.session_id)
+                await deps.db.update_session_claude_id(
+                    ctx.channel_id, ctx.thread_ts, result.session_id
+                )
 
             output = result.output or result.error or "Command completed (no output)"
 
@@ -99,7 +101,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
         # Step 1: Cancel all active executor processes for this channel
         cancelled_count = 0
-        active_processes = getattr(deps.executor, '_active_processes', None)
+        active_processes = getattr(deps.executor, "_active_processes", None)
         if active_processes is not None:
             # Cancel processes where execution_id contains channel_id
             for exec_id, process in list(active_processes.items()):
@@ -139,7 +141,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
         # Cancel all active executor processes for this channel
         cancelled_count = 0
-        active_processes = getattr(deps.executor, '_active_processes', None)
+        active_processes = getattr(deps.executor, "_active_processes", None)
         if active_processes is not None:
             # Cancel processes where execution_id contains channel_id
             for exec_id, process in list(active_processes.items()):
@@ -255,8 +257,16 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             # Available models (opus first as default)
             models = [
                 {"name": "opus", "display": "Claude Opus 4.5", "desc": "Most capable model"},
-                {"name": "sonnet", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
-                {"name": "haiku", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
+                {
+                    "name": "sonnet",
+                    "display": "Claude Sonnet 4.5",
+                    "desc": "Balanced performance and speed",
+                },
+                {
+                    "name": "haiku",
+                    "display": "Claude Haiku 4",
+                    "desc": "Fastest and most cost-effective",
+                },
             ]
 
             # Build button blocks
@@ -291,14 +301,16 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 if is_current:
                     button_accessory["style"] = "primary"
 
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*{model['display']}*\n{model['desc']}",
-                    },
-                    "accessory": button_accessory,
-                })
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*{model['display']}*\n{model['desc']}",
+                        },
+                        "accessory": button_accessory,
+                    }
+                )
 
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,

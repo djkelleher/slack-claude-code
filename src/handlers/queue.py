@@ -250,9 +250,7 @@ async def _process_queue(
 
             # Update queue item
             if result.success:
-                await deps.db.update_queue_item_status(
-                    item.id, "completed", output=result.output
-                )
+                await deps.db.update_queue_item_status(item.id, "completed", output=result.output)
             else:
                 await deps.db.update_queue_item_status(
                     item.id, "failed", output=result.output, error_message=result.error
@@ -268,9 +266,7 @@ async def _process_queue(
 
         except Exception as e:
             log.error(f"Queue item {item.id} failed: {e}")
-            await deps.db.update_queue_item_status(
-                item.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_queue_item_status(item.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,

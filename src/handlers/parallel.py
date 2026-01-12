@@ -51,9 +51,7 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
             except ValueError:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
-                    blocks=SlackFormatter.error_message(
-                        "Invalid job ID. Usage: /cc [job_id]"
-                    ),
+                    blocks=SlackFormatter.error_message("Invalid job ID. Usage: /cc [job_id]"),
                 )
         else:
             # Cancel all active jobs in channel

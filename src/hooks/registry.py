@@ -140,8 +140,7 @@ class HookRegistry:
                 return {event_type.value: [name for name, _ in handlers]}
 
             return {
-                et.value: [name for name, _ in handlers]
-                for et, handlers in cls._handlers.items()
+                et.value: [name for name, _ in handlers] for et, handlers in cls._handlers.items()
             }
 
     @classmethod

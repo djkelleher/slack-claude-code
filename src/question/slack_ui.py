@@ -23,27 +23,31 @@ def build_question_blocks(pending: "PendingQuestion") -> list[dict]:
     blocks = []
 
     # Header
-    blocks.append({
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": ":question: Claude has a question",
-            "emoji": True,
-        },
-    })
+    blocks.append(
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": ":question: Claude has a question",
+                "emoji": True,
+            },
+        }
+    )
 
     blocks.append({"type": "divider"})
 
     # Build blocks for each question
     for i, question in enumerate(pending.questions):
         # Question text
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*{question.header}*\n{question.question}",
-            },
-        })
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{question.header}*\n{question.question}",
+                },
+            }
+        )
 
         # Build action buttons for options
         if question.multi_select:
@@ -60,13 +64,17 @@ def build_question_blocks(pending: "PendingQuestion") -> list[dict]:
                 descriptions.append(f"• *{opt.label}*: {opt.description}")
 
         if descriptions:
-            blocks.append({
-                "type": "context",
-                "elements": [{
-                    "type": "mrkdwn",
-                    "text": "\n".join(descriptions),
-                }],
-            })
+            blocks.append(
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": "\n".join(descriptions),
+                        }
+                    ],
+                }
+            )
 
         # Add spacing between questions
         if i < len(pending.questions) - 1:
@@ -75,41 +83,47 @@ def build_question_blocks(pending: "PendingQuestion") -> list[dict]:
     # Add submit button for multi-select questions
     has_multiselect = any(q.multi_select for q in pending.questions)
     if has_multiselect:
-        blocks.append({
-            "type": "actions",
-            "block_id": f"question_submit_{pending.question_id}",
-            "elements": [{
-                "type": "button",
-                "text": {
-                    "type": "plain_text",
-                    "text": "Submit Selections",
-                    "emoji": True,
-                },
-                "style": "primary",
-                "action_id": "question_multiselect_submit",
-                "value": pending.question_id,
-            }],
-        })
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": f"question_submit_{pending.question_id}",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Submit Selections",
+                            "emoji": True,
+                        },
+                        "style": "primary",
+                        "action_id": "question_multiselect_submit",
+                        "value": pending.question_id,
+                    }
+                ],
+            }
+        )
 
     # Add "Other" text input option
     blocks.append({"type": "divider"})
-    blocks.append({
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": "_Or provide a custom answer:_",
-        },
-        "accessory": {
-            "type": "button",
+    blocks.append(
+        {
+            "type": "section",
             "text": {
-                "type": "plain_text",
-                "text": "Custom Answer",
-                "emoji": True,
+                "type": "mrkdwn",
+                "text": "_Or provide a custom answer:_",
             },
-            "action_id": "question_custom_answer",
-            "value": pending.question_id,
-        },
-    })
+            "accessory": {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Custom Answer",
+                    "emoji": True,
+                },
+                "action_id": "question_custom_answer",
+                "value": pending.question_id,
+            },
+        }
+    )
 
     return blocks
 
@@ -132,22 +146,26 @@ def _build_button_block(
     buttons = []
     for opt in question.options:
         # Value encodes question_id, question_index, and selected label
-        value = json.dumps({
-            "q": question_id,
-            "i": question_index,
-            "l": opt.label,
-        })
+        value = json.dumps(
+            {
+                "q": question_id,
+                "i": question_index,
+                "l": opt.label,
+            }
+        )
 
-        buttons.append({
-            "type": "button",
-            "text": {
-                "type": "plain_text",
-                "text": opt.label[:75],  # Slack button text limit
-                "emoji": True,
-            },
-            "action_id": f"question_select_{question_index}_{len(buttons)}",
-            "value": value,
-        })
+        buttons.append(
+            {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": opt.label[:75],  # Slack button text limit
+                    "emoji": True,
+                },
+                "action_id": f"question_select_{question_index}_{len(buttons)}",
+                "value": value,
+            }
+        )
 
     return {
         "type": "actions",
@@ -188,12 +206,6 @@ def _build_checkbox_block(
             }
         options.append(option_dict)
 
-    # Value encodes question_id and question_index
-    action_value = json.dumps({
-        "q": question_id,
-        "i": question_index,
-    })
-
     return {
         "type": "section",
         "block_id": f"question_checkbox_{question_id}_{question_index}",
@@ -225,13 +237,15 @@ def build_question_result_blocks(
     blocks = []
 
     # Header showing answered
-    blocks.append({
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": f":heavy_check_mark: *Question answered by <@{user_id}>*",
-        },
-    })
+    blocks.append(
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f":heavy_check_mark: *Question answered by <@{user_id}>*",
+            },
+        }
+    )
 
     blocks.append({"type": "divider"})
 
@@ -240,13 +254,15 @@ def build_question_result_blocks(
         selected = pending.answers.get(i, ["(no answer)"])
         answer_text = ", ".join(selected)
 
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*{question.header}*\n_{question.question}_\n\n*Answer:* {answer_text}",
-            },
-        })
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{question.header}*\n_{question.question}_\n\n*Answer:* {answer_text}",
+                },
+            }
+        )
 
     return blocks
 

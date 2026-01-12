@@ -129,20 +129,22 @@ class PermissionManager:
         cls._pending[approval_id] = approval
 
         # Emit APPROVAL_NEEDED hook
-        await HookRegistry.emit(HookEvent(
-            event_type=HookEventType.APPROVAL_NEEDED,
-            context=create_context(
-                session_id=session_id,
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                user_id=user_id,
-            ),
-            data={
-                "approval_id": approval_id,
-                "tool_name": tool_name,
-                "tool_input": tool_input,
-            },
-        ))
+        await HookRegistry.emit(
+            HookEvent(
+                event_type=HookEventType.APPROVAL_NEEDED,
+                context=create_context(
+                    session_id=session_id,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    user_id=user_id,
+                ),
+                data={
+                    "approval_id": approval_id,
+                    "tool_name": tool_name,
+                    "tool_input": tool_input,
+                },
+            )
+        )
 
         try:
             # Post approval message to Slack
@@ -164,9 +166,7 @@ class PermissionManager:
                 approval.message_ts = result.get("ts")
 
                 # Post channel notification (triggers sound + unread badge)
-                await _post_permission_notification(
-                    slack_client, channel_id, thread_ts, db
-                )
+                await _post_permission_notification(slack_client, channel_id, thread_ts, db)
 
             # Wait for response with timeout
             approved = await asyncio.wait_for(
@@ -222,20 +222,22 @@ class PermissionManager:
         )
 
         # Emit APPROVAL_RESPONSE hook
-        await HookRegistry.emit(HookEvent(
-            event_type=HookEventType.APPROVAL_RESPONSE,
-            context=create_context(
-                session_id=approval.session_id,
-                channel_id=approval.channel_id,
-                thread_ts=approval.thread_ts,
-                user_id=resolved_by,
-            ),
-            data={
-                "approval_id": approval_id,
-                "tool_name": approval.tool_name,
-                "approved": approved,
-            },
-        ))
+        await HookRegistry.emit(
+            HookEvent(
+                event_type=HookEventType.APPROVAL_RESPONSE,
+                context=create_context(
+                    session_id=approval.session_id,
+                    channel_id=approval.channel_id,
+                    thread_ts=approval.thread_ts,
+                    user_id=resolved_by,
+                ),
+                data={
+                    "approval_id": approval_id,
+                    "tool_name": approval.tool_name,
+                    "approved": approved,
+                },
+            )
+        )
 
         return approval
 
@@ -269,10 +271,7 @@ class PermissionManager:
         Returns:
             Number of approvals cancelled
         """
-        to_cancel = [
-            aid for aid, a in cls._pending.items()
-            if a.session_id == session_id
-        ]
+        to_cancel = [aid for aid, a in cls._pending.items() if a.session_id == session_id]
 
         for approval_id in to_cancel:
             cls.cancel(approval_id)

@@ -108,18 +108,20 @@ class ClaudeExecutor:
             duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
 
             # Emit RESULT hook
-            await HookRegistry.emit(HookEvent(
-                event_type=HookEventType.RESULT,
-                context=create_context(
-                    session_id=channel_id,
-                    working_directory=working_directory,
-                ),
-                data={
-                    "success": response.success,
-                    "duration_ms": duration_ms,
-                    "output_length": len(response.output) if response.output else 0,
-                },
-            ))
+            await HookRegistry.emit(
+                HookEvent(
+                    event_type=HookEventType.RESULT,
+                    context=create_context(
+                        session_id=channel_id,
+                        working_directory=working_directory,
+                    ),
+                    data={
+                        "success": response.success,
+                        "duration_ms": duration_ms,
+                        "output_length": len(response.output) if response.output else 0,
+                    },
+                )
+            )
 
             return ExecutionResult(
                 success=response.success,
@@ -132,14 +134,16 @@ class ClaudeExecutor:
 
         except Exception as e:
             # Emit ERROR hook
-            await HookRegistry.emit(HookEvent(
-                event_type=HookEventType.ERROR,
-                context=create_context(
-                    session_id=channel_id,
-                    working_directory=working_directory,
-                ),
-                data={"error": str(e)},
-            ))
+            await HookRegistry.emit(
+                HookEvent(
+                    event_type=HookEventType.ERROR,
+                    context=create_context(
+                        session_id=channel_id,
+                        working_directory=working_directory,
+                    ),
+                    data={"error": str(e)},
+                )
+            )
 
             return ExecutionResult(
                 success=False,

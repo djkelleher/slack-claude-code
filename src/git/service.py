@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from .models import GitStatus, Checkpoint
+from .models import Checkpoint, GitStatus
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,7 @@ class GitService:
         if len(message) > 10000:
             raise GitError("Commit message too long (max 10000 characters)")
 
-    async def _run_git_command(
-        self, working_directory: str, *args: str
-    ) -> tuple[str, str, int]:
+    async def _run_git_command(self, working_directory: str, *args: str) -> tuple[str, str, int]:
         """Run a git command and return (stdout, stderr, returncode)."""
         self._validate_working_directory(working_directory)
         process = None
@@ -75,7 +73,7 @@ class GitService:
             stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
             stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
 
-            return stdout, stderr, process.returncode
+            return stdout, stderr, process.returncode or -1
 
         except asyncio.TimeoutError:
             if process:
@@ -178,9 +176,7 @@ class GitService:
         if staged:
             args.append("--staged")
 
-        stdout, stderr, returncode = await self._run_git_command(
-            working_directory, *args
-        )
+        stdout, stderr, returncode = await self._run_git_command(working_directory, *args)
 
         if returncode != 0:
             raise GitError(f"Git diff failed: {stderr}")
@@ -235,9 +231,7 @@ class GitService:
 
         return True
 
-    async def undo_changes(
-        self, working_directory: str, files: Optional[list[str]] = None
-    ) -> bool:
+    async def undo_changes(self, working_directory: str, files: Optional[list[str]] = None) -> bool:
         """Undo uncommitted changes."""
         if not await self.validate_git_repo(working_directory):
             raise GitError("Not a git repository")
@@ -271,9 +265,7 @@ class GitService:
         # Stage files if specified
         if files:
             add_args = ["add"] + files
-            _, stderr, returncode = await self._run_git_command(
-                working_directory, *add_args
-            )
+            _, stderr, returncode = await self._run_git_command(working_directory, *add_args)
             if returncode != 0:
                 raise GitError(f"Failed to stage files: {stderr}")
 
@@ -336,9 +328,7 @@ class GitService:
         if not await self.validate_git_repo(working_directory):
             raise GitError("Not a git repository")
 
-        stdout, stderr, returncode = await self._run_git_command(
-            working_directory, "branch"
-        )
+        stdout, stderr, returncode = await self._run_git_command(working_directory, "branch")
 
         if returncode != 0:
             raise GitError(f"Failed to get branches: {stderr}")

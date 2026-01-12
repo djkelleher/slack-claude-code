@@ -1,17 +1,19 @@
-from contextlib import asynccontextmanager
-
-import aiosqlite
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
+
+import aiosqlite
+
 from .models import (
-    Session,
     CommandHistory,
-    ParallelJob,
-    QueueItem,
-    UploadedFile,
     FileContext,
     GitCheckpoint,
+    NotificationSettings,
+    ParallelJob,
+    QueueItem,
+    Session,
+    UploadedFile,
 )
 
 # Default timeout for database operations (seconds)
@@ -94,9 +96,7 @@ class DatabaseRepository:
             row = await cursor.fetchone()
             return Session.from_row(row)
 
-    async def update_session_cwd(
-        self, channel_id: str, thread_ts: Optional[str], cwd: str
-    ) -> None:
+    async def update_session_cwd(self, channel_id: str, thread_ts: Optional[str], cwd: str) -> None:
         """Update the working directory for a session."""
         async with self._get_connection() as db:
             await db.execute(
@@ -192,9 +192,7 @@ class DatabaseRepository:
             rows = await cursor.fetchall()
             return [Session.from_row(row) for row in rows]
 
-    async def delete_session(
-        self, channel_id: str, thread_ts: Optional[str] = None
-    ) -> bool:
+    async def delete_session(self, channel_id: str, thread_ts: Optional[str] = None) -> bool:
         """Delete a specific session."""
         async with self._get_connection() as db:
             cursor = await db.execute(
@@ -300,9 +298,7 @@ class DatabaseRepository:
     async def get_command_by_id(self, command_id: int) -> Optional[CommandHistory]:
         """Get a specific command by ID."""
         async with self._get_connection() as db:
-            cursor = await db.execute(
-                "SELECT * FROM command_history WHERE id = ?", (command_id,)
-            )
+            cursor = await db.execute("SELECT * FROM command_history WHERE id = ?", (command_id,))
             row = await cursor.fetchone()
             return CommandHistory.from_row(row) if row else None
 
@@ -374,9 +370,7 @@ class DatabaseRepository:
     async def get_parallel_job(self, job_id: int) -> Optional[ParallelJob]:
         """Get a parallel job by ID."""
         async with self._get_connection() as db:
-            cursor = await db.execute(
-                "SELECT * FROM parallel_jobs WHERE id = ?", (job_id,)
-            )
+            cursor = await db.execute("SELECT * FROM parallel_jobs WHERE id = ?", (job_id,))
             row = await cursor.fetchone()
             return ParallelJob.from_row(row) if row else None
 
@@ -412,9 +406,7 @@ class DatabaseRepository:
             return cursor.rowcount > 0
 
     # Queue operations
-    async def add_to_queue(
-        self, session_id: int, channel_id: str, prompt: str
-    ) -> QueueItem:
+    async def add_to_queue(self, session_id: int, channel_id: str, prompt: str) -> QueueItem:
         """Add a command to the FIFO queue."""
         async with self._get_connection() as db:
             # Get next position for this channel
@@ -433,9 +425,7 @@ class DatabaseRepository:
             )
             await db.commit()
 
-            cursor = await db.execute(
-                "SELECT * FROM queue_items WHERE id = ?", (cursor.lastrowid,)
-            )
+            cursor = await db.execute("SELECT * FROM queue_items WHERE id = ?", (cursor.lastrowid,))
             row = await cursor.fetchone()
             return QueueItem.from_row(row)
 
@@ -454,9 +444,7 @@ class DatabaseRepository:
     async def get_queue_item(self, item_id: int) -> Optional[QueueItem]:
         """Get a queue item by ID."""
         async with self._get_connection() as db:
-            cursor = await db.execute(
-                "SELECT * FROM queue_items WHERE id = ?", (item_id,)
-            )
+            cursor = await db.execute("SELECT * FROM queue_items WHERE id = ?", (item_id,))
             row = await cursor.fetchone()
             return QueueItem.from_row(row) if row else None
 
@@ -557,9 +545,7 @@ class DatabaseRepository:
             return [UploadedFile.from_row(row) for row in rows]
 
     # File context operations
-    async def track_file_context(
-        self, session_id: int, file_path: str, context_type: str
-    ) -> None:
+    async def track_file_context(self, session_id: int, file_path: str, context_type: str) -> None:
         """Track or increment file usage for smart context."""
         async with self._get_connection() as db:
             # Try to increment existing record
@@ -684,9 +670,7 @@ class DatabaseRepository:
             rows = await cursor.fetchall()
             return [GitCheckpoint.from_row(row) for row in rows]
 
-    async def get_checkpoint_by_name(
-        self, channel_id: str, name: str
-    ) -> Optional[GitCheckpoint]:
+    async def get_checkpoint_by_name(self, channel_id: str, name: str) -> Optional[GitCheckpoint]:
         """Get a specific checkpoint by name."""
         async with self._get_connection() as db:
             cursor = await db.execute(
@@ -702,9 +686,7 @@ class DatabaseRepository:
     async def delete_checkpoint(self, checkpoint_id: int) -> bool:
         """Delete a checkpoint."""
         async with self._get_connection() as db:
-            cursor = await db.execute(
-                "DELETE FROM git_checkpoints WHERE id = ?", (checkpoint_id,)
-            )
+            cursor = await db.execute("DELETE FROM git_checkpoints WHERE id = ?", (checkpoint_id,))
             await db.commit()
             return cursor.rowcount > 0
 
@@ -722,16 +704,12 @@ class DatabaseRepository:
     # Notification Settings
     # -------------------------------------------------------------------------
 
-    async def get_notification_settings(
-        self, channel_id: str
-    ) -> "NotificationSettings":
+    async def get_notification_settings(self, channel_id: str) -> "NotificationSettings":
         """
         Get notification settings for a channel.
 
         Returns default settings (all enabled) if no record exists.
         """
-        from .models import NotificationSettings
-
         async with self._get_connection() as db:
             cursor = await db.execute(
                 "SELECT * FROM notification_settings WHERE channel_id = ?",
@@ -754,8 +732,6 @@ class DatabaseRepository:
 
         Creates the record if it doesn't exist.
         """
-        from .models import NotificationSettings
-
         async with self._transact() as db:
             # Try to update first
             cursor = await db.execute(

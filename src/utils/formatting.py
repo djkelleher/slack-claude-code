@@ -63,11 +63,13 @@ class SlackFormatter:
         cls,
         prompt: str,
         current_output: str,
-        tool_activities: list["ToolActivity"] = None,
+        tool_activities: Optional[list["ToolActivity"]] = None,
         is_complete: bool = False,
         max_tools_display: int = 8,
     ) -> list[dict]:
-        return streaming_update(prompt, current_output, tool_activities, is_complete, max_tools_display)
+        return streaming_update(
+            prompt, current_output, tool_activities, is_complete, max_tools_display
+        )
 
     @classmethod
     def parallel_job_status(cls, job: ParallelJob) -> list[dict]:
@@ -115,7 +117,9 @@ class SlackFormatter:
         cost_usd: Optional[float] = None,
         is_error: bool = False,
     ) -> tuple[list[dict], str, str]:
-        return command_response_with_file(prompt, output, command_id, duration_ms, cost_usd, is_error)
+        return command_response_with_file(
+            prompt, output, command_id, duration_ms, cost_usd, is_error
+        )
 
     @classmethod
     def queue_status(cls, pending: list, running) -> list[dict]:

@@ -12,15 +12,15 @@ FILE_THRESHOLD = config.SLACK_FILE_THRESHOLD
 
 def escape_markdown(text: str) -> str:
     """Escape special Slack mrkdwn characters.
-    
+
     Slack's mrkdwn is different from standard Markdown:
     - Bold: *text* (not **text**)
-    - Italic: _text_ 
+    - Italic: _text_
     - Strike: ~text~
     - Code: `code`
     - Blockquote: > quote
     - Links: <url|text>
-    
+
     We need to escape & < > which have special meaning in mrkdwn.
     """
     # Order matters: & must be replaced first
@@ -32,40 +32,40 @@ def escape_markdown(text: str) -> str:
 
 def markdown_to_mrkdwn(text: str) -> str:
     """Convert standard Markdown to Slack mrkdwn format.
-    
+
     Main conversions:
     - **bold** -> *bold*
-    - __bold__ -> *bold*  
+    - __bold__ -> *bold*
     - *italic* -> _italic_
     - _italic_ remains _italic_
     - [text](url) -> <url|text>
     - ```code``` -> ```code``` (code blocks stay the same)
     - `inline` -> `inline` (inline code stays the same)
-    
+
     Note: In standard Markdown, **text** is bold and *text* is italic.
     In Slack mrkdwn, *text* is bold and _text_ is italic.
     """
     # Protect code blocks and inline code first
     protected_content = []
-    
+
     # Extract and protect code blocks
     def save_protected(match):
         protected_content.append(match.group(0))
         return f"¤PROTECTED_{len(protected_content)-1}¤"
-    
+
     # Protect triple-backtick code blocks
-    text = re.sub(r'```[\s\S]*?```', save_protected, text)
-    
+    text = re.sub(r"```[\s\S]*?```", save_protected, text)
+
     # Protect inline code
-    text = re.sub(r'`[^`]+`', save_protected, text)
-    
+    text = re.sub(r"`[^`]+`", save_protected, text)
+
     # Now do the conversions
     # 1. Convert bold: **text** -> *text*
-    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
-    
+    text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+
     # 2. Convert bold: __text__ -> *text*
-    text = re.sub(r'__(.+?)__', r'*\1*', text)
-    
+    text = re.sub(r"__(.+?)__", r"*\1*", text)
+
     # 3. Convert italic: *text* -> _text_ (but skip the bold ones we just created)
     # Since we've already converted **bold** to *bold*, we need to be careful
     # The remaining single asterisks should be italic markers from the original
@@ -74,49 +74,49 @@ def markdown_to_mrkdwn(text: str) -> str:
     i = 0
     while i < len(text):
         # Look for bold markers we just created (*text*)
-        if text[i] == '*':
+        if text[i] == "*":
             # Find the closing *
             j = i + 1
-            while j < len(text) and text[j] != '*':
+            while j < len(text) and text[j] != "*":
                 j += 1
             if j < len(text):
                 # This is a bold section, keep it as is
-                parts.append(text[i:j+1])
+                parts.append(text[i : j + 1])
                 i = j + 1
                 continue
         parts.append(text[i])
         i += 1
-    
-    text = ''.join(parts)
-    
+
+    text = "".join(parts)
+
     # 4. Convert links: [text](url) -> <url|text>
-    text = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'<\2|\1>', text)
-    
+    text = re.sub(r"\[([^\]]+)\]\(([^\)]+)\)", r"<\2|\1>", text)
+
     # Don't restore protected content yet - we need to escape first
-    
+
     # Finally escape special characters (but not in URLs)
     # We need to be careful with escaping since we have <url|text> format
     # Let's protect URLs first
-    url_pattern = r'<([^|>]+)\|([^>]+)>'
+    url_pattern = r"<([^|>]+)\|([^>]+)>"
     urls = []
-    
+
     def save_url(match):
         urls.append(match.group(0))
         return f"__URL_{len(urls)-1}__"
-    
+
     text = re.sub(url_pattern, save_url, text)
-    
+
     # Now escape special characters
     text = escape_markdown(text)
-    
+
     # Restore URLs
     for i, url in enumerate(urls):
         text = text.replace(f"__URL_{i}__", url)
-    
+
     # Finally restore protected content (code blocks and inline code)
     for i, content in enumerate(protected_content):
         text = text.replace(f"¤PROTECTED_{i}¤", content)
-    
+
     return text
 
 
@@ -142,18 +142,18 @@ def time_ago(dt: datetime) -> str:
 def sanitize_error(error: str) -> str:
     """Sanitize error message to remove sensitive information."""
     # Redact home directory paths
-    sanitized = re.sub(r'/home/[^/\s]+', '/home/***', error)
+    sanitized = re.sub(r"/home/[^/\s]+", "/home/***", error)
     # Redact common sensitive values
     sanitized = re.sub(
         r'(password|secret|token|key|api_key|apikey|auth)=[^\s&"\']+',
-        r'\1=***',
+        r"\1=***",
         sanitized,
         flags=re.IGNORECASE,
     )
     # Redact environment variable values that might contain secrets
     sanitized = re.sub(
-        r'(SLACK_BOT_TOKEN|SLACK_APP_TOKEN|SLACK_SIGNING_SECRET|DATABASE_PATH)=[^\s]+',
-        r'\1=***',
+        r"(SLACK_BOT_TOKEN|SLACK_APP_TOKEN|SLACK_SIGNING_SECRET|DATABASE_PATH)=[^\s]+",
+        r"\1=***",
         sanitized,
         flags=re.IGNORECASE,
     )
@@ -171,10 +171,10 @@ def truncate_from_start(output: str, max_length: int = MAX_TEXT_LENGTH) -> str:
     """Truncate output from start (for streaming where recent content matters)."""
     if len(output) > max_length:
         # Find a good break point (newline) near the truncation point
-        truncated = output[-max_length + 50:]
+        truncated = output[-max_length + 50 :]
         # Try to start at a newline for cleaner truncation
-        newline_pos = truncated.find('\n')
+        newline_pos = truncated.find("\n")
         if newline_pos != -1 and newline_pos < 100:
-            truncated = truncated[newline_pos + 1:]
+            truncated = truncated[newline_pos + 1 :]
         return "_... (earlier output truncated)_\n\n" + truncated
     return output

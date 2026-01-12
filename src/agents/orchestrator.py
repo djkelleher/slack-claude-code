@@ -8,9 +8,9 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Callable, Awaitable, Optional
+from typing import Awaitable, Callable, Optional
 
-from ..claude.subprocess_executor import SubprocessExecutor, ExecutionResult
+from ..claude.subprocess_executor import ExecutionResult, SubprocessExecutor
 from .roles import AgentRole, format_task_prompt
 
 logger = logging.getLogger(__name__)
@@ -271,9 +271,7 @@ class MultiAgentOrchestrator:
         start_time: float,
     ) -> WorkflowResult:
         """Create a workflow result."""
-        duration_ms = int(
-            (asyncio.get_running_loop().time() - start_time) * 1000
-        )
+        duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
 
         return WorkflowResult(
             task=task,

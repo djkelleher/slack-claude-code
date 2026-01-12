@@ -1,5 +1,6 @@
-import aiosqlite
 from pathlib import Path
+
+import aiosqlite
 
 SCHEMA = """
 -- Sessions table (one per channel or thread)
@@ -275,7 +276,8 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
 async def reset_database(db_path: str) -> None:
     """Drop all tables and reinitialize (for development)."""
     async with aiosqlite.connect(db_path) as db:
-        await db.executescript("""
+        await db.executescript(
+            """
             DROP TABLE IF EXISTS notification_settings;
             DROP TABLE IF EXISTS git_checkpoints;
             DROP TABLE IF EXISTS file_context;
@@ -291,7 +293,8 @@ async def reset_database(db_path: str) -> None:
             DROP TABLE IF EXISTS parallel_jobs;
             DROP TABLE IF EXISTS command_history;
             DROP TABLE IF EXISTS sessions;
-        """)
+        """
+        )
         await db.commit()
 
     await init_database(db_path)

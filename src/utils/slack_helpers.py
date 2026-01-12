@@ -139,6 +139,7 @@ async def upload_text_file(
     dict
         The Slack API response.
     """
+
     # Sanitize content to remove control characters that might cause
     # Slack to treat the file as binary (keep printable ASCII + Unicode + whitespace)
     def is_safe_char(char: str) -> bool:
@@ -155,10 +156,7 @@ async def upload_text_file(
         # Block: null bytes, control chars (0-31 except above), DEL (127), C1 controls (128-159)
         return False
 
-    sanitized_content = "".join(
-        char if is_safe_char(char) else " "
-        for char in content
-    )
+    sanitized_content = "".join(char if is_safe_char(char) else " " for char in content)
 
     kwargs = {
         "channel": channel_id,
@@ -268,9 +266,7 @@ async def post_text_snippet(
             blocks = [
                 {
                     "type": "context",
-                    "elements": [
-                        {"type": "mrkdwn", "text": f"_continued ({i+1}/{len(chunks)})_"}
-                    ],
+                    "elements": [{"type": "mrkdwn", "text": f"_continued ({i+1}/{len(chunks)})_"}],
                 },
                 {
                     "type": "section",

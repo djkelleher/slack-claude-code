@@ -48,11 +48,7 @@ def register_budget_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 filled = int(snapshot.usage_percent / 100 * bar_length)
                 bar = "█" * filled + "░" * (bar_length - filled)
 
-                status = (
-                    ":heavy_check_mark:"
-                    if snapshot.usage_percent < threshold
-                    else ":warning:"
-                )
+                status = ":heavy_check_mark:" if snapshot.usage_percent < threshold else ":warning:"
 
                 await client.chat_update(
                     channel=channel_id,

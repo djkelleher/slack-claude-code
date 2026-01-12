@@ -20,9 +20,7 @@ def register_session_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
     @app.command("/sessions")
     @slack_command()
-    async def handle_sessions_list(
-        ctx: CommandContext, deps: HandlerDependencies = deps
-    ):
+    async def handle_sessions_list(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /sessions command - list all sessions for this channel.
 
         Lists both channel-level session and all thread sessions.
@@ -37,9 +35,7 @@ def register_session_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
     @app.command("/session-cleanup")
     @slack_command()
-    async def handle_session_cleanup(
-        ctx: CommandContext, deps: HandlerDependencies = deps
-    ):
+    async def handle_session_cleanup(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /session-cleanup command - delete inactive sessions.
 
         Deletes sessions that have been inactive for more than 30 days.

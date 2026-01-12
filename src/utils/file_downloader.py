@@ -96,9 +96,7 @@ async def download_slack_file(
             headers = {"Authorization": f"Bearer {slack_bot_token}"}
             async with session.get(file_url, headers=headers) as response:
                 if response.status != 200:
-                    raise FileDownloadError(
-                        f"Failed to download file: HTTP {response.status}"
-                    )
+                    raise FileDownloadError(f"Failed to download file: HTTP {response.status}")
 
                 # Verify content length if available
                 content_length = response.headers.get("Content-Length")
@@ -120,9 +118,7 @@ async def download_slack_file(
                             raise FileTooLargeError(safe_filename, bytes_downloaded, max_size_bytes)
                         await f.write(chunk)
 
-        logger.info(
-            f"Downloaded file {filename} ({file_size} bytes) to {local_path}"
-        )
+        logger.info(f"Downloaded file {filename} ({file_size} bytes) to {local_path}")
 
         # Prepare metadata
         metadata = {

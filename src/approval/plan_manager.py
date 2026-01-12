@@ -200,10 +200,7 @@ class PlanApprovalManager:
         Returns:
             Number of approvals cancelled
         """
-        to_cancel = [
-            aid for aid, a in cls._pending.items()
-            if a.session_id == session_id
-        ]
+        to_cancel = [aid for aid, a in cls._pending.items() if a.session_id == session_id]
 
         for approval_id in to_cancel:
             cls.cancel(approval_id)
