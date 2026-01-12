@@ -431,6 +431,65 @@ async def main():
                     # Reset pending_question before continuing - on_chunk may set a new one
                     pending_question = None
 
+                    # Stop the old heartbeat
+                    streaming_state.stop_heartbeat()
+
+                    # Post a new message below the answered question for continued streaming
+                    continue_response = await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text="Continuing...",
+                        blocks=SlackFormatter.processing_message("Processing your answer..."),
+                    )
+                    new_message_ts = continue_response["ts"]
+
+                    # Create new streaming state for the continuation
+                    streaming_state = StreamingMessageState(
+                        channel_id=channel_id,
+                        message_ts=new_message_ts,
+                        prompt=prompt,
+                        client=client,
+                        logger=logger,
+                        track_tools=True,
+                    )
+                    streaming_state.start_heartbeat()
+
+                    # Update on_chunk to use new streaming state
+                    async def on_chunk(msg):
+                        nonlocal pending_question
+
+                        # Detect AskUserQuestion tool before updating state
+                        if msg.tool_activities:
+                            for tool in msg.tool_activities:
+                                logger.debug(
+                                    f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})"
+                                )
+                                if tool.name == "AskUserQuestion" and tool.result is None:
+                                    if tool.id not in streaming_state.tool_activities:
+                                        # Create pending question when we first see the tool
+                                        pending_question = (
+                                            await QuestionManager.create_pending_question(
+                                                session_id=str(session.id),
+                                                channel_id=channel_id,
+                                                thread_ts=thread_ts,
+                                                tool_use_id=tool.id,
+                                                tool_input=tool.input,
+                                            )
+                                        )
+                                        logger.info(
+                                            f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}"
+                                        )
+                                    else:
+                                        logger.debug(
+                                            f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping"
+                                        )
+
+                        # Update streaming state
+                        content = msg.content if msg.type == "assistant" else ""
+                        tools = msg.tool_activities
+                        if content or tools:
+                            await streaming_state.append_and_update(content or "", tools)
+
                     # Continue the conversation with the user's answer
                     # This will resume the session
                     result = await executor.execute(
@@ -439,11 +498,14 @@ async def main():
                         session_id=channel_id,
                         resume_session_id=result.session_id,  # Resume the same session
                         execution_id=str(uuid.uuid4()),
-                        on_chunk=on_chunk,  # Reuse the same chunk handler
+                        on_chunk=on_chunk,  # Use updated chunk handler
                         permission_mode=session.permission_mode,
                         db_session_id=session.id,
                         model=session.model,
                     )
+
+                    # Update the new message_ts for any future operations
+                    message_ts = new_message_ts
 
                     # Update session with new Claude session ID
                     if result.session_id:
