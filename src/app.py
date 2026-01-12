@@ -531,6 +531,35 @@ async def main():
                     cmd_history.id, "failed", result.output, result.error
                 )
 
+            # Check if plan mode should auto-exit
+            # If we're in plan mode and ExitPlanMode was called (even if failed),
+            # or if a plan file was written, automatically switch to bypass mode
+            if session.permission_mode == "plan":
+                # Check if ExitPlanMode tool was attempted
+                exit_plan_attempted = any(
+                    tool.name == "ExitPlanMode" for tool in streaming_state.get_tool_list()
+                )
+
+                if exit_plan_attempted:
+                    logger.info("ExitPlanMode detected, switching session to bypass mode")
+                    await deps.db.update_session_mode(channel_id, thread_ts, "bypassPermissions")
+
+                    # Post notification
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text="Plan completed - switching to execution mode",
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": ":white_check_mark: *Plan completed!* Automatically switched to bypass mode for execution.\n\n_Use `/mode plan` to return to planning mode if needed._",
+                                },
+                            }
+                        ],
+                    )
+
             # Send final response
             output = result.output or result.error or "No output"
 

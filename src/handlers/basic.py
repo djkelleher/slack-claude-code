@@ -172,6 +172,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             client=ctx.client,
             logger=ctx.logger,
             smart_concat=True,
+            track_tools=True,  # Track tools to detect ExitPlanMode
         )
         streaming_state.start_heartbeat()
         on_chunk = create_streaming_callback(streaming_state)
@@ -206,10 +207,13 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             # Send final response
             output = result.output or result.error or "No output"
 
+            # Check if we were in plan mode (before any auto-exit)
+            was_in_plan_mode = session.permission_mode == "plan"
+
             # In plan mode, use detailed output (includes tool use details) if available
             display_output = output
             plan_file_path = None
-            if session.permission_mode == "plan" and result.detailed_output:
+            if was_in_plan_mode and result.detailed_output:
                 display_output = result.detailed_output
 
                 # Try to find the plan file that was created
@@ -323,6 +327,36 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     await ctx.client.chat_postMessage(
                         channel=ctx.channel_id,
                         text=f"⚠️ Could not attach plan file: {str(upload_error)[:100]}",
+                    )
+
+            # Check if plan mode should auto-exit
+            # If we were in plan mode and ExitPlanMode was called (even if failed),
+            # automatically switch to bypass mode
+            if was_in_plan_mode:
+                # Check if ExitPlanMode tool was attempted
+                exit_plan_attempted = any(
+                    tool.name == "ExitPlanMode" for tool in streaming_state.get_tool_list()
+                )
+
+                if exit_plan_attempted:
+                    ctx.logger.info("ExitPlanMode detected, switching session to bypass mode")
+                    await deps.db.update_session_mode(
+                        ctx.channel_id, ctx.thread_ts, "bypassPermissions"
+                    )
+
+                    # Post notification
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        text="Plan completed - switching to execution mode",
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": ":white_check_mark: *Plan completed!* Automatically switched to bypass mode for execution.\n\n_Use `/mode plan` to return to planning mode if needed._",
+                                },
+                            }
+                        ],
                     )
 
         except Exception as e:
