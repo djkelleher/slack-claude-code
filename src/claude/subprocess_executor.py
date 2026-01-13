@@ -53,6 +53,10 @@ class SubprocessExecutor:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._background_tasks: set[asyncio.Task] = set()  # Keep references to prevent GC
         self.db = db  # Optional database for smart context tracking
+        # Track ExitPlanMode for retry logic
+        self._exit_plan_mode_tool_id: Optional[str] = None
+        self._exit_plan_mode_error_detected: bool = False
+        self._is_retry_after_exit_plan_error: bool = False
 
     async def execute(
         self,
@@ -84,6 +88,11 @@ class SubprocessExecutor:
         """
         # Create log prefix for this session
         log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
+
+        # Reset ExitPlanMode tracking for this execution (except during retry)
+        if not self._is_retry_after_exit_plan_error:
+            self._exit_plan_mode_tool_id = None
+            self._exit_plan_mode_error_detected = False
 
         # Build command
         cmd = [
@@ -234,6 +243,9 @@ class SubprocessExecutor:
                                         )
                                     else:
                                         logger.info(f"{log_prefix}Tool: AskUserQuestion")
+                                elif tool_name == "ExitPlanMode":
+                                    self._exit_plan_mode_tool_id = block.get("id")
+                                    logger.info(f"{log_prefix}Tool: ExitPlanMode")
                                 else:
                                     logger.info(f"{log_prefix}Tool: {tool_name}")
                 elif msg.type == "user" and msg.raw:
@@ -245,6 +257,19 @@ class SubprocessExecutor:
                             is_error = block.get("is_error", False)
                             status = "ERROR" if is_error else "OK"
                             logger.info(f"{log_prefix}Tool result [{tool_use_id}]: {status}")
+
+                            # Detect ExitPlanMode ERROR for immediate retry
+                            if (
+                                is_error
+                                and self._exit_plan_mode_tool_id
+                                and tool_use_id.startswith(self._exit_plan_mode_tool_id[:8])
+                                and permission_mode == "plan"
+                                and not self._is_retry_after_exit_plan_error
+                            ):
+                                logger.warning(
+                                    f"{log_prefix}ExitPlanMode failed - will retry with bypass mode"
+                                )
+                                self._exit_plan_mode_error_detected = True
                 elif msg.type == "init":
                     logger.info(f"{log_prefix}Session initialized: {msg.session_id}")
                 elif msg.type == "error":
@@ -285,6 +310,16 @@ class SubprocessExecutor:
                 if on_chunk:
                     await on_chunk(msg)
 
+                # If ExitPlanMode error detected, terminate early and retry
+                if self._exit_plan_mode_error_detected:
+                    logger.info(f"{log_prefix}Terminating execution to retry without plan mode")
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                    break  # Exit the message processing loop
+
                 if msg.is_final:
                     break
 
@@ -321,6 +356,32 @@ class SubprocessExecutor:
                     on_chunk=on_chunk,
                     permission_mode=permission_mode,
                     db_session_id=db_session_id,
+                    model=model,
+                )
+
+            # Check if ExitPlanMode error detected - retry without plan mode
+            if (
+                self._exit_plan_mode_error_detected
+                and permission_mode == "plan"
+                and not self._is_retry_after_exit_plan_error
+            ):
+                logger.info(
+                    f"{log_prefix}Retrying execution with bypass mode after ExitPlanMode error"
+                )
+
+                # Prevent infinite retry loop
+                self._is_retry_after_exit_plan_error = True
+
+                return await self.execute(
+                    prompt=prompt,
+                    working_directory=working_directory,
+                    session_id=session_id,
+                    resume_session_id=resume_session_id,  # Keep the session
+                    execution_id=execution_id,
+                    on_chunk=on_chunk,
+                    permission_mode="bypassPermissions",  # Switch to bypass mode
+                    db_session_id=db_session_id,
+                    model=model,
                 )
 
             return ExecutionResult(
