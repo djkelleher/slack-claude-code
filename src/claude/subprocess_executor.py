@@ -88,19 +88,20 @@ class SubprocessExecutor:
         Returns:
             ExecutionResult with the command output
         """
+        # Create log prefix for this session
+        log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
+
         # Prevent infinite recursion (max 3 retries)
         MAX_RECURSION_DEPTH = 3
         if _recursion_depth >= MAX_RECURSION_DEPTH:
             logger.error(
-                f"{log_prefix if db_session_id else ''}Max recursion depth ({MAX_RECURSION_DEPTH}) reached, aborting"
+                f"{log_prefix}Max recursion depth ({MAX_RECURSION_DEPTH}) reached, aborting"
             )
             return ExecutionResult(
                 success=False,
                 output="",
                 error=f"Max retry depth ({MAX_RECURSION_DEPTH}) exceeded",
             )
-        # Create log prefix for this session
-        log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
 
         # Reset ExitPlanMode error detection for this execution
         # Always reset these flags so each execution starts fresh

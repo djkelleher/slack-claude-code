@@ -1,6 +1,6 @@
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import aiosqlite
@@ -61,7 +61,7 @@ class DatabaseRepository:
             default_cwd: Default working directory for new sessions
         """
         async with self._transact() as db:
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = datetime.now(timezone.utc).isoformat()
 
             # UPSERT: Insert new session or update existing one's last_active
             # This is atomic and handles concurrent requests properly
@@ -98,7 +98,7 @@ class DatabaseRepository:
                    )""",
                 (
                     cwd,
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
@@ -119,7 +119,7 @@ class DatabaseRepository:
                    )""",
                 (
                     claude_session_id,
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
@@ -139,7 +139,7 @@ class DatabaseRepository:
                        (thread_ts IS NULL AND ? IS NULL)
                    )""",
                 (
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
@@ -160,7 +160,7 @@ class DatabaseRepository:
                    )""",
                 (
                     permission_mode,
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
@@ -181,7 +181,7 @@ class DatabaseRepository:
                    )""",
                 (
                     model,
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
@@ -216,7 +216,7 @@ class DatabaseRepository:
     async def delete_inactive_sessions(self, inactive_days: int = 30) -> int:
         """Delete sessions inactive for N days."""
         async with self._get_connection() as db:
-            cutoff = datetime.utcnow().timestamp() - (inactive_days * 24 * 3600)
+            cutoff = datetime.now(timezone.utc).timestamp() - (inactive_days * 24 * 3600)
             cursor = await db.execute(
                 """DELETE FROM sessions
                    WHERE last_active < datetime(?, 'unixepoch')""",
@@ -255,7 +255,7 @@ class DatabaseRepository:
                     """UPDATE command_history
                        SET status = ?, output = ?, error_message = ?, completed_at = ?
                        WHERE id = ?""",
-                    (status, output, error_message, datetime.utcnow().isoformat(), command_id),
+                    (status, output, error_message, datetime.now(timezone.utc).isoformat(), command_id),
                 )
             else:
                 await db.execute(
@@ -352,7 +352,7 @@ class DatabaseRepository:
                 params.append(status)
                 if status in ("completed", "failed", "cancelled"):
                     updates.append("completed_at = ?")
-                    params.append(datetime.utcnow().isoformat())
+                    params.append(datetime.now(timezone.utc).isoformat())
 
             if results is not None:
                 updates.append("results = ?")
@@ -406,7 +406,7 @@ class DatabaseRepository:
                 """UPDATE parallel_jobs
                    SET status = 'cancelled', completed_at = ?
                    WHERE id = ? AND status IN ('pending', 'running')""",
-                (datetime.utcnow().isoformat(), job_id),
+                (datetime.now(timezone.utc).isoformat(), job_id),
             )
             await db.commit()
             return cursor.rowcount > 0
@@ -466,14 +466,14 @@ class DatabaseRepository:
             if status == "running":
                 await db.execute(
                     "UPDATE queue_items SET status = ?, started_at = ? WHERE id = ?",
-                    (status, datetime.utcnow().isoformat(), item_id),
+                    (status, datetime.now(timezone.utc).isoformat(), item_id),
                 )
             elif status in ("completed", "failed", "cancelled"):
                 await db.execute(
                     """UPDATE queue_items
                        SET status = ?, output = ?, error_message = ?, completed_at = ?
                        WHERE id = ?""",
-                    (status, output, error_message, datetime.utcnow().isoformat(), item_id),
+                    (status, output, error_message, datetime.now(timezone.utc).isoformat(), item_id),
                 )
             else:
                 await db.execute(
@@ -559,7 +559,7 @@ class DatabaseRepository:
                 """UPDATE file_context
                    SET use_count = use_count + 1, last_used = ?
                    WHERE session_id = ? AND file_path = ? AND context_type = ?""",
-                (datetime.utcnow().isoformat(), session_id, file_path, context_type),
+                (datetime.now(timezone.utc).isoformat(), session_id, file_path, context_type),
             )
 
             # If no rows updated, insert new record

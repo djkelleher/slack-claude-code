@@ -41,6 +41,9 @@ class GitService:
         for char in invalid_chars:
             if char in branch_name:
                 raise GitError(f"Branch name contains invalid character: {char}")
+        # Check for leading/trailing slashes or dots
+        if branch_name.startswith("/") or branch_name.endswith("/"):
+            raise GitError("Branch name cannot start or end with '/'")
         if branch_name.startswith(".") or branch_name.endswith("."):
             raise GitError("Branch name cannot start or end with '.'")
         if branch_name.endswith(".lock"):

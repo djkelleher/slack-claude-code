@@ -12,7 +12,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from slack_sdk.web.async_client import AsyncWebClient
@@ -52,7 +52,7 @@ class PendingQuestion:
     questions: list[Question]  # Can have multiple questions
     message_ts: Optional[str] = None
     future: asyncio.Future = field(default=None, repr=False)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     # Collected answers: question_index -> list of selected labels
     answers: dict[int, list[str]] = field(default_factory=dict)
 
@@ -415,9 +415,9 @@ class QuestionManager:
         Returns:
             Number of expired questions cleaned up
         """
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expired = []
 
         for qid, pending in cls._pending.items():

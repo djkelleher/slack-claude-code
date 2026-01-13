@@ -63,9 +63,9 @@ class StreamingMessageState:
 
     def stop_heartbeat(self) -> None:
         """Stop the heartbeat task."""
-        if self._heartbeat_task:
+        if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
-            self._heartbeat_task = None
+        self._heartbeat_task = None
 
     async def _heartbeat_loop(self) -> None:
         """Background task that updates message during idle periods."""

@@ -32,6 +32,7 @@ class ExecutionTimeouts:
     usage_check: int = 30  # usage CLI command timeout
     plan_approval: int = 600  # plan approval timeout (10 min)
     question_wait: int = 600  # question answer timeout (10 min) - prevent hanging on abandoned questions
+    max_questions_per_conversation: int = 10  # maximum question iterations to prevent infinite loops
 
 
 @dataclass
@@ -132,6 +133,7 @@ class Config:
             permission=int(os.getenv("PERMISSION_TIMEOUT", "300")),
             usage_check=int(os.getenv("USAGE_CHECK_TIMEOUT", "30")),
             plan_approval=int(os.getenv("PLAN_APPROVAL_TIMEOUT", "600")),
+            max_questions_per_conversation=int(os.getenv("MAX_QUESTIONS_PER_CONVERSATION", "10")),
         ),
         slack=SlackTimeouts(
             message_update_throttle=float(os.getenv("MESSAGE_UPDATE_THROTTLE", "2.0")),

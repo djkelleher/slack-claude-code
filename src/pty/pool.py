@@ -184,13 +184,13 @@ class PTYSessionPool:
         for session_id in session_ids:
             await cls.remove(session_id)
 
-        if cls._cleanup_task:
+        if cls._cleanup_task and not cls._cleanup_task.done():
             cls._cleanup_task.cancel()
             try:
                 await cls._cleanup_task
             except asyncio.CancelledError:
                 pass
-            cls._cleanup_task = None
+        cls._cleanup_task = None
 
     @classmethod
     async def start_cleanup_loop(cls) -> None:

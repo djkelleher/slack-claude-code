@@ -24,6 +24,7 @@ from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
+from src.question.manager import QuestionManager
 from src.utils.detail_cache import DetailCache
 from src.utils.file_downloader import (
     FileDownloadError,
@@ -286,10 +287,13 @@ async def main():
                 # Build context summary
                 context_lines = []
                 for fc in relevant_files:
-                    # Calculate time ago (all stored times are UTC, no timezone attached)
-                    now_utc = datetime.utcnow()
+                    # Calculate time ago (all stored times are UTC)
+                    now_utc = datetime.now(timezone.utc)
                     # Parse stored ISO timestamp as UTC
-                    last_used_utc = fc.last_used if isinstance(fc.last_used, datetime) else datetime.fromisoformat(str(fc.last_used))
+                    if isinstance(fc.last_used, datetime):
+                        last_used_utc = fc.last_used.replace(tzinfo=timezone.utc) if fc.last_used.tzinfo is None else fc.last_used
+                    else:
+                        last_used_utc = datetime.fromisoformat(str(fc.last_used)).replace(tzinfo=timezone.utc)
                     time_delta = now_utc - last_used_utc
                     if time_delta.total_seconds() < 60:
                         time_str = "just now"
@@ -344,41 +348,44 @@ async def main():
         streaming_state.start_heartbeat()
         pending_question = None  # Track if we detect an AskUserQuestion
 
-        # Import here to avoid circular imports
-        from src.question.manager import QuestionManager
+        # Factory function to create on_chunk callback with proper closures
+        def create_on_chunk_callback(state: StreamingMessageState):
+            async def on_chunk(msg):
+                nonlocal pending_question
 
-        async def on_chunk(msg):
-            nonlocal pending_question
+                # Detect AskUserQuestion tool before updating state
+                if msg.tool_activities:
+                    for tool in msg.tool_activities:
+                        logger.debug(
+                            f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})"
+                        )
+                        if tool.name == "AskUserQuestion" and tool.result is None:
+                            if tool.id not in state.tool_activities:
+                                # Create pending question when we first see the tool
+                                pending_question = await QuestionManager.create_pending_question(
+                                    session_id=str(session.id),
+                                    channel_id=channel_id,
+                                    thread_ts=thread_ts,
+                                    tool_use_id=tool.id,
+                                    tool_input=tool.input,
+                                )
+                                logger.info(
+                                    f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping"
+                                )
 
-            # Detect AskUserQuestion tool before updating state
-            if msg.tool_activities:
-                for tool in msg.tool_activities:
-                    logger.debug(
-                        f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})"
-                    )
-                    if tool.name == "AskUserQuestion" and tool.result is None:
-                        if tool.id not in streaming_state.tool_activities:
-                            # Create pending question when we first see the tool
-                            pending_question = await QuestionManager.create_pending_question(
-                                session_id=str(session.id),
-                                channel_id=channel_id,
-                                thread_ts=thread_ts,
-                                tool_use_id=tool.id,
-                                tool_input=tool.input,
-                            )
-                            logger.info(
-                                f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}"
-                            )
-                        else:
-                            logger.debug(
-                                f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping"
-                            )
+                # Update streaming state
+                content = msg.content if msg.type == "assistant" else ""
+                tools = msg.tool_activities
+                if content or tools:
+                    await state.append_and_update(content or "", tools)
 
-            # Update streaming state
-            content = msg.content if msg.type == "assistant" else ""
-            tools = msg.tool_activities
-            if content or tools:
-                await streaming_state.append_and_update(content or "", tools)
+            return on_chunk
+
+        on_chunk = create_on_chunk_callback(streaming_state)
 
         try:
             result = await executor.execute(
@@ -397,10 +404,10 @@ async def main():
             if result.session_id:
                 await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
-            # Handle AskUserQuestion - loop to handle multiple questions (max 10 to prevent infinite loops)
-            MAX_QUESTIONS = 10
+            # Handle AskUserQuestion - loop to handle multiple questions
             question_count = 0
-            while pending_question and result.session_id and question_count < MAX_QUESTIONS:
+            max_questions = config.timeouts.execution.max_questions_per_conversation
+            while pending_question and result.session_id and question_count < max_questions:
                 question_count += 1
                 logger.info("Claude asked a question, posting to Slack and waiting for response")
 
@@ -469,41 +476,8 @@ async def main():
                     )
                     streaming_state.start_heartbeat()
 
-                    # Update on_chunk to use new streaming state
-                    async def on_chunk(msg):
-                        nonlocal pending_question
-
-                        # Detect AskUserQuestion tool before updating state
-                        if msg.tool_activities:
-                            for tool in msg.tool_activities:
-                                logger.debug(
-                                    f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})"
-                                )
-                                if tool.name == "AskUserQuestion" and tool.result is None:
-                                    if tool.id not in streaming_state.tool_activities:
-                                        # Create pending question when we first see the tool
-                                        pending_question = (
-                                            await QuestionManager.create_pending_question(
-                                                session_id=str(session.id),
-                                                channel_id=channel_id,
-                                                thread_ts=thread_ts,
-                                                tool_use_id=tool.id,
-                                                tool_input=tool.input,
-                                            )
-                                        )
-                                        logger.info(
-                                            f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}"
-                                        )
-                                    else:
-                                        logger.debug(
-                                            f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping"
-                                        )
-
-                        # Update streaming state
-                        content = msg.content if msg.type == "assistant" else ""
-                        tools = msg.tool_activities
-                        if content or tools:
-                            await streaming_state.append_and_update(content or "", tools)
+                    # Create new on_chunk callback for new streaming state
+                    on_chunk = create_on_chunk_callback(streaming_state)
 
                     # Continue the conversation with the user's answer
                     # This will resume the session
@@ -539,13 +513,13 @@ async def main():
                     break
 
             # Check if we hit the question limit
-            if question_count >= MAX_QUESTIONS and pending_question:
+            if question_count >= max_questions and pending_question:
                 logger.warning(
-                    f"Hit maximum question limit ({MAX_QUESTIONS}), stopping question loop"
+                    f"Hit maximum question limit ({max_questions}), stopping question loop"
                 )
                 result.output = (
                     streaming_state.accumulated_output
-                    + f"\n\n_Reached maximum question limit ({MAX_QUESTIONS}). Please start a new conversation._"
+                    + f"\n\n_Reached maximum question limit ({max_questions}). Please start a new conversation._"
                 )
                 result.success = False
 
