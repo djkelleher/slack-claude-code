@@ -89,10 +89,11 @@ class SubprocessExecutor:
         # Create log prefix for this session
         log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
 
-        # Reset ExitPlanMode tracking for this execution (except during retry)
-        if not self._is_retry_after_exit_plan_error:
-            self._exit_plan_mode_tool_id = None
-            self._exit_plan_mode_error_detected = False
+        # Reset ExitPlanMode error detection for this execution
+        # Always reset these flags so each execution starts fresh
+        self._exit_plan_mode_tool_id = None
+        self._exit_plan_mode_error_detected = False
+        # Note: _is_retry_after_exit_plan_error is preserved during retry to prevent infinite loops
 
         # Build command
         cmd = [
@@ -372,7 +373,7 @@ class SubprocessExecutor:
                 # Prevent infinite retry loop
                 self._is_retry_after_exit_plan_error = True
 
-                return await self.execute(
+                result = await self.execute(
                     prompt=prompt,
                     working_directory=working_directory,
                     session_id=session_id,
@@ -383,6 +384,11 @@ class SubprocessExecutor:
                     db_session_id=db_session_id,
                     model=model,
                 )
+
+                # Reset retry flag after completion so future executions work normally
+                self._is_retry_after_exit_plan_error = False
+
+                return result
 
             return ExecutionResult(
                 success=success,

@@ -12,27 +12,27 @@ if TYPE_CHECKING:
     from src.claude.streaming import ToolActivity
 
 
-# Tool icons for Slack display
+# Tool icons for Slack display (disabled - emojis removed)
 TOOL_ICONS = {
-    "Read": ":page_facing_up:",
-    "Edit": ":pencil2:",
-    "Write": ":writing_hand:",
-    "Bash": ":computer:",
-    "Glob": ":mag:",
-    "Grep": ":mag_right:",
-    "WebFetch": ":globe_with_meridians:",
-    "WebSearch": ":mag:",
-    "LSP": ":electric_plug:",
-    "TodoWrite": ":ballot_box_with_check:",
-    "Task": ":robot_face:",
-    "NotebookEdit": ":notebook:",
-    "AskUserQuestion": ":question:",
+    "Read": "",
+    "Edit": "",
+    "Write": "",
+    "Bash": "",
+    "Glob": "",
+    "Grep": "",
+    "WebFetch": "",
+    "WebSearch": "",
+    "LSP": "",
+    "TodoWrite": "",
+    "Task": "",
+    "NotebookEdit": "",
+    "AskUserQuestion": "",
 }
 
 
 def get_tool_icon(tool_name: str) -> str:
     """Get the icon for a tool, with fallback."""
-    return TOOL_ICONS.get(tool_name, ":wrench:")
+    return TOOL_ICONS.get(tool_name, "")
 
 
 def format_tool_inline(tool: "ToolActivity") -> str:
@@ -46,10 +46,11 @@ def format_tool_inline(tool: "ToolActivity") -> str:
     Returns
     -------
     str
-        Formatted string like ":page_facing_up: *Read* `src/app.py`"
+        Formatted string like "*Read* `src/app.py`"
     """
     icon = get_tool_icon(tool.name)
-    base = f"{icon} *{tool.name}*"
+    # Only include icon if it's not empty
+    base = f"{icon} *{tool.name}*" if icon else f"*{tool.name}*"
 
     if tool.input_summary:
         base += f" {tool.input_summary}"
@@ -68,16 +69,16 @@ def format_tool_status(tool: "ToolActivity") -> str:
     Returns
     -------
     str
-        Status string like ":heavy_check_mark: (12ms)" or ":hourglass:"
+        Status string like "OK (12ms)" or "..."
     """
     if tool.result is None and not tool.is_error:
         # Still running
-        return ":hourglass:"
+        return "..."
 
     if tool.is_error:
-        status = ":x:"
+        status = "ERROR"
     else:
-        status = ":heavy_check_mark:"
+        status = "OK"
 
     if tool.duration_ms is not None:
         return f"{status} ({tool.duration_ms}ms)"
@@ -177,12 +178,13 @@ def format_tool_detail_blocks(tool: "ToolActivity") -> list[dict]:
 
     # Header with status
     status_text = format_tool_status(tool)
+    header_text = f"{icon} *{tool.name}* {status_text}" if icon else f"*{tool.name}* {status_text}"
     blocks.append(
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"{icon} *{tool.name}* {status_text}",
+                "text": header_text,
             },
         }
     )
