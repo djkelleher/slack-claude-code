@@ -411,11 +411,12 @@ async def main():
                 except Exception as e:
                     logger.warning(f"Failed to update message: {e}")
 
-                # Post the question to Slack
+                # Post the question to Slack with context from Claude's message
                 await QuestionManager.post_question_to_slack(
                     pending_question,
                     client,
                     deps.db,
+                    context_text=streaming_state.accumulated_output,
                 )
 
                 # Wait for user to answer (no timeout)

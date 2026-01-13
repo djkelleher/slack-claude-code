@@ -157,6 +157,7 @@ class QuestionManager:
         pending: PendingQuestion,
         slack_client: AsyncWebClient,
         db: Optional[DatabaseRepository] = None,
+        context_text: str = "",
     ) -> None:
         """Post the question(s) to Slack with interactive buttons.
 
@@ -164,10 +165,11 @@ class QuestionManager:
             pending: The pending question to post
             slack_client: Slack client for posting
             db: Optional database for notification settings
+            context_text: Optional context text from Claude explaining why they're asking
         """
         from .slack_ui import build_question_blocks
 
-        blocks = build_question_blocks(pending)
+        blocks = build_question_blocks(pending, context_text)
 
         result = await slack_client.chat_postMessage(
             channel=pending.channel_id,

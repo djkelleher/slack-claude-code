@@ -11,11 +11,12 @@ if TYPE_CHECKING:
     from .manager import PendingQuestion, Question
 
 
-def build_question_blocks(pending: "PendingQuestion") -> list[dict]:
+def build_question_blocks(pending: "PendingQuestion", context_text: str = "") -> list[dict]:
     """Build Slack blocks for displaying question(s).
 
     Args:
         pending: The pending question to display
+        context_text: Optional context text from Claude explaining why they're asking
 
     Returns:
         List of Slack Block Kit blocks
@@ -35,6 +36,19 @@ def build_question_blocks(pending: "PendingQuestion") -> list[dict]:
     )
 
     blocks.append({"type": "divider"})
+
+    # Add context text if provided
+    if context_text and context_text.strip():
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": context_text.strip(),
+                },
+            }
+        )
+        blocks.append({"type": "divider"})
 
     # Build blocks for each question
     for i, question in enumerate(pending.questions):
