@@ -52,7 +52,7 @@ class PendingQuestion:
     questions: list[Question]  # Can have multiple questions
     message_ts: Optional[str] = None
     future: asyncio.Future = field(default=None, repr=False)
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=datetime.utcnow)
     # Collected answers: question_index -> list of selected labels
     answers: dict[int, list[str]] = field(default_factory=dict)
 
@@ -295,22 +295,36 @@ class QuestionManager:
     async def wait_for_answer(
         cls,
         question_id: str,
+        timeout: Optional[int] = None,
     ) -> Optional[dict[int, list[str]]]:
-        """Wait for user to answer the question.
+        """Wait for user to answer the question with a timeout.
 
         Args:
             question_id: The question ID
+            timeout: Timeout in seconds (default: 600 = 10 minutes)
 
         Returns:
-            Dict of answers (question_index -> selected labels), or None if cancelled
+            Dict of answers (question_index -> selected labels), or None if cancelled/timed out
         """
+        from ..config import config
+
         pending = cls._pending.get(question_id)
         if not pending:
             return None
 
+        # Use provided timeout or default from config
+        if timeout is None:
+            timeout = config.timeouts.execution.question_wait
+
         try:
-            answers = await pending.future
+            answers = await asyncio.wait_for(pending.future, timeout=timeout)
             return answers
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Question {question_id} timed out after {timeout}s - user did not respond"
+            )
+            return None
 
         except asyncio.CancelledError:
             logger.info(f"Question {question_id} was cancelled")
@@ -388,3 +402,35 @@ class QuestionManager:
     def count_pending(cls) -> int:
         """Get count of pending questions."""
         return len(cls._pending)
+
+    @classmethod
+    def cleanup_expired(cls, max_age_seconds: int = 3600) -> int:
+        """Remove pending questions that have been waiting too long.
+
+        This prevents memory leaks from abandoned questions.
+
+        Args:
+            max_age_seconds: Maximum age in seconds (default: 1 hour)
+
+        Returns:
+            Number of expired questions cleaned up
+        """
+        from datetime import datetime, timedelta
+
+        now = datetime.utcnow()
+        expired = []
+
+        for qid, pending in cls._pending.items():
+            # Calculate age
+            age = now - pending.created_at
+            if age.total_seconds() > max_age_seconds:
+                expired.append(qid)
+                logger.info(
+                    f"Cleaning up expired question {qid} (age: {age.total_seconds():.0f}s)"
+                )
+
+        # Cancel expired questions
+        for qid in expired:
+            cls.cancel(qid)
+
+        return len(expired)

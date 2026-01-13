@@ -69,6 +69,7 @@ class SubprocessExecutor:
         permission_mode: Optional[str] = None,
         db_session_id: Optional[int] = None,
         model: Optional[str] = None,
+        _recursion_depth: int = 0,
     ) -> ExecutionResult:
         """Execute a prompt via Claude Code subprocess.
 
@@ -82,10 +83,22 @@ class SubprocessExecutor:
             permission_mode: Permission mode to use (overrides config default)
             db_session_id: Database session ID for smart context tracking (optional)
             model: Model to use (e.g., "opus", "sonnet", "haiku")
+            _recursion_depth: Internal parameter to track retry depth (max 3)
 
         Returns:
             ExecutionResult with the command output
         """
+        # Prevent infinite recursion (max 3 retries)
+        MAX_RECURSION_DEPTH = 3
+        if _recursion_depth >= MAX_RECURSION_DEPTH:
+            logger.error(
+                f"{log_prefix if db_session_id else ''}Max recursion depth ({MAX_RECURSION_DEPTH}) reached, aborting"
+            )
+            return ExecutionResult(
+                success=False,
+                output="",
+                error=f"Max retry depth ({MAX_RECURSION_DEPTH}) exceeded",
+            )
         # Create log prefix for this session
         log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
 
@@ -351,7 +364,7 @@ class SubprocessExecutor:
                 and "No conversation found with session ID" in (error_msg or "")
             ):
                 logger.info(
-                    f"{log_prefix}Session {resume_session_id} not found, retrying without resume"
+                    f"{log_prefix}Session {resume_session_id} not found, retrying without resume (depth={_recursion_depth + 1})"
                 )
                 return await self.execute(
                     prompt=prompt,
@@ -363,6 +376,7 @@ class SubprocessExecutor:
                     permission_mode=permission_mode,
                     db_session_id=db_session_id,
                     model=model,
+                    _recursion_depth=_recursion_depth + 1,
                 )
 
             # Check if ExitPlanMode error detected - retry without plan mode
@@ -372,7 +386,7 @@ class SubprocessExecutor:
                 and not self._is_retry_after_exit_plan_error
             ):
                 logger.info(
-                    f"{log_prefix}Retrying execution with bypass mode after ExitPlanMode error"
+                    f"{log_prefix}Retrying execution with bypass mode after ExitPlanMode error (depth={_recursion_depth + 1})"
                 )
 
                 # Prevent infinite retry loop
@@ -388,6 +402,7 @@ class SubprocessExecutor:
                     permission_mode="bypassPermissions",  # Switch to bypass mode
                     db_session_id=db_session_id,
                     model=model,
+                    _recursion_depth=_recursion_depth + 1,
                 )
 
                 # Reset retry flag after completion so future executions work normally
@@ -452,7 +467,15 @@ class SubprocessExecutor:
 
         task = asyncio.create_task(_do_track())
         self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+
+        # Ensure task is always removed, even on exception
+        def remove_task(task):
+            try:
+                self._background_tasks.discard(task)
+            except Exception:
+                pass  # Ignore errors during cleanup
+
+        task.add_done_callback(remove_task)
 
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""
@@ -474,7 +497,13 @@ class SubprocessExecutor:
     async def shutdown(self) -> None:
         """Shutdown and cancel all active executions."""
         await self.cancel_all()
-        # Wait for any pending background tasks (file context tracking)
+        # Cancel and wait for any pending background tasks (file context tracking)
         if self._background_tasks:
+            # Cancel all pending tasks
+            for task in self._background_tasks:
+                if not task.done():
+                    task.cancel()
+            # Wait for all tasks to complete or be cancelled
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
+            logger.info(f"Cleaned up background tasks during shutdown")

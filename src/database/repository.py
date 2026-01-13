@@ -52,43 +52,32 @@ class DatabaseRepository:
     ) -> Session:
         """Get existing session for channel/thread or create a new one.
 
-        Uses INSERT OR IGNORE to avoid race conditions when multiple
-        concurrent requests try to create the same session.
+        Uses UPSERT (INSERT ... ON CONFLICT DO UPDATE) for atomic operation
+        that handles concurrent requests safely.
 
         Args:
             channel_id: Slack channel ID
             thread_ts: Slack thread timestamp (None for channel-level session)
             default_cwd: Default working directory for new sessions
         """
-        async with self._get_connection() as db:
-            # Atomic insert-or-ignore (composite UNIQUE constraint handles duplicates)
-            # Apply DEFAULT_MODEL if configured
+        async with self._transact() as db:
+            now_iso = datetime.utcnow().isoformat()
+
+            # UPSERT: Insert new session or update existing one's last_active
+            # This is atomic and handles concurrent requests properly
             await db.execute(
-                """INSERT OR IGNORE INTO sessions (channel_id, thread_ts, working_directory, model)
-                   VALUES (?, ?, ?, ?)""",
-                (channel_id, thread_ts, default_cwd, config.DEFAULT_MODEL),
+                """INSERT INTO sessions (channel_id, thread_ts, working_directory, model, last_active)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(channel_id, thread_ts) DO UPDATE SET
+                       last_active = excluded.last_active""",
+                (channel_id, thread_ts, default_cwd, config.DEFAULT_MODEL, now_iso),
             )
-            # Update last_active timestamp
-            # Handle NULL properly: WHERE clause matches NULL when both are NULL
-            await db.execute(
-                """UPDATE sessions SET last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
-                (
-                    datetime.now().isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
-                ),
-            )
-            await db.commit()
 
             # Fetch the session (guaranteed to exist now)
             cursor = await db.execute(
-                """SELECT * FROM sessions
+                """SELECT id, channel_id, thread_ts, working_directory,
+                          claude_session_id, permission_mode, created_at, last_active, model
+                   FROM sessions
                    WHERE channel_id = ? AND (
                        (thread_ts = ? AND ? IS NOT NULL) OR
                        (thread_ts IS NULL AND ? IS NULL)
@@ -100,7 +89,7 @@ class DatabaseRepository:
 
     async def update_session_cwd(self, channel_id: str, thread_ts: Optional[str], cwd: str) -> None:
         """Update the working directory for a session."""
-        async with self._get_connection() as db:
+        async with self._transact() as db:
             await db.execute(
                 """UPDATE sessions SET working_directory = ?, last_active = ?
                    WHERE channel_id = ? AND (
@@ -109,20 +98,19 @@ class DatabaseRepository:
                    )""",
                 (
                     cwd,
-                    datetime.now().isoformat(),
+                    datetime.utcnow().isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
                     thread_ts,
                 ),
             )
-            await db.commit()
 
     async def update_session_claude_id(
         self, channel_id: str, thread_ts: Optional[str], claude_session_id: str
     ) -> None:
         """Update the Claude session ID for resume functionality."""
-        async with self._get_connection() as db:
+        async with self._transact() as db:
             await db.execute(
                 """UPDATE sessions SET claude_session_id = ?, last_active = ?
                    WHERE channel_id = ? AND (
@@ -131,20 +119,19 @@ class DatabaseRepository:
                    )""",
                 (
                     claude_session_id,
-                    datetime.now().isoformat(),
+                    datetime.utcnow().isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
                     thread_ts,
                 ),
             )
-            await db.commit()
 
     async def clear_session_claude_id(
         self, channel_id: str, thread_ts: Optional[str] = None
     ) -> None:
         """Clear the Claude session ID to start fresh (used by /clear command)."""
-        async with self._get_connection() as db:
+        async with self._transact() as db:
             await db.execute(
                 """UPDATE sessions SET claude_session_id = NULL, last_active = ?
                    WHERE channel_id = ? AND (
@@ -152,20 +139,19 @@ class DatabaseRepository:
                        (thread_ts IS NULL AND ? IS NULL)
                    )""",
                 (
-                    datetime.now().isoformat(),
+                    datetime.utcnow().isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
                     thread_ts,
                 ),
             )
-            await db.commit()
 
     async def update_session_mode(
         self, channel_id: str, thread_ts: Optional[str], permission_mode: str
     ) -> None:
         """Update the permission mode for a session."""
-        async with self._get_connection() as db:
+        async with self._transact() as db:
             await db.execute(
                 """UPDATE sessions SET permission_mode = ?, last_active = ?
                    WHERE channel_id = ? AND (
@@ -174,20 +160,19 @@ class DatabaseRepository:
                    )""",
                 (
                     permission_mode,
-                    datetime.now().isoformat(),
+                    datetime.utcnow().isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
                     thread_ts,
                 ),
             )
-            await db.commit()
 
     async def update_session_model(
         self, channel_id: str, thread_ts: Optional[str], model: str
     ) -> None:
         """Update the model for a session."""
-        async with self._get_connection() as db:
+        async with self._transact() as db:
             await db.execute(
                 """UPDATE sessions SET model = ?, last_active = ?
                    WHERE channel_id = ? AND (
@@ -196,14 +181,13 @@ class DatabaseRepository:
                    )""",
                 (
                     model,
-                    datetime.now().isoformat(),
+                    datetime.utcnow().isoformat(),
                     channel_id,
                     thread_ts,
                     thread_ts,
                     thread_ts,
                 ),
             )
-            await db.commit()
 
     async def get_sessions_by_channel(self, channel_id: str) -> list[Session]:
         """Get all sessions for a channel (channel + all threads)."""
@@ -232,7 +216,7 @@ class DatabaseRepository:
     async def delete_inactive_sessions(self, inactive_days: int = 30) -> int:
         """Delete sessions inactive for N days."""
         async with self._get_connection() as db:
-            cutoff = datetime.now().timestamp() - (inactive_days * 24 * 3600)
+            cutoff = datetime.utcnow().timestamp() - (inactive_days * 24 * 3600)
             cursor = await db.execute(
                 """DELETE FROM sessions
                    WHERE last_active < datetime(?, 'unixepoch')""",
@@ -271,7 +255,7 @@ class DatabaseRepository:
                     """UPDATE command_history
                        SET status = ?, output = ?, error_message = ?, completed_at = ?
                        WHERE id = ?""",
-                    (status, output, error_message, datetime.now().isoformat(), command_id),
+                    (status, output, error_message, datetime.utcnow().isoformat(), command_id),
                 )
             else:
                 await db.execute(
@@ -368,7 +352,7 @@ class DatabaseRepository:
                 params.append(status)
                 if status in ("completed", "failed", "cancelled"):
                     updates.append("completed_at = ?")
-                    params.append(datetime.now().isoformat())
+                    params.append(datetime.utcnow().isoformat())
 
             if results is not None:
                 updates.append("results = ?")
@@ -383,11 +367,10 @@ class DatabaseRepository:
                 params.append(message_ts)
 
             if updates:
+                # Build SQL safely with placeholders
+                sql = "UPDATE parallel_jobs SET " + ", ".join(updates) + " WHERE id = ?"
                 params.append(job_id)
-                await db.execute(
-                    f"UPDATE parallel_jobs SET {', '.join(updates)} WHERE id = ?",
-                    tuple(params),
-                )
+                await db.execute(sql, tuple(params))
                 await db.commit()
 
     async def get_parallel_job(self, job_id: int) -> Optional[ParallelJob]:
@@ -423,7 +406,7 @@ class DatabaseRepository:
                 """UPDATE parallel_jobs
                    SET status = 'cancelled', completed_at = ?
                    WHERE id = ? AND status IN ('pending', 'running')""",
-                (datetime.now().isoformat(), job_id),
+                (datetime.utcnow().isoformat(), job_id),
             )
             await db.commit()
             return cursor.rowcount > 0
@@ -483,14 +466,14 @@ class DatabaseRepository:
             if status == "running":
                 await db.execute(
                     "UPDATE queue_items SET status = ?, started_at = ? WHERE id = ?",
-                    (status, datetime.now().isoformat(), item_id),
+                    (status, datetime.utcnow().isoformat(), item_id),
                 )
             elif status in ("completed", "failed", "cancelled"):
                 await db.execute(
                     """UPDATE queue_items
                        SET status = ?, output = ?, error_message = ?, completed_at = ?
                        WHERE id = ?""",
-                    (status, output, error_message, datetime.now().isoformat(), item_id),
+                    (status, output, error_message, datetime.utcnow().isoformat(), item_id),
                 )
             else:
                 await db.execute(
@@ -576,7 +559,7 @@ class DatabaseRepository:
                 """UPDATE file_context
                    SET use_count = use_count + 1, last_used = ?
                    WHERE session_id = ? AND file_path = ? AND context_type = ?""",
-                (datetime.now().isoformat(), session_id, file_path, context_type),
+                (datetime.utcnow().isoformat(), session_id, file_path, context_type),
             )
 
             # If no rows updated, insert new record

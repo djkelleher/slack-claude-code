@@ -55,6 +55,7 @@ async def post_channel_notification(
     channel_id: str,
     thread_ts: str | None,
     notification_type: str,
+    max_retries: int = 3,
 ) -> None:
     """
     Post a brief notification to the channel (not thread) to trigger Slack sounds and unread badges.
@@ -65,6 +66,7 @@ async def post_channel_notification(
         channel_id: Slack channel ID
         thread_ts: Thread timestamp (for linking)
         notification_type: "completion" or "permission"
+        max_retries: Maximum number of retry attempts (default: 3)
     """
     try:
         settings = await db.get_notification_settings(channel_id)
@@ -87,16 +89,29 @@ async def post_channel_notification(
             else:
                 message = "⚠️ Claude needs permission"
 
-        # Post to channel (NOT to thread) - this triggers sound + unread badge
-        await client.chat_postMessage(
-            channel=channel_id,
-            text=message,
-        )
-        logger.debug(f"Posted {notification_type} notification to channel {channel_id}")
+        # Post to channel with retry logic for transient failures
+        for attempt in range(max_retries):
+            try:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    text=message,
+                )
+                logger.debug(f"Posted {notification_type} notification to channel {channel_id}")
+                return  # Success, exit
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Failed to post channel notification (attempt {attempt + 1}/{max_retries}): {e}"
+                    )
+                    await asyncio.sleep(1.0)  # Brief delay before retry
+                else:
+                    # Final attempt failed
+                    raise
 
     except Exception as e:
-        # Don't fail the main operation if notification fails
-        logger.warning(f"Failed to post channel notification: {e}")
+        # Don't fail the main operation if all notification attempts fail
+        logger.error(f"Failed to post channel notification after {max_retries} attempts: {e}")
 
 
 async def main():
@@ -271,14 +286,10 @@ async def main():
                 # Build context summary
                 context_lines = []
                 for fc in relevant_files:
-                    # Calculate time ago
-                    # Ensure both datetimes are timezone-aware for comparison
-                    now_utc = datetime.now(timezone.utc)
-                    last_used_utc = (
-                        fc.last_used.replace(tzinfo=timezone.utc)
-                        if fc.last_used.tzinfo is None
-                        else fc.last_used
-                    )
+                    # Calculate time ago (all stored times are UTC, no timezone attached)
+                    now_utc = datetime.utcnow()
+                    # Parse stored ISO timestamp as UTC
+                    last_used_utc = fc.last_used if isinstance(fc.last_used, datetime) else datetime.fromisoformat(str(fc.last_used))
                     time_delta = now_utc - last_used_utc
                     if time_delta.total_seconds() < 60:
                         time_str = "just now"
@@ -386,8 +397,11 @@ async def main():
             if result.session_id:
                 await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
-            # Handle AskUserQuestion - loop to handle multiple questions
-            while pending_question and result.session_id:
+            # Handle AskUserQuestion - loop to handle multiple questions (max 10 to prevent infinite loops)
+            MAX_QUESTIONS = 10
+            question_count = 0
+            while pending_question and result.session_id and question_count < MAX_QUESTIONS:
+                question_count += 1
                 logger.info("Claude asked a question, posting to Slack and waiting for response")
 
                 # Update the main message to show Claude is waiting
@@ -523,6 +537,17 @@ async def main():
                     )
                     result.success = False
                     break
+
+            # Check if we hit the question limit
+            if question_count >= MAX_QUESTIONS and pending_question:
+                logger.warning(
+                    f"Hit maximum question limit ({MAX_QUESTIONS}), stopping question loop"
+                )
+                result.output = (
+                    streaming_state.accumulated_output
+                    + f"\n\n_Reached maximum question limit ({MAX_QUESTIONS}). Please start a new conversation._"
+                )
+                result.success = False
 
             # Update command history
             if result.success:

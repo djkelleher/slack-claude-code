@@ -15,12 +15,12 @@ PACKAGE_ROOT = Path(__file__).parent.parent
 class PTYTimeouts:
     """Timeout configuration for PTY sessions."""
 
-    startup: float = 30.0
-    inactivity: float = 10.0
-    idle: int = 1800  # seconds before session cleanup
-    cleanup_interval: int = 60  # seconds between cleanup checks
-    read: float = 0.1  # non-blocking read timeout
-    stop_grace: float = 0.5  # grace period during shutdown
+    startup: float = 30.0  # Max time to wait for PTY startup (30s)
+    inactivity: float = 10.0  # Max inactivity before considering PTY stalled (10s)
+    idle: int = 1800  # Session cleanup after 30 minutes of inactivity
+    cleanup_interval: int = 60  # Run cleanup check every 60 seconds
+    read: float = 0.1  # Non-blocking read timeout (100ms)
+    stop_grace: float = 0.5  # Grace period for graceful shutdown (500ms)
 
 
 @dataclass
@@ -31,31 +31,32 @@ class ExecutionTimeouts:
     permission: int = 300  # permission request timeout
     usage_check: int = 30  # usage CLI command timeout
     plan_approval: int = 600  # plan approval timeout (10 min)
+    question_wait: int = 600  # question answer timeout (10 min) - prevent hanging on abandoned questions
 
 
 @dataclass
 class SlackTimeouts:
     """Timeout configuration for Slack message updates."""
 
-    message_update_throttle: float = 2.0  # min seconds between streaming updates
-    heartbeat_interval: float = 15.0  # seconds between heartbeat updates when idle
-    heartbeat_threshold: float = 20.0  # show "still working" after this many idle seconds
+    message_update_throttle: float = 2.0  # Minimum 2 seconds between streaming updates (avoid rate limits)
+    heartbeat_interval: float = 15.0  # Send "still working" heartbeat every 15 seconds when idle
+    heartbeat_threshold: float = 20.0  # Show "still working" indicator after 20 seconds of no updates
 
 
 @dataclass
 class CacheTimeouts:
     """Cache duration configuration."""
 
-    usage: int = 60  # usage check cache duration
+    usage: int = 60  # Cache usage API checks for 60 seconds (avoid repeated API calls)
 
 
 @dataclass
 class StreamingConfig:
     """Configuration for streaming message updates."""
 
-    max_accumulated_size: int = 500000  # Maximum output buffer (500KB)
-    max_tools_display: int = 10  # Max tools shown in main message
-    tool_thread_threshold: int = 500  # Post tool output to thread if > this chars
+    max_accumulated_size: int = 500000  # Maximum output buffer size (500KB) before truncation
+    max_tools_display: int = 10  # Maximum number of tools to show in main message (prevent UI clutter)
+    tool_thread_threshold: int = 500  # Post tool output to thread if exceeds 500 characters
 
 
 @dataclass
@@ -83,9 +84,9 @@ class Config:
     CLAUDE_PERMISSION_MODE: str = os.getenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
     DEFAULT_MODEL: Optional[str] = os.getenv("DEFAULT_MODEL")  # opus, sonnet, or haiku
 
-    # Slack API limits (block text limit is 3000 chars)
-    SLACK_BLOCK_TEXT_LIMIT: int = 2900  # Leave room for formatting
-    SLACK_FILE_THRESHOLD: int = 2000  # Attach as file if output exceeds this
+    # Slack API limits (block text limit is 3000 chars per Slack API docs)
+    SLACK_BLOCK_TEXT_LIMIT: int = 2900  # Slack max is 3000, use 2900 to leave room for formatting/metadata
+    SLACK_FILE_THRESHOLD: int = 2000  # Attach as file if output exceeds 2000 chars (better UX for large outputs)
 
     # Valid permission modes for Claude Code CLI
     VALID_PERMISSION_MODES: tuple[str, ...] = (
@@ -97,16 +98,16 @@ class Config:
         "plan",
     )
 
-    # Multi-agent workflow
-    PLANNER_MAX_TURNS: int = int(os.getenv("PLANNER_MAX_TURNS", "10"))
-    WORKER_MAX_TURNS: int = int(os.getenv("WORKER_MAX_TURNS", "30"))
-    EVALUATOR_MAX_TURNS: int = int(os.getenv("EVALUATOR_MAX_TURNS", "10"))
+    # Multi-agent workflow turn limits (prevent infinite loops)
+    PLANNER_MAX_TURNS: int = int(os.getenv("PLANNER_MAX_TURNS", "10"))  # Max planning iterations
+    WORKER_MAX_TURNS: int = int(os.getenv("WORKER_MAX_TURNS", "30"))  # Max execution iterations
+    EVALUATOR_MAX_TURNS: int = int(os.getenv("EVALUATOR_MAX_TURNS", "10"))  # Max evaluation iterations
 
-    # Usage budgeting
-    USAGE_THRESHOLD_DAY: float = float(os.getenv("USAGE_THRESHOLD_DAY", "85.0"))
-    USAGE_THRESHOLD_NIGHT: float = float(os.getenv("USAGE_THRESHOLD_NIGHT", "95.0"))
-    NIGHT_START_HOUR: int = int(os.getenv("NIGHT_START_HOUR", "22"))
-    NIGHT_END_HOUR: int = int(os.getenv("NIGHT_END_HOUR", "6"))
+    # Usage budgeting (percentage thresholds to warn/block usage)
+    USAGE_THRESHOLD_DAY: float = float(os.getenv("USAGE_THRESHOLD_DAY", "85.0"))  # Warn at 85% usage during day
+    USAGE_THRESHOLD_NIGHT: float = float(os.getenv("USAGE_THRESHOLD_NIGHT", "95.0"))  # More lenient at night (95%)
+    NIGHT_START_HOUR: int = int(os.getenv("NIGHT_START_HOUR", "22"))  # Night period starts at 10 PM
+    NIGHT_END_HOUR: int = int(os.getenv("NIGHT_END_HOUR", "6"))  # Night period ends at 6 AM
 
     # Permissions
     AUTO_APPROVE_TOOLS: list[str] = (
@@ -114,9 +115,9 @@ class Config:
     )
     ALLOWED_TOOLS: Optional[str] = os.getenv("ALLOWED_TOOLS")  # e.g., "Read,Glob,Grep,Bash(git:*)"
 
-    # File upload configuration
-    MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "10"))
-    MAX_UPLOAD_STORAGE_MB: int = int(os.getenv("MAX_UPLOAD_STORAGE_MB", "100"))
+    # File upload configuration (limits to prevent abuse and disk exhaustion)
+    MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "10"))  # Max single file size (10 MB)
+    MAX_UPLOAD_STORAGE_MB: int = int(os.getenv("MAX_UPLOAD_STORAGE_MB", "100"))  # Max total upload storage (100 MB)
 
     # Centralized timeout configuration
     timeouts: TimeoutConfig = TimeoutConfig(

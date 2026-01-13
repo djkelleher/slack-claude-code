@@ -7,7 +7,8 @@ from typing import Iterator, Optional
 logger = logging.getLogger(__name__)
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
-MAX_BUFFER_SIZE = 10000
+# Increased to 1MB to handle large file reads and tool outputs
+MAX_BUFFER_SIZE = 1024 * 1024  # 1MB
 
 
 @dataclass
@@ -135,9 +136,17 @@ class StreamParser:
             self.buffer += line
             # Prevent unbounded buffer growth
             if len(self.buffer) > MAX_BUFFER_SIZE:
-                logger.warning("Stream buffer overflow, resetting")
+                logger.error(
+                    f"Stream buffer overflow ({len(self.buffer)} bytes exceeds {MAX_BUFFER_SIZE} limit). "
+                    "This may indicate a malformed JSON stream or extremely large output. Resetting buffer."
+                )
+                # Create error message to inform user
                 self.buffer = ""
-                return None
+                return StreamMessage(
+                    type="error",
+                    content=f"Stream buffer overflow: JSON chunk exceeded {MAX_BUFFER_SIZE // 1024}KB limit",
+                    raw={},
+                )
             try:
                 data = json.loads(self.buffer)
                 self.buffer = ""
@@ -181,11 +190,16 @@ class StreamParser:
                         name=tool_name,
                         input=tool_input,
                         input_summary=ToolActivity.create_input_summary(tool_name, tool_input),
-                        started_at=time.time(),
+                        started_at=time.monotonic(),  # Use monotonic time for duration
                     )
                     tool_activities.append(tool_activity)
 
-                    # Track for linking with results
+                    # Track for linking with results (detect collisions)
+                    if tool_id in self.pending_tools:
+                        logger.warning(
+                            f"Tool ID collision detected: {tool_id} already tracked. "
+                            "This may indicate duplicate tool invocations."
+                        )
                     self.pending_tools[tool_id] = tool_activity
 
                     # Include tool use in detailed output
@@ -250,10 +264,10 @@ class StreamParser:
                         tool_activity.result = content_preview
                         tool_activity.full_result = full_content
                         tool_activity.is_error = is_error
-                        # Compute duration
+                        # Compute duration using monotonic time
                         if tool_activity.started_at:
                             tool_activity.duration_ms = int(
-                                (time.time() - tool_activity.started_at) * 1000
+                                (time.monotonic() - tool_activity.started_at) * 1000
                             )
                         tool_activities.append(tool_activity)
                     else:
