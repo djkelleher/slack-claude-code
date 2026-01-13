@@ -643,7 +643,8 @@ NIGHT_END_HOUR=6
 
 # Permissions
 PERMISSION_TIMEOUT=300  # 5 minutes
-AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP  # Comma-separated
+AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP  # Comma-separated list of tools to auto-approve
+ALLOWED_TOOLS=Read,Glob,Grep,LSP,Edit,Write,Bash(git:*)  # Optional: restrict tools Claude can use
 
 # Claude Code Permission Mode
 # approve-all: Auto-approve all file operations (recommended for personal use)

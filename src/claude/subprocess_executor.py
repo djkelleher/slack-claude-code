@@ -118,6 +118,11 @@ class SubprocessExecutor:
             logger.warning(f"{log_prefix}Invalid permission mode: {mode}, using bypassPermissions")
             cmd.extend(["--permission-mode", "bypassPermissions"])
 
+        # Add allowed tools restriction if configured
+        if config.ALLOWED_TOOLS:
+            cmd.extend(["--allowed-tools", config.ALLOWED_TOOLS])
+            logger.info(f"{log_prefix}Using --allowed-tools {config.ALLOWED_TOOLS}")
+
         # In plan mode, inject instructions to ask clarifying questions
         if mode == "plan":
             plan_instructions = (

@@ -114,6 +114,11 @@ class PermissionManager:
         if timeout is None:
             timeout = config.timeouts.execution.permission
 
+        # Check if tool is in auto-approve list
+        if tool_name in config.AUTO_APPROVE_TOOLS:
+            logger.info(f"Auto-approving tool: {tool_name}")
+            return True
+
         approval_id = str(uuid.uuid4())[:8]
 
         approval = PendingApproval(

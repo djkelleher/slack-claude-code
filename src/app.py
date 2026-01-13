@@ -581,13 +581,14 @@ async def main():
                 )
                 # Post response content
                 try:
-                    # Post summary as inline snippet
+                    # Post summary as formatted text (converts markdown to Slack mrkdwn)
                     await post_text_snippet(
                         client=client,
                         channel_id=channel_id,
                         content=file_content,
                         title="📄 Response summary",
                         thread_ts=thread_ts,
+                        format_as_text=True,
                     )
                     # Store detailed output in cache and post button to view it
                     if result.detailed_output and result.detailed_output != output:

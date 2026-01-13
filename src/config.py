@@ -112,6 +112,7 @@ class Config:
     AUTO_APPROVE_TOOLS: list[str] = (
         os.getenv("AUTO_APPROVE_TOOLS", "").split(",") if os.getenv("AUTO_APPROVE_TOOLS") else []
     )
+    ALLOWED_TOOLS: Optional[str] = os.getenv("ALLOWED_TOOLS")  # e.g., "Read,Glob,Grep,Bash(git:*)"
 
     # File upload configuration
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "10"))

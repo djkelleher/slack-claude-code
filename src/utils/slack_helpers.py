@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from src.config import config
 from src.utils.formatting import SlackFormatter
+from src.utils.formatters.markdown import markdown_to_slack_mrkdwn
 
 
 async def post_error(
@@ -180,6 +181,7 @@ async def post_text_snippet(
     content: str,
     title: str,
     thread_ts: Optional[str] = None,
+    format_as_text: bool = False,
 ) -> dict:
     """Post text content as an inline snippet message (no file download needed).
 
@@ -198,24 +200,41 @@ async def post_text_snippet(
         Title/header for the snippet.
     thread_ts : str, optional
         Thread timestamp to post in thread.
+    format_as_text : bool, optional
+        If True, formats markdown as Slack mrkdwn instead of code blocks.
+        Converts headers, bold, bullets, etc. Default is False (code block).
 
     Returns
     -------
     dict
         The Slack API response from the last message posted.
     """
-    # If content is small enough, post as single message with code block
+    # Convert markdown to Slack mrkdwn if format_as_text is True
+    if format_as_text:
+        content = markdown_to_slack_mrkdwn(content)
+
+    # If content is small enough, post as single message
     if len(content) <= config.SLACK_BLOCK_TEXT_LIMIT:
-        blocks = [
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*{title}*"},
-            },
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"```{content}```"},
-            },
-        ]
+        if format_as_text:
+            # Format as text without code block
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{title}*\n\n{content}"},
+                },
+            ]
+        else:
+            # Format as code block
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{title}*"},
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"```{content}```"},
+                },
+            ]
 
         kwargs = {
             "channel": channel_id,
@@ -231,8 +250,9 @@ async def post_text_snippet(
     chunks = []
     remaining = content
     while remaining:
-        # Account for ``` markers (6 chars)
-        chunk_size = config.SLACK_BLOCK_TEXT_LIMIT - 6
+        # Account for ``` markers (6 chars) if using code blocks
+        overhead = 0 if format_as_text else 6
+        chunk_size = config.SLACK_BLOCK_TEXT_LIMIT - overhead
         if len(remaining) <= chunk_size:
             chunks.append(remaining)
             break
@@ -249,30 +269,53 @@ async def post_text_snippet(
     for i, chunk in enumerate(chunks):
         if i == 0:
             # First message includes title
-            blocks = [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*{title}* (part {i+1}/{len(chunks)})",
+            if format_as_text:
+                blocks = [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*{title}* (part {i+1}/{len(chunks)})\n\n{chunk}",
+                        },
                     },
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
-                },
-            ]
+                ]
+            else:
+                blocks = [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*{title}* (part {i+1}/{len(chunks)})",
+                        },
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
+                    },
+                ]
         else:
-            blocks = [
-                {
-                    "type": "context",
-                    "elements": [{"type": "mrkdwn", "text": f"_continued ({i+1}/{len(chunks)})_"}],
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
-                },
-            ]
+            if format_as_text:
+                blocks = [
+                    {
+                        "type": "context",
+                        "elements": [{"type": "mrkdwn", "text": f"_continued ({i+1}/{len(chunks)})_"}],
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": chunk},
+                    },
+                ]
+            else:
+                blocks = [
+                    {
+                        "type": "context",
+                        "elements": [{"type": "mrkdwn", "text": f"_continued ({i+1}/{len(chunks)})_"}],
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
+                    },
+                ]
 
         kwargs = {
             "channel": channel_id,
