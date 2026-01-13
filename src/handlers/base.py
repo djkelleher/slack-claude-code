@@ -82,7 +82,7 @@ class HandlerDependencies:
         """Get or create the MultiAgentOrchestrator (thread-safe)."""
         with self._init_lock:
             if self._orchestrator is None:
-                from src.agents.orchestrator import MultiAgentOrchestrator
+                from src.agents import MultiAgentOrchestrator
 
                 self._orchestrator = MultiAgentOrchestrator(self.executor)
             return self._orchestrator
@@ -92,7 +92,7 @@ class HandlerDependencies:
         """Get or create the UsageChecker (thread-safe)."""
         with self._init_lock:
             if self._usage_checker is None:
-                from src.budget.checker import UsageChecker
+                from src.budget import UsageChecker
 
                 self._usage_checker = UsageChecker()
             return self._usage_checker
@@ -102,7 +102,7 @@ class HandlerDependencies:
         """Get or create the BudgetScheduler (thread-safe)."""
         with self._init_lock:
             if self._budget_scheduler is None:
-                from src.budget.scheduler import BudgetScheduler
+                from src.budget import BudgetScheduler
 
                 self._budget_scheduler = BudgetScheduler()
             return self._budget_scheduler
