@@ -321,8 +321,14 @@ class SubprocessExecutor:
                     # Get final accumulated detailed output
                     if msg.detailed_content:
                         accumulated_detailed = msg.detailed_content
+                    # Check for errors in result message (e.g., session not found)
+                    if msg.raw and msg.raw.get("is_error"):
+                        errors = msg.raw.get("errors", [])
+                        if errors:
+                            error_msg = "; ".join(errors)
+                            logger.warning(f"{log_prefix}Result contains errors: {error_msg}")
 
-                # Track errors
+                # Track errors from error-type messages
                 if msg.type == "error":
                     error_msg = msg.content
 
