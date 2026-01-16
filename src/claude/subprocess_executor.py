@@ -145,8 +145,8 @@ class SubprocessExecutor:
                 "have gathered enough information from the user about their requirements, preferences, "
                 "and constraints. Ask 2-4 focused questions to understand the scope and approach."
             )
-            cmd.extend(["--append-system-prompt", plan_instructions])
-            logger.info(f"{log_prefix}Added plan mode question instructions")
+            #cmd.extend(["--append-system-prompt", plan_instructions])
+            #logger.info(f"{log_prefix}Added plan mode question instructions")
 
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):

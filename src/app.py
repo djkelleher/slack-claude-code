@@ -560,6 +560,9 @@ async def main():
                         ],
                     )
 
+            # Stop heartbeat before sending final response
+            streaming_state.stop_heartbeat()
+
             # Send final response
             output = result.output or result.error or "No output"
 
