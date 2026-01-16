@@ -7,12 +7,14 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional, Tuple
 
 from ..config import config
 from .streaming import StreamMessage, StreamParser
 
 if TYPE_CHECKING:
+    from ..budget.checker import UsageChecker
+    from ..budget.scheduler import BudgetScheduler
     from ..database.repository import DatabaseRepository
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,7 @@ class ExecutionResult:
     cost_usd: Optional[float] = None
     duration_ms: Optional[int] = None
     was_cancelled: bool = False
+    budget_exceeded: bool = False
 
 
 class SubprocessExecutor:
@@ -42,21 +45,74 @@ class SubprocessExecutor:
 
     Uses `claude -p --output-format stream-json` for reliable non-interactive execution.
     Supports session resume via --resume flag.
+
+    Optionally enforces budget limits via UsageChecker and BudgetScheduler.
+    When budget enforcement is enabled, execution will be blocked if usage
+    exceeds the configured threshold (day vs night thresholds apply).
     """
 
     def __init__(
         self,
         timeout: int = None,
         db: Optional["DatabaseRepository"] = None,
+        usage_checker: Optional["UsageChecker"] = None,
+        budget_scheduler: Optional["BudgetScheduler"] = None,
     ) -> None:
         self.timeout = timeout or config.timeouts.execution.command
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._background_tasks: set[asyncio.Task] = set()  # Keep references to prevent GC
         self.db = db  # Optional database for smart context tracking
+        self._usage_checker = usage_checker
+        self._budget_scheduler = budget_scheduler
         # Track ExitPlanMode for retry logic
         self._exit_plan_mode_tool_id: Optional[str] = None
         self._exit_plan_mode_error_detected: bool = False
         self._is_retry_after_exit_plan_error: bool = False
+
+    async def _check_budget(self) -> Tuple[bool, str]:
+        """Check if execution should be blocked due to budget limits.
+
+        Returns:
+            Tuple of (should_block, reason). If should_block is True,
+            execution should not proceed and reason explains why.
+        """
+        if self._usage_checker is None or self._budget_scheduler is None:
+            return False, ""
+
+        try:
+            snapshot = await self._usage_checker.get_usage()
+            should_pause, reason = self._budget_scheduler.should_pause_for_usage(
+                snapshot.usage_percent
+            )
+
+            if should_pause:
+                reset_info = ""
+                if snapshot.reset_time:
+                    reset_info = f" Resets at {snapshot.reset_time.strftime('%H:%M')}."
+                return True, f"{reason}.{reset_info}"
+
+            return False, ""
+
+        except Exception as e:
+            logger.warning(f"Budget check failed, allowing execution: {e}")
+            return False, ""
+
+    def set_budget_enforcement(
+        self,
+        usage_checker: "UsageChecker",
+        budget_scheduler: "BudgetScheduler",
+    ) -> None:
+        """Enable budget enforcement after initialization.
+
+        Parameters
+        ----------
+        usage_checker : UsageChecker
+            Checker for current usage percentage.
+        budget_scheduler : BudgetScheduler
+            Scheduler for time-aware thresholds.
+        """
+        self._usage_checker = usage_checker
+        self._budget_scheduler = budget_scheduler
 
     async def execute(
         self,
@@ -102,6 +158,18 @@ class SubprocessExecutor:
                 output="",
                 error=f"Max retry depth ({MAX_RECURSION_DEPTH}) exceeded",
             )
+
+        # Check budget before execution (only on first attempt, not retries)
+        if _recursion_depth == 0:
+            should_block, reason = await self._check_budget()
+            if should_block:
+                logger.info(f"{log_prefix}Execution blocked due to budget: {reason}")
+                return ExecutionResult(
+                    success=False,
+                    output="",
+                    error=reason,
+                    budget_exceeded=True,
+                )
 
         # Reset ExitPlanMode error detection for this execution
         # Always reset these flags so each execution starts fresh
