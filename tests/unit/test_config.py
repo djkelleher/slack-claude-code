@@ -11,6 +11,7 @@ from src.config import (
     SlackTimeouts,
     CacheTimeouts,
     StreamingConfig,
+    DisplayConfig,
     TimeoutConfig,
     config,
 )
@@ -105,6 +106,36 @@ class TestCacheTimeouts:
         assert timeouts.usage == 120
 
 
+class TestDisplayConfig:
+    """Tests for DisplayConfig dataclass."""
+
+    def test_default_values(self):
+        """DisplayConfig has correct defaults."""
+        display = DisplayConfig()
+
+        assert display.truncate_path_length == 45
+        assert display.truncate_cmd_length == 50
+        assert display.truncate_pattern_length == 40
+        assert display.truncate_url_length == 50
+        assert display.truncate_text_length == 40
+
+    def test_custom_values(self):
+        """DisplayConfig accepts custom values."""
+        display = DisplayConfig(
+            truncate_path_length=60,
+            truncate_cmd_length=80,
+            truncate_pattern_length=50,
+            truncate_url_length=70,
+            truncate_text_length=55,
+        )
+
+        assert display.truncate_path_length == 60
+        assert display.truncate_cmd_length == 80
+        assert display.truncate_pattern_length == 50
+        assert display.truncate_url_length == 70
+        assert display.truncate_text_length == 55
+
+
 class TestTimeoutConfig:
     """Tests for TimeoutConfig dataclass."""
 
@@ -116,6 +147,7 @@ class TestTimeoutConfig:
             slack=SlackTimeouts(),
             cache=CacheTimeouts(),
             streaming=StreamingConfig(),
+            display=DisplayConfig(),
         )
 
         # Access nested values
@@ -124,6 +156,7 @@ class TestTimeoutConfig:
         assert timeout_config.slack.message_update_throttle == 2.0
         assert timeout_config.cache.usage == 60
         assert timeout_config.streaming.max_accumulated_size == 500000
+        assert timeout_config.display.truncate_path_length == 45
 
 
 class TestConfig:
@@ -203,6 +236,7 @@ class TestEnvironmentVariableOverrides:
                 usage=int(os.getenv("USAGE_CACHE_DURATION", "60")),
             ),
             streaming=StreamingConfig(),
+            display=DisplayConfig(),
         )
 
         # Environment values should be used when set

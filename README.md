@@ -78,7 +78,6 @@ poetry install
    | Command | Description |
    |---------|-------------|
    | `/c` | Run a Claude Code command |
-   | `/plan` | Plan mode - review implementation plan before execution |
    | `/ls` | List directory contents (shows cwd when no argument) |
    | `/cd` | Change working directory (supports relative paths) |
    | `/pwd` | Print current working directory |
@@ -104,7 +103,8 @@ poetry install
    | `/claude-config` | Show Claude Code config |
    | `/context` | Visualize context usage |
    | `/model` | Show or change AI model |
-   | `/mode` | View or set permission mode (bypass, accept, plan, ask, default, delegate) |
+   | `/mode` | View or set permission mode (bypassPermissions, acceptEdits, plan, dontAsk, default, delegate) |
+   | `/notifications` | Configure channel notification settings |
    | `/resume` | Resume a previous session |
    | `/init` | Initialize project with CLAUDE.md |
    | `/memory` | Edit CLAUDE.md memory files |
@@ -307,12 +307,43 @@ Shows all sessions for the current channel:
 
 Removes sessions that haven't been used in 30+ days to free up resources.
 
+### Channel Notifications
+
+Configure when to receive channel-level alerts (which trigger Slack sounds and unread badges):
+
+```
+/notifications
+```
+
+Shows current notification settings.
+
+```
+/notifications on
+/notifications off
+```
+
+Enable or disable all notifications.
+
+```
+/notifications completion on|off
+/notifications permission on|off
+```
+
+Configure specific notification types:
+- **completion**: Alert when Claude finishes a task
+- **permission**: Alert when Claude needs approval
+
 ### Plan Mode
 
 Use plan mode when you want to review Claude's implementation plan before execution:
 
 ```
-/plan Add a new API endpoint for user authentication
+/mode plan
+```
+
+Then send your request as a normal message:
+```
+Add a new API endpoint for user authentication
 ```
 
 How it works:
@@ -543,7 +574,7 @@ slack-claude-code/
 │   │   └── manager.py      # Task lifecycle and tracking
 │   ├── handlers/           # Slack event handlers
 │   │   ├── base.py         # Command decorator and context
-│   │   ├── basic.py        # /c, /ls, /cd commands
+│   │   ├── basic.py        # /c, /ls, /cd, /pwd commands
 │   │   ├── queue.py        # /q, /qv, /qc, /qr commands
 │   │   ├── claude_cli.py   # Claude CLI passthrough commands
 │   │   ├── git.py          # /diff, /status, /commit, /branch commands
@@ -552,8 +583,12 @@ slack-claude-code/
 │   │   ├── budget.py       # /usage and /budget commands
 │   │   ├── parallel.py     # /st, /cc commands
 │   │   ├── pty.py          # /pty command
-│   │   ├── plan.py         # /plan command
+│   │   ├── mode.py         # /mode command
+│   │   ├── notifications.py # /notifications command
 │   │   └── actions.py      # Button interactions
+│   ├── question/           # AskUserQuestion tool support
+│   │   ├── manager.py      # QuestionManager for handling questions
+│   │   └── slack_ui.py     # Question UI blocks
 │   └── utils/              # Helpers
 │       ├── formatting.py   # Slack Block Kit
 │       ├── formatters/     # Specialized formatters
@@ -561,11 +596,13 @@ slack-claude-code/
 │       │   ├── command.py      # Command output formatting
 │       │   ├── directory.py    # Directory listing formatting
 │       │   ├── job.py          # Job status formatting
+│       │   ├── markdown.py     # Markdown formatting
 │       │   ├── plan.py         # Plan output formatting
 │       │   ├── queue.py        # Queue status formatting
 │       │   ├── session.py      # Session list formatting
 │       │   ├── streaming.py    # Streaming output formatting
 │       │   └── tool_blocks.py  # Tool usage block formatting
+│       ├── detail_cache.py     # Cache for detailed output views
 │       ├── file_downloader.py  # Slack file download service
 │       ├── slack_helpers.py    # Slack API utilities
 │       ├── streaming.py        # Output streaming utilities
