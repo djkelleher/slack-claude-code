@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass
 from typing import Iterator, Optional
 
+from src.config import config
+
 logger = logging.getLogger(__name__)
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
@@ -31,37 +33,43 @@ class ToolActivity:
     @classmethod
     def create_input_summary(cls, name: str, input_dict: dict) -> str:
         """Create a short summary of tool input for inline display."""
+        display = config.timeouts.display
         if name == "Read":
             path = input_dict.get("file_path", "?")
-            return f"`{cls._truncate_path(path)}`"
+            return f"`{cls._truncate_path(path, display.truncate_path_length)}`"
         elif name == "Edit":
             path = input_dict.get("file_path", "?")
-            return f"`{cls._truncate_path(path)}`"
+            return f"`{cls._truncate_path(path, display.truncate_path_length)}`"
         elif name == "Write":
             path = input_dict.get("file_path", "?")
-            return f"`{cls._truncate_path(path)}`"
+            return f"`{cls._truncate_path(path, display.truncate_path_length)}`"
         elif name == "Bash":
             cmd = input_dict.get("command", "?")
-            return f"`{cls._truncate_cmd(cmd)}`"
+            return f"`{cls._truncate_cmd(cmd, display.truncate_cmd_length)}`"
         elif name == "Glob":
             pattern = input_dict.get("pattern", "?")
-            return f"`{pattern[:40]}{'...' if len(pattern) > 40 else ''}`"
+            max_len = display.truncate_pattern_length
+            return f"`{pattern[:max_len]}{'...' if len(pattern) > max_len else ''}`"
         elif name == "Grep":
             pattern = input_dict.get("pattern", "?")
-            return f"`{pattern[:40]}{'...' if len(pattern) > 40 else ''}`"
+            max_len = display.truncate_pattern_length
+            return f"`{pattern[:max_len]}{'...' if len(pattern) > max_len else ''}`"
         elif name == "Task":
             desc = input_dict.get("description", input_dict.get("prompt", "?"))
-            return f"`{desc[:40]}{'...' if len(str(desc)) > 40 else ''}`"
+            max_len = display.truncate_text_length
+            return f"`{desc[:max_len]}{'...' if len(str(desc)) > max_len else ''}`"
         elif name == "WebFetch":
             url = input_dict.get("url", "?")
-            return f"`{url[:50]}{'...' if len(url) > 50 else ''}`"
+            max_len = display.truncate_url_length
+            return f"`{url[:max_len]}{'...' if len(url) > max_len else ''}`"
         elif name == "WebSearch":
             query = input_dict.get("query", "?")
-            return f"`{query[:40]}{'...' if len(query) > 40 else ''}`"
+            max_len = display.truncate_text_length
+            return f"`{query[:max_len]}{'...' if len(query) > max_len else ''}`"
         elif name == "LSP":
             op = input_dict.get("operation", "?")
             path = input_dict.get("filePath", "?")
-            return f"`{op}` on `{cls._truncate_path(path)}`"
+            return f"`{op}` on `{cls._truncate_path(path, display.truncate_path_length)}`"
         elif name == "TodoWrite":
             todos = input_dict.get("todos", [])
             return f"`{len(todos)} items`"
@@ -69,7 +77,8 @@ class ToolActivity:
             questions = input_dict.get("questions", [])
             if questions:
                 first_q = questions[0].get("question", "?")
-                return f"`{first_q[:40]}{'...' if len(first_q) > 40 else ''}`"
+                max_len = display.truncate_text_length
+                return f"`{first_q[:max_len]}{'...' if len(first_q) > max_len else ''}`"
             return ""
         else:
             # Generic summary

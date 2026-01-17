@@ -61,6 +61,17 @@ class StreamingConfig:
 
 
 @dataclass
+class DisplayConfig:
+    """Configuration for tool activity display truncation."""
+
+    truncate_path_length: int = 45  # Max length for file paths in tool summaries
+    truncate_cmd_length: int = 50  # Max length for bash commands in tool summaries
+    truncate_pattern_length: int = 40  # Max length for glob/grep patterns in tool summaries
+    truncate_url_length: int = 50  # Max length for URLs in tool summaries
+    truncate_text_length: int = 40  # Max length for generic text (descriptions, queries)
+
+
+@dataclass
 class TimeoutConfig:
     """Centralized timeout configuration."""
 
@@ -69,6 +80,7 @@ class TimeoutConfig:
     slack: SlackTimeouts
     cache: CacheTimeouts
     streaming: StreamingConfig
+    display: DisplayConfig
 
 
 class Config:
@@ -146,6 +158,13 @@ class Config:
             max_accumulated_size=int(os.getenv("MAX_ACCUMULATED_SIZE", "500000")),
             max_tools_display=int(os.getenv("MAX_TOOLS_DISPLAY", "10")),
             tool_thread_threshold=int(os.getenv("TOOL_THREAD_THRESHOLD", "500")),
+        ),
+        display=DisplayConfig(
+            truncate_path_length=int(os.getenv("TRUNCATE_PATH_LENGTH", "45")),
+            truncate_cmd_length=int(os.getenv("TRUNCATE_CMD_LENGTH", "50")),
+            truncate_pattern_length=int(os.getenv("TRUNCATE_PATTERN_LENGTH", "40")),
+            truncate_url_length=int(os.getenv("TRUNCATE_URL_LENGTH", "50")),
+            truncate_text_length=int(os.getenv("TRUNCATE_TEXT_LENGTH", "40")),
         ),
     )
 
