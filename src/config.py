@@ -105,6 +105,7 @@ class Config:
     EVALUATOR_MAX_TURNS: int = int(os.getenv("EVALUATOR_MAX_TURNS", "10"))  # Max evaluation iterations
 
     # Usage budgeting (percentage thresholds to warn/block usage)
+    BUDGET_ENABLED: bool = os.getenv("BUDGET_ENABLED", "false").lower() in ("true", "1", "yes")
     USAGE_THRESHOLD_DAY: float = float(os.getenv("USAGE_THRESHOLD_DAY", "85.0"))  # Warn at 85% usage during day
     USAGE_THRESHOLD_NIGHT: float = float(os.getenv("USAGE_THRESHOLD_NIGHT", "95.0"))  # More lenient at night (95%)
     NIGHT_START_HOUR: int = int(os.getenv("NIGHT_START_HOUR", "22"))  # Night period starts at 10 PM

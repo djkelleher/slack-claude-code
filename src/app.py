@@ -133,8 +133,16 @@ async def main():
 
     # Create app components
     db = DatabaseRepository(config.DATABASE_PATH)
-    usage_checker = UsageChecker()
-    budget_scheduler = BudgetScheduler()
+
+    # Budget enforcement (disabled by default)
+    if config.BUDGET_ENABLED:
+        usage_checker = UsageChecker()
+        budget_scheduler = BudgetScheduler()
+        logger.info("Budget enforcement enabled")
+    else:
+        usage_checker = None
+        budget_scheduler = None
+
     executor = SubprocessExecutor(
         db=db,
         usage_checker=usage_checker,
@@ -409,7 +417,7 @@ async def main():
             )
 
             # Handle budget exceeded - show friendly message with usage info
-            if result.budget_exceeded:
+            if result.budget_exceeded and budget_scheduler:
                 streaming_state.stop_heartbeat()
                 await deps.db.update_command_status(
                     cmd_history.id, "failed", error_message=result.error
