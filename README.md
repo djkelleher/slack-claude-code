@@ -1,6 +1,48 @@
 # Slack Claude Code Bot
 
-A Slack app that allows you to run Claude Code CLI commands from Slack. Each channel and thread represents a separate session, with persistent PTY-based sessions, thread-based contexts, file upload support, smart context management, git integration, multi-agent workflows, and permission approval via Slack buttons.
+**Just like Claude Code terminal, but in Slack!**
+
+Access Claude Code remotely from your phone or any device while you're out and about—or use it full-time for an improved user experience. All Claude Code terminal commands work the same way in Slack.
+
+## Why Use Slack Instead of Terminal?
+
+### Remote Access
+Run Claude Code on your laptop or server from anywhere. Start a task from your phone while commuting, check on progress from a tablet, or continue work from any device with Slack.
+
+### Better Output Formatting & Navigability
+Slack's rich UI provides a superior experience over terminal output:
+
+| Feature | Terminal | Slack |
+|---------|----------|-------|
+| **Code blocks** | Plain text | Syntax-highlighted with copy button |
+| **Long output** | Scrolls off screen | "View Details" button opens modal |
+| **Tool activity** | Streams by | Collapsible sections with status icons |
+| **Permissions** | Y/n prompts | Approve/Deny buttons |
+| **Questions** | Text input | Clickable option buttons + custom input |
+| **Command history** | Scroll up | Rerun button on every response |
+| **Parallel work** | Multiple terminals | Threads with isolated sessions |
+| **File sharing** | `cat` or copy-paste | Drag & drop with preview |
+| **Notifications** | Watch the terminal | Slack alerts when tasks complete |
+
+### 1:1 Command Mapping
+Every Claude Code terminal command works in Slack:
+- `/clear`, `/compact`, `/cost` — session management
+- `/model`, `/mode`, `/permissions` — configuration
+- `/add-dir`, `/init`, `/memory` — context management
+- `/review`, `/doctor`, `/stats` — utilities
+- Plus filesystem (`/ls`, `/cd`, `/pwd`) and git (`/status`, `/diff`, `/commit`, `/branch`)
+
+### Rich Interactive Elements
+- **Buttons**: Approve/deny permissions, rerun commands, cancel jobs, select models
+- **Modals**: View full output, tool details, parallel job results
+- **Checkboxes**: Multi-select answers for Claude's questions
+- **Text input**: Custom responses in modal dialogs
+- **Threads**: Independent sessions per conversation
+- **File uploads**: Drag & drop images, code, PDFs—Claude sees them instantly
+- **Streaming updates**: Watch Claude work with real-time tool activity
+- **Smart notifications**: Get pinged when tasks finish or need approval
+
+---
 
 ## Features
 
