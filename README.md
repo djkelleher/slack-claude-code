@@ -37,6 +37,8 @@ Go to https://api.slack.com/apps → "Create New App" → "From scratch"
 
 **Event Subscriptions**: Enable and add `message.channels`, `app_mention`
 
+**App Icon**: In "Basic Information" → "Display Information", upload `claude_logo.png` from this repo as the app icon
+
 **Slash Commands** (optional): Create commands like `/clear`, `/model`, `/ls`, `/cd`, `/status`, `/diff`, etc.
 
 ### 3. Configure and run
