@@ -2,7 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from src.config import config
 from src.utils.formatting import SlackFormatter
@@ -45,9 +45,9 @@ class StreamingMessageState:
     accumulated_output: str = ""
     last_update_time: float = field(default=0.0)
     last_activity_time: float = field(default=0.0)
-    tool_activities: dict = field(default_factory=dict)
+    tool_activities: dict[str, "ToolActivity"] = field(default_factory=dict)
     _last_chunk_was_newline: bool = field(default=False)
-    _heartbeat_task: asyncio.Task = field(default=None, repr=False)
+    _heartbeat_task: Optional[asyncio.Task] = field(default=None, repr=False)
     _is_idle: bool = field(default=False)
 
     def get_tool_list(self) -> list["ToolActivity"]:

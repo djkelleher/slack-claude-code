@@ -45,76 +45,6 @@ CREATE TABLE IF NOT EXISTS parallel_jobs (
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
--- PTY sessions tracking (UNUSED: currently tracked in-memory by PTYSessionPool)
--- Reserved for future persistence feature
-CREATE TABLE IF NOT EXISTS pty_sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT UNIQUE NOT NULL,
-    channel_id TEXT NOT NULL,
-    working_directory TEXT,
-    state TEXT DEFAULT 'idle',
-    pid INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_activity TIMESTAMP
-);
-
--- Agent tasks for multi-agent workflow (UNUSED: currently tracked in-memory by MultiAgentOrchestrator)
--- Reserved for future persistence feature
-CREATE TABLE IF NOT EXISTS agent_tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER NOT NULL,
-    channel_id TEXT NOT NULL,
-    description TEXT NOT NULL,
-    priority TEXT DEFAULT 'thought',
-    status TEXT DEFAULT 'pending',
-    plan_output TEXT,
-    work_output TEXT,
-    eval_output TEXT,
-    eval_status TEXT,
-    slack_thread_ts TEXT,
-    message_ts TEXT,
-    turn_count INTEGER DEFAULT 0,
-    max_turns INTEGER DEFAULT 50,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    error_message TEXT,
-    FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-
--- Agent turn tracking (UNUSED: reserved for future cost/history tracking)
-CREATE TABLE IF NOT EXISTS agent_turns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id INTEGER NOT NULL,
-    agent_role TEXT NOT NULL,
-    turn_number INTEGER NOT NULL,
-    input_prompt TEXT,
-    output_text TEXT,
-    tool_calls TEXT,
-    cost_usd REAL,
-    duration_ms INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (task_id) REFERENCES agent_tasks(id)
-);
-
--- Permission requests (UNUSED: currently tracked in-memory by PermissionManager)
--- Reserved for future audit/history feature
-CREATE TABLE IF NOT EXISTS permission_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    approval_id TEXT UNIQUE NOT NULL,
-    session_id TEXT NOT NULL,
-    channel_id TEXT NOT NULL,
-    thread_ts TEXT,
-    user_id TEXT,
-    tool_name TEXT NOT NULL,
-    tool_input TEXT,
-    status TEXT DEFAULT 'pending',
-    message_ts TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    resolved_at TIMESTAMP,
-    resolved_by TEXT
-);
-
 -- Usage snapshots
 CREATE TABLE IF NOT EXISTS usage_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,17 +64,6 @@ CREATE TABLE IF NOT EXISTS budget_config (
     night_end_hour INTEGER DEFAULT 6,
     pause_on_threshold INTEGER DEFAULT 1,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Hook events log (UNUSED: reserved for future event audit trail)
-CREATE TABLE IF NOT EXISTS hook_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_type TEXT NOT NULL,
-    session_id TEXT,
-    channel_id TEXT,
-    event_data TEXT,
-    handler_results TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Queue items for FIFO command queue
@@ -224,12 +143,6 @@ CREATE INDEX IF NOT EXISTS idx_history_session ON command_history(session_id);
 CREATE INDEX IF NOT EXISTS idx_history_created ON command_history(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_session ON parallel_jobs(session_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON parallel_jobs(status);
-CREATE INDEX IF NOT EXISTS idx_pty_sessions_channel ON pty_sessions(channel_id);
-CREATE INDEX IF NOT EXISTS idx_pty_sessions_state ON pty_sessions(state);
-CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
-CREATE INDEX IF NOT EXISTS idx_agent_tasks_channel ON agent_tasks(channel_id);
-CREATE INDEX IF NOT EXISTS idx_permission_requests_status ON permission_requests(status);
-CREATE INDEX IF NOT EXISTS idx_hook_events_type ON hook_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_queue_items_status ON queue_items(status);
 CREATE INDEX IF NOT EXISTS idx_queue_items_channel ON queue_items(channel_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_position ON queue_items(channel_id, position);
@@ -283,13 +196,8 @@ async def reset_database(db_path: str) -> None:
             DROP TABLE IF EXISTS file_context;
             DROP TABLE IF EXISTS uploaded_files;
             DROP TABLE IF EXISTS queue_items;
-            DROP TABLE IF EXISTS hook_events;
             DROP TABLE IF EXISTS budget_config;
             DROP TABLE IF EXISTS usage_snapshots;
-            DROP TABLE IF EXISTS permission_requests;
-            DROP TABLE IF EXISTS agent_turns;
-            DROP TABLE IF EXISTS agent_tasks;
-            DROP TABLE IF EXISTS pty_sessions;
             DROP TABLE IF EXISTS parallel_jobs;
             DROP TABLE IF EXISTS command_history;
             DROP TABLE IF EXISTS sessions;

@@ -1,5 +1,8 @@
 """Claude CLI passthrough command handlers."""
 
+import asyncio
+import logging
+import signal
 import uuid
 
 from slack_bolt.async_app import AsyncApp
@@ -97,22 +100,19 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @slack_command()
     async def handle_clear(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /clear command - cancel processes and reset Claude conversation."""
-        import asyncio
-
         # Step 1: Cancel all active executor processes for this channel
         cancelled_count = 0
-        active_processes = getattr(deps.executor, "_active_processes", None)
-        if active_processes is not None:
-            # Cancel processes where execution_id contains channel_id
-            for exec_id, process in list(active_processes.items()):
-                if ctx.channel_id in exec_id:
-                    process.terminate()
-                    cancelled_count += 1
-                    ctx.logger.info(f"Terminated process: {exec_id}")
+        active_processes = deps.executor._active_processes
+        # Cancel processes where execution_id contains channel_id
+        for exec_id, process in list(active_processes.items()):
+            if ctx.channel_id in exec_id:
+                process.terminate()
+                cancelled_count += 1
+                ctx.logger.info(f"Terminated process: {exec_id}")
 
-            # Brief wait for graceful shutdown
-            if cancelled_count > 0:
-                await asyncio.sleep(0.5)
+        # Brief wait for graceful shutdown
+        if cancelled_count > 0:
+            await asyncio.sleep(0.5)
 
         # Step 2: Get session to clear file context
         session = await deps.db.get_or_create_session(
@@ -141,23 +141,21 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @slack_command()
     async def handle_esc(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /esc command - interrupt current operation (like pressing Escape)."""
-        import signal
+        logger = logging.getLogger(__name__)
 
         # Cancel all active executor processes for this channel
         cancelled_count = 0
-        active_processes = getattr(deps.executor, "_active_processes", None)
-        if active_processes is not None:
-            # Cancel processes where execution_id contains channel_id
-            for exec_id, process in list(active_processes.items()):
-                if ctx.channel_id in exec_id:
-                    # Send SIGINT first (like Ctrl+C / Escape)
-                    try:
-                        process.send_signal(signal.SIGINT)
-                    except (ProcessLookupError, OSError):
-                        # Process already terminated
-                        pass
-                    cancelled_count += 1
-                    ctx.logger.info(f"Sent interrupt to process: {exec_id}")
+        active_processes = deps.executor._active_processes
+        # Cancel processes where execution_id contains channel_id
+        for exec_id, process in list(active_processes.items()):
+            if ctx.channel_id in exec_id:
+                # Send SIGINT first (like Ctrl+C / Escape)
+                try:
+                    process.send_signal(signal.SIGINT)
+                except (ProcessLookupError, OSError):
+                    logger.debug(f"Process {exec_id} already terminated")
+                cancelled_count += 1
+                ctx.logger.info(f"Sent interrupt to process: {exec_id}")
 
         if cancelled_count > 0:
             await ctx.client.chat_postMessage(
