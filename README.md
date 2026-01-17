@@ -152,12 +152,6 @@ Explain this codebase
 
 The bot will automatically send your message to Claude Code and stream the response back to Slack.
 
-**Note**: You can also use the `/c` command if you prefer:
-
-```
-/c Explain this codebase
-```
-
 ### Thread-Based Contexts
 
 Each Slack thread automatically creates an independent Claude session:
