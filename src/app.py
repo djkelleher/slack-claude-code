@@ -359,6 +359,7 @@ async def main():
             client=client,
             logger=logger,
             track_tools=True,
+            smart_concat=True,
         )
         # Start heartbeat to show progress during idle periods
         streaming_state.start_heartbeat()
@@ -523,6 +524,7 @@ async def main():
                         client=client,
                         logger=logger,
                         track_tools=True,
+                        smart_concat=True,
                     )
                     streaming_state.start_heartbeat()
 
