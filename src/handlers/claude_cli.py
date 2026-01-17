@@ -273,13 +273,19 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 },
             ]
 
+            # Get display name for current model
+            current_display = next(
+                (m["display"] for m in models if m["name"] == current_model),
+                current_model,
+            )
+
             # Build button blocks
             blocks = [
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*Current Model:* {current_model}\n\nSelect a model:",
+                        "text": f"*Current Model:* {current_display}\n\nSelect a model:",
                     },
                 },
                 {"type": "divider"},
