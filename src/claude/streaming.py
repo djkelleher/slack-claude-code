@@ -28,7 +28,8 @@ class ToolActivity:
     full_result: Optional[str] = None  # Full untruncated result
     is_error: bool = False
     duration_ms: Optional[int] = None
-    started_at: Optional[float] = None  # time.time() when tool started
+    started_at: Optional[float] = None  # time.monotonic() for duration calculation
+    timestamp: Optional[float] = None  # time.time() wall-clock for display
 
     @classmethod
     def create_input_summary(cls, name: str, input_dict: dict) -> str:
@@ -200,6 +201,7 @@ class StreamParser:
                         input=tool_input,
                         input_summary=ToolActivity.create_input_summary(tool_name, tool_input),
                         started_at=time.monotonic(),  # Use monotonic time for duration
+                        timestamp=time.time(),  # Wall-clock time for display
                     )
                     tool_activities.append(tool_activity)
 

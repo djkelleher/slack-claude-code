@@ -4,6 +4,7 @@ Formats tool invocations (Read, Edit, Write, Bash, etc.) for display
 in Slack messages during streaming updates.
 """
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .base import escape_markdown, truncate_output
@@ -85,6 +86,25 @@ def format_tool_status(tool: "ToolActivity") -> str:
     return status
 
 
+def format_tool_timestamp(tool: "ToolActivity") -> str:
+    """Format tool timestamp for display.
+
+    Parameters
+    ----------
+    tool : ToolActivity
+        The tool activity to format.
+
+    Returns
+    -------
+    str
+        Formatted timestamp like "14:32:05"
+    """
+    if tool.timestamp:
+        dt = datetime.fromtimestamp(tool.timestamp)
+        return dt.strftime("%H:%M:%S")
+    return ""
+
+
 def format_tool_activity_line(tool: "ToolActivity") -> str:
     """Format a single tool activity as one line for the activity feed.
 
@@ -96,10 +116,13 @@ def format_tool_activity_line(tool: "ToolActivity") -> str:
     Returns
     -------
     str
-        Full formatted line like ":page_facing_up: *Read* `src/app.py` :heavy_check_mark: (12ms)"
+        Full formatted line like "14:32:05 *Read* `src/app.py` OK (12ms)"
     """
+    timestamp = format_tool_timestamp(tool)
     inline = format_tool_inline(tool)
     status = format_tool_status(tool)
+    if timestamp:
+        return f"`{timestamp}` {inline} {status}"
     return f"{inline} {status}"
 
 
@@ -138,7 +161,7 @@ def format_tool_activity_section(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": "*Tool Activity:*\n" + "\n".join(lines),
+                "text": "_*Tool Activity:*_\n" + "\n".join(lines),
             },
         }
     )
