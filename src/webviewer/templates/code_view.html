@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}{{ file_path }} - Code{% endblock %}
+
+{% block header_title %}Code Viewer{% endblock %}
+
+{% block header_extra %}
+<span class="tool-badge {% if tool_name == 'Write' %}write{% endif %}">{{ tool_name }}</span>
+{% endblock %}
+
+{% block styles %}
+<style>
+    {{ css | safe }}
+
+    .source {
+        background: #0d1117 !important;
+        border-radius: 6px;
+        overflow-x: auto;
+    }
+    .source pre {
+        margin: 0;
+        padding: 16px;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+    .source .linenos {
+        background: #161b22;
+        border-right: 1px solid #30363d;
+        padding-right: 10px;
+        color: #6e7681;
+        user-select: none;
+    }
+    .source .linenos pre {
+        text-align: right;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{{ highlighted_code | safe }}
+{% endblock %}

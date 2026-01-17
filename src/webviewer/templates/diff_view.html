@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}{{ file_path }} - Diff{% endblock %}
+
+{% block header_title %}Diff Viewer{% endblock %}
+
+{% block header_extra %}
+<span class="tool-badge edit">{{ tool_name }}</span>
+{% endblock %}
+
+{% block styles %}
+<style>
+    {{ css | safe }}
+
+    .view-toggle {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 16px;
+    }
+    .view-toggle button {
+        background: #21262d;
+        color: #c9d1d9;
+        border: 1px solid #30363d;
+        padding: 6px 16px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: background 0.2s;
+    }
+    .view-toggle button:hover {
+        background: #30363d;
+    }
+    .view-toggle button.active {
+        background: #238636;
+        border-color: #238636;
+    }
+    .diff-container {
+        display: none;
+    }
+    .diff-container.active {
+        display: block;
+    }
+    .unified-diff {
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 16px;
+        overflow-x: auto;
+    }
+    .unified-diff pre {
+        margin: 0;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        white-space: pre;
+    }
+    .unified-diff .line-add {
+        background: #1e3a1f;
+        color: #7ee787;
+    }
+    .unified-diff .line-remove {
+        background: #3c1f1e;
+        color: #f85149;
+    }
+    .unified-diff .line-header {
+        color: #58a6ff;
+    }
+    .side-by-side-container {
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="view-toggle">
+    <button id="btn-side-by-side" class="active" onclick="showView('side-by-side')">Side by Side</button>
+    <button id="btn-unified" onclick="showView('unified')">Unified</button>
+</div>
+
+<div id="side-by-side" class="diff-container active">
+    <div class="side-by-side-container">
+        {{ side_by_side_html | safe }}
+    </div>
+</div>
+
+<div id="unified" class="diff-container">
+    <div class="unified-diff">
+        <pre>{{ unified_diff | e }}</pre>
+    </div>
+</div>
+
+<script>
+function showView(viewId) {
+    // Hide all containers
+    document.querySelectorAll('.diff-container').forEach(el => {
+        el.classList.remove('active');
+    });
+    // Remove active from all buttons
+    document.querySelectorAll('.view-toggle button').forEach(el => {
+        el.classList.remove('active');
+    });
+    // Show selected view
+    document.getElementById(viewId).classList.add('active');
+    document.getElementById('btn-' + viewId).classList.add('active');
+}
+
+// Color unified diff lines
+document.addEventListener('DOMContentLoaded', function() {
+    const pre = document.querySelector('.unified-diff pre');
+    if (pre) {
+        const lines = pre.textContent.split('\n');
+        const coloredLines = lines.map(line => {
+            if (line.startsWith('+') && !line.startsWith('+++')) {
+                return '<span class="line-add">' + escapeHtml(line) + '</span>';
+            } else if (line.startsWith('-') && !line.startsWith('---')) {
+                return '<span class="line-remove">' + escapeHtml(line) + '</span>';
+            } else if (line.startsWith('@@')) {
+                return '<span class="line-header">' + escapeHtml(line) + '</span>';
+            }
+            return escapeHtml(line);
+        });
+        pre.innerHTML = coloredLines.join('\n');
+    }
+});
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

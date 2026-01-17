@@ -216,6 +216,18 @@ CREATE TABLE IF NOT EXISTS notification_settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Web viewer content storage for code and diff viewing
+CREATE TABLE IF NOT EXISTS web_viewer_content (
+    id TEXT PRIMARY KEY,
+    content_type TEXT NOT NULL,
+    file_path TEXT,
+    content TEXT NOT NULL,
+    new_content TEXT,
+    tool_name TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread ON sessions(channel_id, thread_ts);
@@ -239,6 +251,7 @@ CREATE INDEX IF NOT EXISTS idx_file_context_use_count ON file_context(use_count 
 CREATE INDEX IF NOT EXISTS idx_git_checkpoints_channel ON git_checkpoints(channel_id);
 CREATE INDEX IF NOT EXISTS idx_git_checkpoints_session ON git_checkpoints(session_id);
 CREATE INDEX IF NOT EXISTS idx_notification_settings_channel ON notification_settings(channel_id);
+CREATE INDEX IF NOT EXISTS idx_web_viewer_expires ON web_viewer_content(expires_at);
 """
 
 
@@ -278,6 +291,7 @@ async def reset_database(db_path: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(
             """
+            DROP TABLE IF EXISTS web_viewer_content;
             DROP TABLE IF EXISTS notification_settings;
             DROP TABLE IF EXISTS git_checkpoints;
             DROP TABLE IF EXISTS file_context;

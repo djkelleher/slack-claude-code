@@ -19,6 +19,72 @@ from src.utils.streaming import StreamingMessageState, create_streaming_callback
 from .base import HandlerDependencies
 
 
+async def _get_web_viewer_url(tool: ToolActivity, logger) -> str | None:
+    """Generate a web viewer URL for a tool's content.
+
+    Parameters
+    ----------
+    tool : ToolActivity
+        The tool activity to generate a URL for.
+    logger : Any
+        Logger instance.
+
+    Returns
+    -------
+    str | None
+        The signed URL or None if not applicable.
+    """
+    from src.webviewer.cache import WebViewerCache
+    from src.webviewer.security import generate_signed_url
+
+    # Only supported for Read, Edit, Write tools with content
+    if tool.name not in ("Read", "Edit", "Write"):
+        return None
+
+    # Get file path from tool input
+    file_path = tool.input.get("file_path")
+    if not file_path:
+        return None
+
+    # Get content based on tool type
+    content = tool.full_result or tool.result
+    if not content:
+        return None
+
+    try:
+        cache = WebViewerCache(config.DATABASE_PATH)
+
+        if tool.name == "Edit":
+            # For edits, we need the old and new content
+            # The old_string and new_string are in the input
+            old_content = tool.input.get("old_string", "")
+            new_content = tool.input.get("new_string", "")
+            if old_content and new_content:
+                content_id = await cache.store(
+                    content_type="diff",
+                    content=old_content,
+                    new_content=new_content,
+                    file_path=file_path,
+                    tool_name=tool.name,
+                )
+            else:
+                return None
+        else:
+            # For Read and Write, store the full content
+            content_id = await cache.store(
+                content_type="code",
+                content=content,
+                file_path=file_path,
+                tool_name=tool.name,
+            )
+
+        return generate_signed_url(content_id)
+
+    except Exception as e:
+        logger.warning(f"Failed to generate web viewer URL: {e}")
+        return None
+
+
 async def _handle_approval_action(
     body: dict,
     action: dict,
@@ -565,6 +631,30 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         # Get formatted blocks
         detail_blocks = format_tool_detail_blocks(tool)
+
+        # Add "Open in Browser" button if web viewer is enabled
+        web_viewer_url = None
+        if config.timeouts.webviewer.enabled and config.timeouts.webviewer.base_url:
+            web_viewer_url = await _get_web_viewer_url(tool, logger)
+
+        if web_viewer_url:
+            detail_blocks.append({"type": "divider"})
+            detail_blocks.append(
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "View Diff" if tool.name == "Edit" else "Open in Browser",
+                            },
+                            "url": web_viewer_url,
+                            "action_id": f"web_viewer_{tool.id}",
+                        }
+                    ],
+                }
+            )
 
         await client.views_open(
             trigger_id=body["trigger_id"],
