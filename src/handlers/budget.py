@@ -1,7 +1,10 @@
 """Budget and usage command handlers: /usage, /budget."""
 
+import uuid
+
 from slack_bolt.async_app import AsyncApp
 
+from src.config import config
 from src.utils.formatting import SlackFormatter
 
 from .base import CommandContext, HandlerDependencies, slack_command
@@ -20,13 +23,14 @@ def register_budget_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
     @app.command("/usage")
     async def handle_usage(ack, command, client, logger):
-        """Handle /usage command - show current Pro plan usage.
+        """Handle /usage command - show plan usage limits and rate limit status.
 
-        This handler manages its own error handling due to async message updates.
+        Passes through to Claude CLI /usage command for subscription plan info.
         """
         await ack()
 
         channel_id = command["channel_id"]
+        thread_ts = command.get("thread_ts")
 
         # Send initial message
         response = await client.chat_postMessage(
@@ -35,62 +39,41 @@ def register_budget_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
 
         try:
-            snapshot = await deps.usage_checker.get_usage()
+            # Get session for Claude CLI passthrough
+            session = await deps.db.get_or_create_session(
+                channel_id, thread_ts=thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
+            )
 
-            if snapshot:
-                # Get current threshold
-                threshold = deps.budget_scheduler.get_current_threshold()
-                is_night = deps.budget_scheduler.is_nighttime()
-                period = "night" if is_night else "day"
+            # Execute /usage via Claude CLI
+            result = await deps.executor.execute(
+                prompt="/usage",
+                working_directory=session.working_directory,
+                session_id=channel_id,
+                resume_session_id=session.claude_session_id,
+                execution_id=str(uuid.uuid4()),
+                permission_mode=session.permission_mode,
+                model=session.model,
+            )
 
-                # Usage bar visualization
-                bar_length = 20
-                filled = int(snapshot.usage_percent / 100 * bar_length)
-                bar = "█" * filled + "░" * (bar_length - filled)
+            # Update session if needed
+            if result.session_id:
+                await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
-                status = ":heavy_check_mark:" if snapshot.usage_percent < threshold else ":warning:"
+            output = result.output or result.error or "No usage information available."
 
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=response["ts"],
-                    blocks=[
-                        {
-                            "type": "header",
-                            "text": {
-                                "type": "plain_text",
-                                "text": ":chart_with_upwards_trend: Claude Pro Usage",
-                                "emoji": True,
-                            },
-                        },
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"*Usage:* {snapshot.usage_percent:.1f}% {status}\n`[{bar}]`",
-                            },
-                        },
-                        {
-                            "type": "section",
-                            "fields": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"*Reset:* {snapshot.reset_time or 'Unknown'}",
-                                },
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"*Threshold ({period}):* {threshold:.0f}%",
-                                },
-                            ],
-                        },
-                    ],
-                )
-            else:
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=response["ts"],
-                    text=":warning: Could not retrieve usage information. "
-                    "Make sure `claude usage` command is available.",
-                )
+            await client.chat_update(
+                channel=channel_id,
+                ts=response["ts"],
+                text=output[:100] + "..." if len(output) > 100 else output,
+                blocks=SlackFormatter.command_response(
+                    prompt="/usage",
+                    output=output,
+                    command_id=None,
+                    duration_ms=result.duration_ms,
+                    cost_usd=result.cost_usd,
+                    is_error=not result.success,
+                ),
+            )
 
         except Exception as e:
             logger.error(f"Error checking usage: {e}")
