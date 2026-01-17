@@ -29,10 +29,12 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
         return text
 
     # Preserve code blocks (triple backticks) by replacing them temporarily
+    # Use \x00 (null byte) as delimiter since it won't appear in normal text
+    # and won't be matched by the bold/italic regexes
     code_blocks = []
     def preserve_code_block(match):
         code_blocks.append(match.group(0))
-        return f"__CODE_BLOCK_{len(code_blocks) - 1}__"
+        return f"\x00CODEBLOCK{len(code_blocks) - 1}\x00"
 
     text = re.sub(r"```[\s\S]*?```", preserve_code_block, text)
 
@@ -40,7 +42,7 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
     inline_codes = []
     def preserve_inline_code(match):
         inline_codes.append(match.group(0))
-        return f"__INLINE_CODE_{len(inline_codes) - 1}__"
+        return f"\x00INLINECODE{len(inline_codes) - 1}\x00"
 
     text = re.sub(r"`[^`\n]+?`", preserve_inline_code, text)
 
@@ -48,7 +50,7 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
     slack_bolds = []
     def preserve_slack_bold(match):
         slack_bolds.append(f"*{match.group(1)}*")
-        return f"__SLACK_BOLD_{len(slack_bolds) - 1}__"
+        return f"\x00SLACKBOLD{len(slack_bolds) - 1}\x00"
 
     # Convert headers (## Title or ### Title) to bold placeholder
     text = re.sub(r"^#{1,6}\s+(.+?)$", preserve_slack_bold, text, flags=re.MULTILINE)
@@ -70,14 +72,14 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
 
     # Restore Slack bold
     for i, bold in enumerate(slack_bolds):
-        text = text.replace(f"__SLACK_BOLD_{i}__", bold)
+        text = text.replace(f"\x00SLACKBOLD{i}\x00", bold)
 
     # Restore inline code
     for i, code in enumerate(inline_codes):
-        text = text.replace(f"__INLINE_CODE_{i}__", code)
+        text = text.replace(f"\x00INLINECODE{i}\x00", code)
 
     # Restore code blocks
     for i, block in enumerate(code_blocks):
-        text = text.replace(f"__CODE_BLOCK_{i}__", block)
+        text = text.replace(f"\x00CODEBLOCK{i}\x00", block)
 
     return text
