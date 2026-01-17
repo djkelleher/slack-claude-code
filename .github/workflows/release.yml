@@ -1,0 +1,103 @@
+name: Publish Release on Version Change
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write  # required for trusted publishing to PyPI
+
+jobs:
+  check-version-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2  # Need previous commit to compare versions
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Detect version bump
+      id: version
+      shell: bash
+      run: |
+        current_version=$(grep -Po '^version\s*=\s*"\K[^"]+' pyproject.toml)
+        previous_version=$(git show -q HEAD^:pyproject.toml 2>/dev/null \
+                | grep -Po '^version\s*=\s*"\K[^"]+' || echo "none")
+        echo "previous_version=$previous_version"   >> "$GITHUB_OUTPUT"
+        echo "current_version=$current_version"   >> "$GITHUB_OUTPUT"
+        echo "bumped=$([ "$current_version" != "$previous_version" ] && echo true || echo false)" \
+              >> "$GITHUB_OUTPUT"
+
+    - name: Install Poetry
+      if: steps.version.outputs.bumped == 'true'
+      uses: snok/install-poetry@v1
+      with:
+        version: latest
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+
+    - name: Build sdist + wheel
+      if: steps.version.outputs.bumped == 'true'
+      run: poetry build
+
+    - name: Publish to PyPI
+      if: steps.version.outputs.bumped == 'true'
+      uses: pypa/gh-action-pypi-publish@release/v1
+
+    - name: Create GitHub Release
+      if: steps.version.outputs.bumped == 'true'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.version.outputs.current_version }}
+        release_name: Release v${{ steps.version.outputs.current_version }}
+        body: |
+          ## What's Changed
+
+          This release includes version ${{ steps.version.outputs.current_version }} of slack-claude-code.
+
+          ### Installation:
+          - **PyPI**: `pip install slack-claude-code==${{ steps.version.outputs.current_version }}`
+
+          ---
+
+          *This release was automatically created by GitHub Actions.*
+        draft: false
+        prerelease: false
+
+    - name: Comment on commit
+      if: steps.version.outputs.bumped == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const commentBody = `**Published Version ${{ steps.version.outputs.current_version }}**
+
+          Successfully published to:
+          - **PyPI**: \`pip install slack-claude-code==${{ steps.version.outputs.current_version }}\`
+
+          [Release Notes](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.current_version }})`;
+
+          await github.rest.repos.createCommitComment({
+            commit_sha: context.sha,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: commentBody,
+          });
+
+    - name: Skip publish notification
+      if: steps.version.outputs.bumped == 'false'
+      run: |
+        echo "Version unchanged - no publishing needed"
+        echo "Current: ${{ steps.version.outputs.current_version }}"
+        echo "Previous: ${{ steps.version.outputs.previous_version }}"
