@@ -728,21 +728,6 @@ async def main():
         f"(night hours: {config.NIGHT_START_HOUR}:00-{config.NIGHT_END_HOUR}:00)"
     )
 
-    # Start web viewer server if enabled
-    webviewer_task = None
-    if config.timeouts.webviewer.enabled:
-        if not config.timeouts.webviewer.base_url:
-            logger.warning("Web viewer enabled but WEB_VIEWER_BASE_URL not set - URLs will not work")
-        if not config.timeouts.webviewer.secret_key:
-            logger.warning("Web viewer enabled but WEB_VIEWER_SECRET_KEY not set - using insecure default")
-
-        from src.webviewer.server import run_server
-
-        webviewer_task = asyncio.create_task(run_server())
-        logger.info(
-            f"Web viewer server starting on {config.timeouts.webviewer.host}:{config.timeouts.webviewer.port}"
-        )
-
     # Start the handler
     await handler.connect_async()
     logger.info("Connected to Slack")
@@ -751,14 +736,6 @@ async def main():
     await shutdown_event.wait()
 
     # Cleanup
-    if webviewer_task:
-        webviewer_task.cancel()
-        try:
-            await webviewer_task
-        except asyncio.CancelledError:
-            pass
-        logger.info("Web viewer server stopped")
-
     await shutdown(executor)
     await handler.close_async()
 

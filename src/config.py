@@ -72,18 +72,6 @@ class DisplayConfig:
 
 
 @dataclass
-class WebViewerConfig:
-    """Configuration for web-based code and diff viewer."""
-
-    enabled: bool = False  # Enable/disable web viewer
-    host: str = "0.0.0.0"  # Host to bind web server
-    port: int = 8080  # Port for web server
-    base_url: str = ""  # External URL for generating links (e.g., https://your-server.com:8080)
-    secret_key: str = ""  # Secret key for signing URLs (required if enabled)
-    content_ttl: int = 86400  # Content TTL in seconds (default 24 hours)
-
-
-@dataclass
 class TimeoutConfig:
     """Centralized timeout configuration."""
 
@@ -93,7 +81,6 @@ class TimeoutConfig:
     cache: CacheTimeouts
     streaming: StreamingConfig
     display: DisplayConfig
-    webviewer: WebViewerConfig
 
 
 class Config:
@@ -179,15 +166,10 @@ class Config:
             truncate_url_length=int(os.getenv("TRUNCATE_URL_LENGTH", "50")),
             truncate_text_length=int(os.getenv("TRUNCATE_TEXT_LENGTH", "40")),
         ),
-        webviewer=WebViewerConfig(
-            enabled=os.getenv("WEB_VIEWER_ENABLED", "false").lower() in ("true", "1", "yes"),
-            host=os.getenv("WEB_VIEWER_HOST", "0.0.0.0"),
-            port=int(os.getenv("WEB_VIEWER_PORT", "8080")),
-            base_url=os.getenv("WEB_VIEWER_BASE_URL", ""),
-            secret_key=os.getenv("WEB_VIEWER_SECRET_KEY", ""),
-            content_ttl=int(os.getenv("WEB_VIEWER_CONTENT_TTL", "86400")),
-        ),
     )
+
+    # GitHub repository for web viewer links (e.g., "owner/repo")
+    GITHUB_REPO: str = os.getenv("GITHUB_REPO", "")
 
     @classmethod
     def validate(cls) -> list[str]:
