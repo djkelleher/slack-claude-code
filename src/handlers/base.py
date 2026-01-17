@@ -73,8 +73,6 @@ class HandlerDependencies:
     db: Any  # DatabaseRepository
     executor: Any  # ClaudeExecutor
     _orchestrator: Any = field(default=None, repr=False)
-    _usage_checker: Any = field(default=None, repr=False)
-    _budget_scheduler: Any = field(default=None, repr=False)
     _init_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     @property
@@ -86,26 +84,6 @@ class HandlerDependencies:
 
                 self._orchestrator = MultiAgentOrchestrator(self.executor)
             return self._orchestrator
-
-    @property
-    def usage_checker(self) -> Any:
-        """Get or create the UsageChecker (thread-safe)."""
-        with self._init_lock:
-            if self._usage_checker is None:
-                from src.budget import UsageChecker
-
-                self._usage_checker = UsageChecker()
-            return self._usage_checker
-
-    @property
-    def budget_scheduler(self) -> Any:
-        """Get or create the BudgetScheduler (thread-safe)."""
-        with self._init_lock:
-            if self._budget_scheduler is None:
-                from src.budget import BudgetScheduler
-
-                self._budget_scheduler = BudgetScheduler()
-            return self._budget_scheduler
 
 
 def slack_command(

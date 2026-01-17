@@ -18,8 +18,6 @@ from datetime import datetime, timezone
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 
-from src.budget.checker import UsageChecker
-from src.budget.scheduler import BudgetScheduler
 from src.claude.subprocess_executor import SubprocessExecutor
 from src.config import config
 from src.database.migrations import init_database
@@ -134,20 +132,7 @@ async def main():
     # Create app components
     db = DatabaseRepository(config.DATABASE_PATH)
 
-    # Budget enforcement (disabled by default)
-    if config.BUDGET_ENABLED:
-        usage_checker = UsageChecker()
-        budget_scheduler = BudgetScheduler()
-        logger.info("Budget enforcement enabled")
-    else:
-        usage_checker = None
-        budget_scheduler = None
-
-    executor = SubprocessExecutor(
-        db=db,
-        usage_checker=usage_checker,
-        budget_scheduler=budget_scheduler,
-    )
+    executor = SubprocessExecutor(db=db)
 
     # Create Slack app
     app = AsyncApp(
@@ -307,9 +292,15 @@ async def main():
                     now_utc = datetime.now(timezone.utc)
                     # Parse stored ISO timestamp as UTC
                     if isinstance(fc.last_used, datetime):
-                        last_used_utc = fc.last_used.replace(tzinfo=timezone.utc) if fc.last_used.tzinfo is None else fc.last_used
+                        last_used_utc = (
+                            fc.last_used.replace(tzinfo=timezone.utc)
+                            if fc.last_used.tzinfo is None
+                            else fc.last_used
+                        )
                     else:
-                        last_used_utc = datetime.fromisoformat(str(fc.last_used)).replace(tzinfo=timezone.utc)
+                        last_used_utc = datetime.fromisoformat(str(fc.last_used)).replace(
+                            tzinfo=timezone.utc
+                        )
                     time_delta = now_utc - last_used_utc
                     if time_delta.total_seconds() < 60:
                         time_str = "just now"
@@ -416,40 +407,6 @@ async def main():
                 db_session_id=session.id,  # Pass for smart context tracking
                 model=session.model,  # Use session's selected model
             )
-
-            # Handle budget exceeded - show friendly message with usage info
-            if result.budget_exceeded and budget_scheduler:
-                streaming_state.stop_heartbeat()
-                await deps.db.update_command_status(
-                    cmd_history.id, "failed", error_message=result.error
-                )
-                threshold = budget_scheduler.get_current_threshold()
-                period = "night" if budget_scheduler.is_nighttime() else "day"
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    text=f"Budget limit reached: {result.error}",
-                    blocks=[
-                        {
-                            "type": "header",
-                            "text": {
-                                "type": "plain_text",
-                                "text": ":warning: Budget Limit Reached",
-                                "emoji": True,
-                            },
-                        },
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"*{result.error}*\n\n"
-                                f"Current {period} threshold is {threshold:.0f}%. "
-                                f"Use `/usage` to check status or `/budget` to adjust thresholds.",
-                            },
-                        },
-                    ],
-                )
-                return
 
             # Update session with Claude session ID for resume
             if result.session_id:
@@ -722,11 +679,6 @@ async def main():
     logger.info(f"Default working directory: {config.DEFAULT_WORKING_DIR}")
     logger.info(f"Command timeout: {config.timeouts.execution.command}s")
     logger.info(f"Session idle timeout: {config.timeouts.pty.idle}s")
-    logger.info(
-        f"Budget enforcement enabled: day threshold={config.USAGE_THRESHOLD_DAY}%, "
-        f"night threshold={config.USAGE_THRESHOLD_NIGHT}% "
-        f"(night hours: {config.NIGHT_START_HOUR}:00-{config.NIGHT_END_HOUR}:00)"
-    )
 
     # Start the handler
     await handler.connect_async()

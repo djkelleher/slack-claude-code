@@ -45,27 +45,6 @@ CREATE TABLE IF NOT EXISTS parallel_jobs (
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
--- Usage snapshots
-CREATE TABLE IF NOT EXISTS usage_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    usage_percent REAL NOT NULL,
-    reset_time TEXT,
-    threshold_used REAL,
-    is_paused INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Budget configuration
-CREATE TABLE IF NOT EXISTS budget_config (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    threshold_day REAL DEFAULT 85.0,
-    threshold_night REAL DEFAULT 95.0,
-    night_start_hour INTEGER DEFAULT 22,
-    night_end_hour INTEGER DEFAULT 6,
-    pause_on_threshold INTEGER DEFAULT 1,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 -- Queue items for FIFO command queue
 CREATE TABLE IF NOT EXISTS queue_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -196,8 +175,6 @@ async def reset_database(db_path: str) -> None:
             DROP TABLE IF EXISTS file_context;
             DROP TABLE IF EXISTS uploaded_files;
             DROP TABLE IF EXISTS queue_items;
-            DROP TABLE IF EXISTS budget_config;
-            DROP TABLE IF EXISTS usage_snapshots;
             DROP TABLE IF EXISTS parallel_jobs;
             DROP TABLE IF EXISTS command_history;
             DROP TABLE IF EXISTS sessions;

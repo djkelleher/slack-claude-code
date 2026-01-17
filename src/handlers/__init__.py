@@ -8,7 +8,6 @@ from src.database.repository import DatabaseRepository
 from .agents import register_agent_commands
 from .base import HandlerDependencies
 from .basic import register_basic_commands
-from .budget import register_budget_commands
 from .claude_cli import register_claude_cli_commands
 from .git import register_git_commands
 from .mode import register_mode_command
@@ -47,7 +46,6 @@ def register_commands(
     register_queue_commands(app, deps)
     register_claude_cli_commands(app, deps)
     register_agent_commands(app, deps)
-    register_budget_commands(app, deps)
     register_pty_commands(app, deps)
     register_mode_command(app, deps)
     register_notifications_command(app, deps)

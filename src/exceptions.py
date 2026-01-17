@@ -196,48 +196,6 @@ class StaleApprovalError(ApprovalError):
         super().__init__(message, approval_id=approval_id, **context)
 
 
-# Budget Errors
-
-
-class BudgetError(SlackClaudeError):
-    """Base exception for budget/usage checking failures."""
-
-    pass
-
-
-class UsageCheckError(BudgetError):
-    """Raised when usage checking fails."""
-
-    def __init__(
-        self,
-        message: str = "Failed to check usage",
-        timeout: bool = False,
-        **context,
-    ) -> None:
-        super().__init__(message, timeout=timeout, **context)
-        self.timeout = timeout
-
-
-class UsageThresholdExceededError(BudgetError):
-    """Raised when usage exceeds configured threshold."""
-
-    def __init__(
-        self,
-        current_usage: float,
-        threshold: float,
-        message: str = "Usage threshold exceeded",
-        **context,
-    ) -> None:
-        super().__init__(
-            message,
-            current_usage=current_usage,
-            threshold=threshold,
-            **context,
-        )
-        self.current_usage = current_usage
-        self.threshold = threshold
-
-
 # Database Errors
 
 

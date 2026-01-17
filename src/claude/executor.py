@@ -7,19 +7,13 @@ via persistent PTY sessions, keeping Claude Code running in interactive mode.
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Optional, Tuple
+from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from ..config import config
-
-if TYPE_CHECKING:
-    from ..budget.checker import UsageChecker
-    from ..budget.scheduler import BudgetScheduler
-
 from ..hooks.registry import HookRegistry, create_context
 from ..hooks.types import HookEvent, HookEventType
 from ..pty.pool import PTYSessionPool
 from ..pty.types import ResponseChunk
-
 from .streaming import StreamMessage
 
 logger = logging.getLogger(__name__)
@@ -37,7 +31,6 @@ class ExecutionResult:
     duration_ms: Optional[int] = None
     was_cancelled: bool = False
     was_permission_request: bool = False
-    budget_exceeded: bool = False
 
 
 class ClaudeExecutor:
@@ -45,73 +38,20 @@ class ClaudeExecutor:
 
     Uses PTYSessionPool to maintain long-running Claude Code processes,
     allowing multiple commands to be sent without restarting.
-
-    Optionally enforces budget limits via UsageChecker and BudgetScheduler.
-    When budget enforcement is enabled, execution will be blocked if usage
-    exceeds the configured threshold (day vs night thresholds apply).
     """
 
     def __init__(
         self,
         timeout: int = None,
-        usage_checker: Optional["UsageChecker"] = None,
-        budget_scheduler: Optional["BudgetScheduler"] = None,
     ) -> None:
         self.timeout = timeout or config.timeouts.execution.command
         self._initialized = False
-        self._usage_checker = usage_checker
-        self._budget_scheduler = budget_scheduler
 
     async def _ensure_initialized(self) -> None:
         """Initialize session pool cleanup loop."""
         if not self._initialized:
             await PTYSessionPool.start_cleanup_loop()
             self._initialized = True
-
-    async def _check_budget(self) -> Tuple[bool, str]:
-        """Check if execution should be blocked due to budget limits.
-
-        Returns:
-            Tuple of (should_block, reason). If should_block is True,
-            execution should not proceed and reason explains why.
-        """
-        if self._usage_checker is None or self._budget_scheduler is None:
-            return False, ""
-
-        try:
-            snapshot = await self._usage_checker.get_usage()
-            should_pause, reason = self._budget_scheduler.should_pause_for_usage(
-                snapshot.usage_percent
-            )
-
-            if should_pause:
-                reset_info = ""
-                if snapshot.reset_time:
-                    reset_info = f" Resets at {snapshot.reset_time.strftime('%H:%M')}."
-                return True, f"{reason}.{reset_info}"
-
-            return False, ""
-
-        except Exception as e:
-            logger.warning(f"Budget check failed, allowing execution: {e}")
-            return False, ""
-
-    def set_budget_enforcement(
-        self,
-        usage_checker: "UsageChecker",
-        budget_scheduler: "BudgetScheduler",
-    ) -> None:
-        """Enable budget enforcement after initialization.
-
-        Parameters
-        ----------
-        usage_checker : UsageChecker
-            Checker for current usage percentage.
-        budget_scheduler : BudgetScheduler
-            Scheduler for time-aware thresholds.
-        """
-        self._usage_checker = usage_checker
-        self._budget_scheduler = budget_scheduler
 
     async def execute(
         self,
@@ -131,24 +71,11 @@ class ClaudeExecutor:
             on_chunk: Async callback for each streamed message
 
         Returns:
-            ExecutionResult with the command output. If budget is exceeded,
-            returns immediately with budget_exceeded=True.
+            ExecutionResult with the command output.
         """
         await self._ensure_initialized()
 
         channel_id = session_id or execution_id or "default"
-
-        # Check budget before execution
-        should_block, reason = await self._check_budget()
-        if should_block:
-            logger.info(f"Execution blocked due to budget: {reason}")
-            return ExecutionResult(
-                success=False,
-                output="",
-                session_id=channel_id,
-                error=reason,
-                budget_exceeded=True,
-            )
 
         start_time = asyncio.get_event_loop().time()
 
@@ -248,22 +175,9 @@ class ClaudeExecutor:
             execution_id: Unique ID for this execution
 
         Yields:
-            StreamMessage objects as they arrive. If budget is exceeded,
-            yields a single error message with budget_exceeded info.
+            StreamMessage objects as they arrive.
         """
         await self._ensure_initialized()
-
-        # Check budget before execution
-        should_block, reason = await self._check_budget()
-        if should_block:
-            logger.info(f"Streaming execution blocked due to budget: {reason}")
-            yield StreamMessage(
-                type="error",
-                content=reason,
-                is_final=True,
-                raw={"budget_exceeded": True},
-            )
-            return
 
         channel_id = session_id or execution_id or "default"
         queue: asyncio.Queue[StreamMessage] = asyncio.Queue()

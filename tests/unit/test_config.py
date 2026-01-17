@@ -207,13 +207,6 @@ class TestConfig:
         assert config.WORKER_MAX_TURNS == 30
         assert config.EVALUATOR_MAX_TURNS == 10
 
-    def test_usage_budget_defaults(self):
-        """Usage budgeting settings have defaults."""
-        assert config.USAGE_THRESHOLD_DAY == 85.0
-        assert config.USAGE_THRESHOLD_NIGHT == 95.0
-        assert config.NIGHT_START_HOUR == 22
-        assert config.NIGHT_END_HOUR == 6
-
 
 class TestEnvironmentVariableOverrides:
     """Tests for environment variable configuration."""

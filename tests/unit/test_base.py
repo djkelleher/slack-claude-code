@@ -110,37 +110,6 @@ class TestHandlerDependencies:
             MockOrch.assert_called_once()
             assert result1 is result2
 
-    def test_usage_checker_lazy_init(self):
-        """usage_checker property lazily initializes."""
-        db = MagicMock()
-        executor = MagicMock()
-        deps = HandlerDependencies(db=db, executor=executor)
-
-        with patch("src.budget.UsageChecker") as MockChecker:
-            mock_checker = MagicMock()
-            MockChecker.return_value = mock_checker
-
-            result = deps.usage_checker
-
-            MockChecker.assert_called_once()
-            assert result is mock_checker
-
-    def test_budget_scheduler_lazy_init(self):
-        """budget_scheduler property lazily initializes."""
-        db = MagicMock()
-        executor = MagicMock()
-        deps = HandlerDependencies(db=db, executor=executor)
-
-        with patch("src.budget.BudgetScheduler") as MockScheduler:
-            mock_scheduler = MagicMock()
-            MockScheduler.return_value = mock_scheduler
-
-            result = deps.budget_scheduler
-
-            MockScheduler.assert_called_once()
-            assert result is mock_scheduler
-
-
 class TestSlackCommandDecorator:
     """Tests for slack_command decorator."""
 

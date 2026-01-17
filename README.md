@@ -1,6 +1,6 @@
 # Slack Claude Code Bot
 
-A Slack app that allows you to run Claude Code CLI commands from Slack. Each channel and thread represents a separate session, with persistent PTY-based sessions, thread-based contexts, file upload support, smart context management, git integration, multi-agent workflows, usage budgeting, and permission approval via Slack buttons.
+A Slack app that allows you to run Claude Code CLI commands from Slack. Each channel and thread represents a separate session, with persistent PTY-based sessions, thread-based contexts, file upload support, smart context management, git integration, multi-agent workflows, and permission approval via Slack buttons.
 
 ## Features
 
@@ -11,7 +11,6 @@ A Slack app that allows you to run Claude Code CLI commands from Slack. Each cha
 - **Smart Context Management**: Automatically tracks frequently-used files and includes them in future prompts for better context
 - **Git Integration**: Local git operations (status, diff, commit, branch management) directly from Slack
 - **Multi-Agent Workflows**: Run complex tasks through Planner → Worker → Evaluator pipeline
-- **Usage Budgeting**: Time-aware usage thresholds (day/night) with automatic pausing
 - **Permission Approval**: Handle MCP tool permissions via Slack buttons
 - **Command History**: Commands are stored in the database and can be rerun via buttons
 - **FIFO Queue**: Queue multiple commands for sequential execution
@@ -90,8 +89,6 @@ poetry install
    | `/task` | Start multi-agent workflow task |
    | `/tasks` | List active multi-agent tasks |
    | `/task-cancel` | Cancel a multi-agent task |
-   | `/usage` | Show Claude Pro usage |
-   | `/budget` | Configure usage thresholds |
    | `/pty` | Show PTY session status |
    | `/clear` | Reset Claude conversation and cancel processes |
    | `/esc` | Interrupt current operation (like pressing Escape) |
@@ -385,35 +382,6 @@ Lists all active multi-agent tasks with status and cancel buttons.
 
 Cancels a specific task by ID.
 
-### Usage Budgeting
-
-```
-/usage
-```
-
-Shows current Claude Pro usage with a visual progress bar:
-```
-Usage: 67.5% ✅
-[█████████████░░░░░░░]
-Reset: 2 hours | Threshold (day): 85%
-```
-
-```
-/budget
-```
-
-Shows current budget thresholds:
-- Day threshold (default 85%)
-- Night threshold (default 95%)
-- Night hours (22:00 - 06:00)
-
-```
-/budget day 80
-/budget night 90
-```
-
-Updates the threshold for day or night periods.
-
 ### PTY Session Management
 
 ```
@@ -563,9 +531,6 @@ slack-claude-code/
 │   ├── agents/             # Multi-agent orchestration
 │   │   ├── orchestrator.py # Planner→Worker→Evaluator pipeline
 │   │   └── roles.py        # Agent prompts and config
-│   ├── budget/             # Usage budgeting
-│   │   ├── checker.py      # Usage checking (claude usage)
-│   │   └── scheduler.py    # Time-aware thresholds
 │   ├── approval/           # Permission handling
 │   │   ├── handler.py      # PermissionManager
 │   │   ├── plan_manager.py # PlanApprovalManager
@@ -580,7 +545,6 @@ slack-claude-code/
 │   │   ├── git.py          # /diff, /status, /commit, /branch commands
 │   │   ├── session_management.py  # /sessions, /session-cleanup commands
 │   │   ├── agents.py       # /task, /tasks, /task-cancel
-│   │   ├── budget.py       # /usage and /budget commands
 │   │   ├── parallel.py     # /st, /cc commands
 │   │   ├── pty.py          # /pty command
 │   │   ├── mode.py         # /mode command
@@ -621,12 +585,12 @@ Slack (Socket Mode)
 ┌─────────────────────────────────────────────────────────┐
 │                    Command Router                        │
 └─────────────────────────────────────────────────────────┘
-       │                    │                    │
-       ▼                    ▼                    ▼
-┌─────────────┐    ┌────────────────┐    ┌─────────────┐
-│ Direct Cmd  │    │  Multi-Agent   │    │   Budget    │
-│  Executor   │    │  Orchestrator  │    │   Manager   │
-└──────┬──────┘    └───────┬────────┘    └─────────────┘
+       │                    │
+       ▼                    ▼
+┌─────────────┐    ┌────────────────┐
+│ Direct Cmd  │    │  Multi-Agent   │
+│  Executor   │    │  Orchestrator  │
+└──────┬──────┘    └───────┬────────┘
        │                   │
        ▼                   ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -672,12 +636,6 @@ PLANNER_MAX_TURNS=10
 WORKER_MAX_TURNS=30
 EVALUATOR_MAX_TURNS=10
 
-# Budget
-USAGE_THRESHOLD_DAY=85.0
-USAGE_THRESHOLD_NIGHT=95.0
-NIGHT_START_HOUR=22
-NIGHT_END_HOUR=6
-
 # Permissions
 PERMISSION_TIMEOUT=300  # 5 minutes
 AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP  # Comma-separated list of tools to auto-approve
@@ -708,7 +666,6 @@ MAX_UPLOAD_STORAGE_MB=100  # Total storage limit for uploads
 - **Git integration**: Use `/status`, `/diff`, `/commit`, and `/branch` for version control.
 - **Timeouts**: Default 5-minute timeout. Set `COMMAND_TIMEOUT` to adjust.
 - **Multi-agent tasks**: Use `/task` for complex work that benefits from planning and evaluation.
-- **Night mode**: Higher usage thresholds at night allow more intensive work during off-hours.
 - **Command queue**: Use `/q` to queue multiple commands that will execute sequentially.
 - **Filesystem**: Use `/pwd` to see current directory, `/ls` to list contents, `/cd` to navigate directories.
 - **Session management**: Use `/clear` to reset conversation and cancel processes, `/compact` to reduce context size.
