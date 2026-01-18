@@ -72,8 +72,10 @@ class Config(BaseSettings):
     SLACK_APP_TOKEN: str = ""
     SLACK_SIGNING_SECRET: str = ""
 
-    # Database - defaults to current working directory
-    DATABASE_PATH: str = Field(default_factory=lambda: str(Path.cwd() / "slack_claude.db"))
+    # Database - defaults to ~/.slack-claude-code/
+    DATABASE_PATH: str = Field(
+        default_factory=lambda: str(Path.home() / ".slack-claude-code" / "slack_claude.db")
+    )
     DEFAULT_WORKING_DIR: str = Field(default_factory=lambda: str(Path.cwd()))
 
     # Claude Code configuration
