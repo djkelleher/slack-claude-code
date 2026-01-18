@@ -31,16 +31,35 @@ All Claude Code commands work the same way: `/clear`, `/compact`, `/model`, `/mo
 | CLI | `/todos` | List and manage todos |
 | CLI | `/claude-help` | Show Claude Code help |
 | CLI | `/claude-config` | Show Claude Code configuration |
-| Session | `/clear`, `/compact` | Clear session or compact context |
+| Session | `/clear` | Clear session and reset conversation |
+| Session | `/compact` | Compact conversation context |
 | Session | `/cost` | Show session cost |
 | Session | `/resume` | Resume a previous Claude session |
-| Session | `/pty`, `/sessions`, `/session-cleanup` | PTY session management |
-| Navigation | `/ls`, `/cd`, `/pwd`, `/add-dir` | Directory navigation |
-| Git | `/status`, `/diff`, `/commit`, `/branch` | Git operations |
-| Config | `/model`, `/mode`, `/permissions`, `/notifications` | Configuration |
-| Queue | `/q <cmd>`, `/qv`, `/qc`, `/qr <id>` | Command queue management |
-| Jobs | `/st`, `/cc`, `/esc` | Job control |
-| Multi-Agent | `/task`, `/tasks`, `/task-cancel` | Multi-agent task management |
+| Session | `/pty` | PTY session management |
+| Session | `/sessions` | List active sessions |
+| Session | `/session-cleanup` | Clean up inactive sessions |
+| Navigation | `/ls` | List directory contents |
+| Navigation | `/cd` | Change working directory |
+| Navigation | `/pwd` | Print working directory |
+| Navigation | `/add-dir` | Add directory to context |
+| Git | `/status` | Show git status |
+| Git | `/diff` | Show git diff |
+| Git | `/commit` | Commit staged changes |
+| Git | `/branch` | Show/create/switch branches |
+| Config | `/model` | Show or change AI model |
+| Config | `/mode` | Set permission mode (plan/approve/bypass) |
+| Config | `/permissions` | View or update permissions |
+| Config | `/notifications` | Configure notification settings |
+| Queue | `/q <cmd>` | Queue a command for execution |
+| Queue | `/qv` | View queued commands |
+| Queue | `/qc` | Clear the command queue |
+| Queue | `/qr <id>` | Remove a specific queued command |
+| Jobs | `/st` | Show status of running jobs |
+| Jobs | `/cc` | Cancel current job |
+| Jobs | `/esc` | Interrupt current operation |
+| Multi-Agent | `/task` | Create a new agent task |
+| Multi-Agent | `/tasks` | List running agent tasks |
+| Multi-Agent | `/task-cancel` | Cancel an agent task |
 
 ## Installation
 
