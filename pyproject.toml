@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "slack-claude-code"
-version = "0.1.1"
+version = "0.1.2"
 description = "Slack app for running Claude Code CLI commands"
 authors = ["Dan"]
 readme = "README.md"
 packages = [{include = "src"}]
 
 [tool.poetry.scripts]
-ccslack = "run:main"
+ccslack = "src:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"
