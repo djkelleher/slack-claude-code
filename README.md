@@ -76,8 +76,8 @@ Control the working directory for Claude's file operations.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/ls` | List directory contents | `/ls src/` |
-| `/cd` | Change working directory | `/cd /home/user/project` |
+| `/ls` | List directory contents | `/ls`, `/ls src/` |
+| `/cd` | Change working directory | `/cd /home/user/project`, `cd subfolder`, `cd ..` |
 | `/pwd` | Print working directory | `/pwd` |
 | `/add-dir` | Add directory to context | `/add-dir ./lib` |
 
@@ -136,13 +136,27 @@ Full git workflow without leaving Slack. Includes branch name and commit message
 
 
 ### 3. Configure
-Key environment variables (see `.env.example` for optional settings):
+
+Use the built-in config CLI to securely store your Slack credentials:
+
 ```bash
-# Required
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-SLACK_SIGNING_SECRET=...
+ccslack-config set SLACK_BOT_TOKEN=xoxb-...
+ccslack-config set SLACK_APP_TOKEN=xapp-...
+ccslack-config set SLACK_SIGNING_SECRET=...
 ```
+
+**Config CLI Commands:**
+| Command | Description |
+|---------|-------------|
+| `ccslack-config set KEY=VALUE` | Store a configuration value |
+| `ccslack-config get KEY` | Retrieve a configuration value |
+| `ccslack-config list` | List all stored configuration |
+| `ccslack-config delete KEY` | Remove a configuration value |
+| `ccslack-config path` | Show config file locations |
+
+Configuration is encrypted and stored in `~/.slack-claude-code/config.enc`. Sensitive values (tokens, secrets) are masked when displayed.
+
+**Alternative:** You can also use environment variables or a `.env` file. Config values take precedence over environment variables.
 
 **Where to find these values:**
 - `SLACK_BOT_TOKEN`: Your App → OAuth & Permissions → Bot User OAuth Token
