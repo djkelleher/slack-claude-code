@@ -29,8 +29,11 @@ All Claude Code commands work the same way: `/clear`, `/compact`, `/model`, `/mo
 | CLI | `/stats` | Show session statistics |
 | CLI | `/context` | Display current context information |
 | CLI | `/todos` | List and manage todos |
+| CLI | `/claude-help` | Show Claude Code help |
+| CLI | `/claude-config` | Show Claude Code configuration |
 | Session | `/clear`, `/compact` | Clear session or compact context |
 | Session | `/cost` | Show session cost |
+| Session | `/resume` | Resume a previous Claude session |
 | Session | `/pty`, `/sessions`, `/session-cleanup` | PTY session management |
 | Navigation | `/ls`, `/cd`, `/pwd`, `/add-dir` | Directory navigation |
 | Git | `/status`, `/diff`, `/commit`, `/branch` | Git operations |
