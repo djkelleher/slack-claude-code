@@ -54,6 +54,35 @@ class StreamingMessageState:
         """Get list of tracked tool activities."""
         return list(self.tool_activities.values())
 
+    def get_plan_file_path(self) -> Optional[str]:
+        """Get the plan file path if one was written during plan mode.
+
+        Looks for Write tool calls that created markdown files, prioritizing
+        files with 'plan' in the name. Returns the most likely plan file path.
+
+        Returns
+        -------
+        str or None
+            Path to the plan file, or None if not found.
+        """
+        plan_files = []
+        for tool in self.tool_activities.values():
+            if tool.name == "Write" and not tool.is_error:
+                file_path = tool.input.get("file_path", "")
+                if file_path.endswith(".md"):
+                    plan_files.append(file_path)
+
+        if not plan_files:
+            return None
+
+        # Prioritize files with 'plan' in the name
+        for path in plan_files:
+            if "plan" in path.lower():
+                return path
+
+        # Otherwise return the last markdown file written
+        return plan_files[-1]
+
     def start_heartbeat(self) -> None:
         """Start the heartbeat task to show progress during idle periods."""
         if self._heartbeat_task is None:

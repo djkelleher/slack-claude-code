@@ -562,6 +562,31 @@ async def main():
                         ],
                     )
 
+                    # Upload plan file if one was written
+                    plan_file_path = streaming_state.get_plan_file_path()
+                    if plan_file_path:
+                        try:
+                            # Expand ~ and resolve path
+                            expanded_path = os.path.expanduser(plan_file_path)
+                            if os.path.exists(expanded_path):
+                                with open(expanded_path, "r", encoding="utf-8") as f:
+                                    plan_content = f.read()
+
+                                filename = os.path.basename(plan_file_path)
+                                await post_text_snippet(
+                                    client=client,
+                                    channel_id=channel_id,
+                                    content=plan_content,
+                                    title=f":page_facing_up: Plan: {filename}",
+                                    thread_ts=thread_ts,
+                                    format_as_text=True,
+                                )
+                                logger.info(f"Uploaded plan file: {plan_file_path}")
+                            else:
+                                logger.warning(f"Plan file not found: {plan_file_path}")
+                        except Exception as plan_err:
+                            logger.error(f"Failed to upload plan file: {plan_err}")
+
             # Stop heartbeat before sending final response
             streaming_state.stop_heartbeat()
 
