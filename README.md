@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://pypi.org/project/slack-claude-code/"><img src="https://img.shields.io/pypi/v/slack-claude-code" alt="PyPI version"></a>
   <a href="https://pypi.org/project/slack-claude-code/"><img src="https://img.shields.io/pypi/pyversions/slack-claude-code" alt="Python versions"></a>
-  <a href="https://github.com/danklab/slack-claude-code/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <a href="https://github.com/djkelleher/slack-claude-code/actions/workflows/tests.yml"><img src="https://github.com/djkelleher/slack-claude-code/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
 </p>
 
@@ -41,7 +41,7 @@ Go to https://api.slack.com/apps → "Create New App" → "From scratch"
 **Socket Mode**: Enable and create an app-level token with `connections:write` scope (save the `xapp-` token)
 
 **Bot Token Scopes** (OAuth & Permissions):
-- `chat:write`, `commands`, `channels:history`, `app_mentions:read`, `files:write`
+- `chat:write`, `commands`, `channels:history`, `app_mentions:read`, `files:read`, `files:write`
 
 **Event Subscriptions**: Enable and add `message.channels`, `app_mention`
 
@@ -150,7 +150,7 @@ SLACK_SIGNING_SECRET=...
 - `SLACK_SIGNING_SECRET`: Your App → Basic Information → App Credentials → Signing Secret
 
 ### 4. Start the Slack bot
-You can now run `ccslack` in your terminal. The working directory where you start the executable will be the defualt working direcotry for your Claude Code session(s). If you have a .env file in this directory, it will automatically be loaded.   
+You can now run `ccslack` in your terminal. The working directory where you start the executable will be the default working directory for your Claude Code session(s). If you have a .env file in this directory, it will automatically be loaded.   
 
 ## Usage
 
