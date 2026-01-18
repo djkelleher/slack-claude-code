@@ -154,13 +154,19 @@ class StreamingMessageState:
 
         # Limit accumulated output to prevent memory exhaustion
         if len(self.accumulated_output) < config.timeouts.streaming.max_accumulated_size:
-            if self.smart_concat and content:
-                # Smart chunk concatenation: add newlines between chunks for readability
-                if self.accumulated_output and not self._last_chunk_was_newline:
-                    if len(content) >= 10 or content.strip():
-                        if not self.accumulated_output.endswith(("\n", " ", "\t")):
-                            self.accumulated_output += "\n\n"
-                self._last_chunk_was_newline = content.endswith("\n") if content else False
+            if content and self.accumulated_output:
+                # Ensure proper spacing between chunks
+                last_char = self.accumulated_output[-1]
+                first_char = content[0] if content else ""
+
+                # Add space if previous chunk ends with sentence punctuation
+                # and next chunk starts with a letter (likely new sentence)
+                if last_char in ".!?:)" and first_char.isalpha():
+                    self.accumulated_output += " "
+                # Add space if chunks would merge words (letter followed by letter)
+                elif last_char.isalnum() and first_char.isalnum():
+                    self.accumulated_output += " "
+
             self.accumulated_output += content
 
         # Rate limit updates to avoid Slack API limits
