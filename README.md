@@ -18,7 +18,7 @@
 
 All Claude Code commands work the same way: `/clear`, `/compact`, `/model`, `/mode`, `/add-dir`, `/review`, plus filesystem and git commands.
 
-## Claude CLI Commands
+## Commands
 
 | Command | Description |
 |---------|-------------|
@@ -29,6 +29,15 @@ All Claude Code commands work the same way: `/clear`, `/compact`, `/model`, `/mo
 | `/stats` | Show session statistics |
 | `/context` | Display current context information |
 | `/todos` | List and manage todos |
+| `/clear`, `/compact` | Clear session or compact context |
+| `/cost` | Show session cost |
+| `/pty`, `/sessions`, `/session-cleanup` | PTY session management |
+| `/ls`, `/cd`, `/pwd`, `/add-dir` | Directory navigation |
+| `/status`, `/diff`, `/commit`, `/branch` | Git operations |
+| `/model`, `/mode`, `/permissions`, `/notifications` | Configuration |
+| `/q <cmd>`, `/qv`, `/qc`, `/qr <id>` | Command queue management |
+| `/st`, `/cc`, `/esc` | Job control |
+| `/task`, `/tasks`, `/task-cancel` | Multi-agent task management |
 
 ## Installation
 
@@ -73,18 +82,6 @@ Type messages in any channel where the bot is present. Each Slack thread maintai
 - **File Uploads**: Drag & drop files—Claude sees them instantly (code, images, PDFs)
 - **Smart Context**: Frequently-used files are automatically included in prompts
 - **Streaming**: Watch Claude's responses as they're generated
-
-### Commands
-
-| Category | Commands |
-|----------|----------|
-| **Session** | `/clear`, `/compact`, `/cost`, `/pty`, `/sessions`, `/session-cleanup` |
-| **Navigation** | `/ls`, `/cd`, `/pwd`, `/add-dir` |
-| **Git** | `/status`, `/diff`, `/commit`, `/branch` |
-| **Config** | `/model`, `/mode`, `/permissions`, `/notifications` |
-| **Queue** | `/q <cmd>`, `/qv`, `/qc`, `/qr <id>` |
-| **Jobs** | `/st`, `/cc`, `/esc` |
-| **Multi-Agent** | `/task`, `/tasks`, `/task-cancel` |
 
 ### Plan Mode
 
