@@ -9,17 +9,15 @@ input. Instead, we:
 """
 
 import asyncio
-import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
 from ..database.repository import DatabaseRepository
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass

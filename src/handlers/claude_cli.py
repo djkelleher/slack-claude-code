@@ -1,7 +1,6 @@
 """Claude CLI passthrough command handlers."""
 
 import asyncio
-import logging
 import signal
 import uuid
 

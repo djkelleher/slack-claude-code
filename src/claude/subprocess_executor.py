@@ -4,18 +4,17 @@ This is more reliable than PTY interaction for Claude Code's TUI.
 """
 
 import asyncio
-import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
+
+from loguru import logger
 
 from ..config import config
 from .streaming import StreamMessage, StreamParser
 
 if TYPE_CHECKING:
     from ..database.repository import DatabaseRepository
-
-logger = logging.getLogger(__name__)
 
 # UUID pattern for validating session IDs
 UUID_PATTERN = re.compile(

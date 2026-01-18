@@ -1,68 +1,64 @@
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class PTYTimeouts(BaseSettings):
+class PTYTimeouts(BaseModel):
     """Timeout configuration for PTY sessions."""
 
-    model_config = SettingsConfigDict(env_prefix="SESSION_")
-
-    startup: float = Field(default=30.0, alias="SESSION_STARTUP_TIMEOUT")
-    inactivity: float = Field(default=10.0, alias="SESSION_INACTIVITY_TIMEOUT")
-    idle: int = Field(default=1800, alias="SESSION_IDLE_TIMEOUT")
-    cleanup_interval: int = Field(default=60, alias="SESSION_CLEANUP_INTERVAL")
-    read: float = 0.1  # Non-blocking read timeout (100ms)
-    stop_grace: float = 0.5  # Grace period for graceful shutdown (500ms)
+    startup: float = 30.0
+    inactivity: float = 10.0
+    idle: int = 1800
+    cleanup_interval: int = 60
+    read: float = 0.1
+    stop_grace: float = 0.5
 
 
-class ExecutionTimeouts(BaseSettings):
+class ExecutionTimeouts(BaseModel):
     """Timeout configuration for command execution."""
 
-    permission: int = Field(default=300, alias="PERMISSION_TIMEOUT")
-    usage_check: int = Field(default=30, alias="USAGE_CHECK_TIMEOUT")
-    plan_approval: int = Field(default=600, alias="PLAN_APPROVAL_TIMEOUT")
-    question_wait: int = 600  # Question answer timeout (10 min)
-    max_questions_per_conversation: int = Field(
-        default=10, alias="MAX_QUESTIONS_PER_CONVERSATION"
-    )
+    permission: int = 300
+    usage_check: int = 30
+    plan_approval: int = 600
+    question_wait: int = 600
+    max_questions_per_conversation: int = 10
 
 
-class SlackTimeouts(BaseSettings):
+class SlackTimeouts(BaseModel):
     """Timeout configuration for Slack message updates."""
 
-    message_update_throttle: float = Field(default=2.0, alias="MESSAGE_UPDATE_THROTTLE")
+    message_update_throttle: float = 2.0
     heartbeat_interval: float = 15.0
     heartbeat_threshold: float = 20.0
 
 
-class CacheTimeouts(BaseSettings):
+class CacheTimeouts(BaseModel):
     """Cache duration configuration."""
 
-    usage: int = Field(default=60, alias="USAGE_CACHE_DURATION")
+    usage: int = 60
 
 
-class StreamingConfig(BaseSettings):
+class StreamingConfig(BaseModel):
     """Configuration for streaming message updates."""
 
-    max_accumulated_size: int = Field(default=500000, alias="MAX_ACCUMULATED_SIZE")
-    max_tools_display: int = Field(default=10, alias="MAX_TOOLS_DISPLAY")
-    tool_thread_threshold: int = Field(default=500, alias="TOOL_THREAD_THRESHOLD")
+    max_accumulated_size: int = 500000
+    max_tools_display: int = 10
+    tool_thread_threshold: int = 500
 
 
-class DisplayConfig(BaseSettings):
+class DisplayConfig(BaseModel):
     """Configuration for tool activity display truncation."""
 
-    truncate_path_length: int = Field(default=45, alias="TRUNCATE_PATH_LENGTH")
-    truncate_cmd_length: int = Field(default=50, alias="TRUNCATE_CMD_LENGTH")
-    truncate_pattern_length: int = Field(default=40, alias="TRUNCATE_PATTERN_LENGTH")
-    truncate_url_length: int = Field(default=50, alias="TRUNCATE_URL_LENGTH")
-    truncate_text_length: int = Field(default=40, alias="TRUNCATE_TEXT_LENGTH")
+    truncate_path_length: int = 45
+    truncate_cmd_length: int = 50
+    truncate_pattern_length: int = 40
+    truncate_url_length: int = 50
+    truncate_text_length: int = 40
 
 
-class TimeoutConfig(BaseSettings):
+class TimeoutConfig(BaseModel):
     """Centralized timeout configuration."""
 
     pty: PTYTimeouts = Field(default_factory=PTYTimeouts)
@@ -80,6 +76,7 @@ class Config(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     # Slack configuration
@@ -114,8 +111,8 @@ class Config(BaseSettings):
     WORKER_MAX_TURNS: int = 30
     EVALUATOR_MAX_TURNS: int = 10
 
-    # Permissions
-    AUTO_APPROVE_TOOLS: list[str] = Field(default_factory=list)
+    # Permissions - stored as comma-separated string, converted to list via property
+    AUTO_APPROVE_TOOLS_STR: str = Field(default="", alias="AUTO_APPROVE_TOOLS")
     ALLOWED_TOOLS: Optional[str] = None
 
     # File upload configuration
@@ -125,15 +122,78 @@ class Config(BaseSettings):
     # GitHub repository for web viewer links
     GITHUB_REPO: str = ""
 
-    # Centralized timeout configuration
-    timeouts: TimeoutConfig = Field(default_factory=TimeoutConfig)
+    # PTY timeout overrides from environment
+    SESSION_STARTUP_TIMEOUT: float = 30.0
+    SESSION_INACTIVITY_TIMEOUT: float = 10.0
+    SESSION_IDLE_TIMEOUT: int = 1800
+    SESSION_CLEANUP_INTERVAL: int = 60
 
-    @field_validator("AUTO_APPROVE_TOOLS", mode="before")
-    @classmethod
-    def parse_auto_approve_tools(cls, v: str | list[str]) -> list[str]:
-        if isinstance(v, str):
-            return [t.strip() for t in v.split(",") if t.strip()]
-        return v
+    # Execution timeout overrides from environment
+    PERMISSION_TIMEOUT: int = 300
+    USAGE_CHECK_TIMEOUT: int = 30
+    PLAN_APPROVAL_TIMEOUT: int = 600
+    MAX_QUESTIONS_PER_CONVERSATION: int = 10
+
+    # Slack timeout overrides from environment
+    MESSAGE_UPDATE_THROTTLE: float = 2.0
+
+    # Cache timeout overrides from environment
+    USAGE_CACHE_DURATION: int = 60
+
+    # Streaming config overrides from environment
+    MAX_ACCUMULATED_SIZE: int = 500000
+    MAX_TOOLS_DISPLAY: int = 10
+    TOOL_THREAD_THRESHOLD: int = 500
+
+    # Display config overrides from environment
+    TRUNCATE_PATH_LENGTH: int = 45
+    TRUNCATE_CMD_LENGTH: int = 50
+    TRUNCATE_PATTERN_LENGTH: int = 40
+    TRUNCATE_URL_LENGTH: int = 50
+    TRUNCATE_TEXT_LENGTH: int = 40
+
+    @property
+    def AUTO_APPROVE_TOOLS(self) -> list[str]:
+        """Parse AUTO_APPROVE_TOOLS from comma-separated string."""
+        if not self.AUTO_APPROVE_TOOLS_STR:
+            return []
+        return [t.strip() for t in self.AUTO_APPROVE_TOOLS_STR.split(",") if t.strip()]
+
+    @property
+    def timeouts(self) -> TimeoutConfig:
+        """Build TimeoutConfig from environment variables."""
+        return TimeoutConfig(
+            pty=PTYTimeouts(
+                startup=self.SESSION_STARTUP_TIMEOUT,
+                inactivity=self.SESSION_INACTIVITY_TIMEOUT,
+                idle=self.SESSION_IDLE_TIMEOUT,
+                cleanup_interval=self.SESSION_CLEANUP_INTERVAL,
+            ),
+            execution=ExecutionTimeouts(
+                permission=self.PERMISSION_TIMEOUT,
+                usage_check=self.USAGE_CHECK_TIMEOUT,
+                plan_approval=self.PLAN_APPROVAL_TIMEOUT,
+                max_questions_per_conversation=self.MAX_QUESTIONS_PER_CONVERSATION,
+            ),
+            slack=SlackTimeouts(
+                message_update_throttle=self.MESSAGE_UPDATE_THROTTLE,
+            ),
+            cache=CacheTimeouts(
+                usage=self.USAGE_CACHE_DURATION,
+            ),
+            streaming=StreamingConfig(
+                max_accumulated_size=self.MAX_ACCUMULATED_SIZE,
+                max_tools_display=self.MAX_TOOLS_DISPLAY,
+                tool_thread_threshold=self.TOOL_THREAD_THRESHOLD,
+            ),
+            display=DisplayConfig(
+                truncate_path_length=self.TRUNCATE_PATH_LENGTH,
+                truncate_cmd_length=self.TRUNCATE_CMD_LENGTH,
+                truncate_pattern_length=self.TRUNCATE_PATTERN_LENGTH,
+                truncate_url_length=self.TRUNCATE_URL_LENGTH,
+                truncate_text_length=self.TRUNCATE_TEXT_LENGTH,
+            ),
+        )
 
     def validate_required(self) -> list[str]:
         """Validate required configuration."""

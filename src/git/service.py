@@ -1,13 +1,12 @@
 """Git operations service for version control integration."""
 
 import asyncio
-import logging
 from pathlib import Path
 from typing import Optional
 
-from .models import Checkpoint, GitStatus
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from .models import Checkpoint, GitStatus
 
 
 class GitError(Exception):

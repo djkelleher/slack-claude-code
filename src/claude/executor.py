@@ -5,17 +5,16 @@ via persistent PTY sessions, keeping Claude Code running in interactive mode.
 """
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, Optional
+
+from loguru import logger
 
 from ..hooks.registry import HookRegistry, create_context
 from ..hooks.types import HookEvent, HookEventType
 from ..pty.pool import PTYSessionPool
 from ..pty.types import ResponseChunk
 from .streaming import StreamMessage
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass

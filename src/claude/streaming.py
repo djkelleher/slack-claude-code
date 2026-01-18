@@ -1,12 +1,11 @@
 import json
-import logging
 import time
 from dataclasses import dataclass
 from typing import Iterator, Optional
 
-from src.config import config
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from src.config import config
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
 # Increased to 1MB to handle large file reads and tool outputs

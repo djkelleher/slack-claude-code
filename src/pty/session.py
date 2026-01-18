@@ -4,11 +4,11 @@ Uses pexpect to maintain a long-running Claude Code process with PTY interaction
 """
 
 import asyncio
-import logging
 from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
 import pexpect
+from loguru import logger
 
 from ..hooks.registry import HookRegistry, create_context
 from ..hooks.types import HookEvent, HookEventType
@@ -20,8 +20,6 @@ from .types import (
     SessionResponse,
     SessionState,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class PTYSession:

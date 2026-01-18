@@ -7,7 +7,6 @@ with each channel representing a separate persistent PTY session.
 """
 
 import asyncio
-import logging
 import os
 import signal
 import sys
@@ -15,6 +14,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 
+from loguru import logger
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 
@@ -34,13 +34,6 @@ from src.utils.file_downloader import (
 from src.utils.formatting import SlackFormatter
 from src.utils.slack_helpers import post_text_snippet
 from src.utils.streaming import StreamingMessageState
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 
 async def shutdown(executor: SubprocessExecutor) -> None:

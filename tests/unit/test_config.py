@@ -202,22 +202,20 @@ class TestConfig:
 class TestAutoApproveToolsParsing:
     """Tests for AUTO_APPROVE_TOOLS parsing."""
 
-    def test_empty_string(self):
+    def test_empty_string(self, monkeypatch):
         """Empty string results in empty list."""
-        test_config = Config(AUTO_APPROVE_TOOLS="")
+        monkeypatch.delenv("AUTO_APPROVE_TOOLS", raising=False)
+        test_config = Config(AUTO_APPROVE_TOOLS_STR="", _env_file=None)
         assert test_config.AUTO_APPROVE_TOOLS == []
 
-    def test_comma_separated_string(self):
+    def test_comma_separated_string(self, monkeypatch):
         """Comma-separated string parses correctly."""
-        test_config = Config(AUTO_APPROVE_TOOLS="Read,Glob,Grep")
+        monkeypatch.delenv("AUTO_APPROVE_TOOLS", raising=False)
+        test_config = Config(AUTO_APPROVE_TOOLS_STR="Read,Glob,Grep", _env_file=None)
         assert test_config.AUTO_APPROVE_TOOLS == ["Read", "Glob", "Grep"]
 
-    def test_list_passthrough(self):
-        """List values pass through unchanged."""
-        test_config = Config(AUTO_APPROVE_TOOLS=["Read", "Glob"])
-        assert test_config.AUTO_APPROVE_TOOLS == ["Read", "Glob"]
-
-    def test_whitespace_handling(self):
+    def test_whitespace_handling(self, monkeypatch):
         """Whitespace around values is stripped."""
-        test_config = Config(AUTO_APPROVE_TOOLS=" Read , Glob , Grep ")
+        monkeypatch.delenv("AUTO_APPROVE_TOOLS", raising=False)
+        test_config = Config(AUTO_APPROVE_TOOLS_STR=" Read , Glob , Grep ", _env_file=None)
         assert test_config.AUTO_APPROVE_TOOLS == ["Read", "Glob", "Grep"]
