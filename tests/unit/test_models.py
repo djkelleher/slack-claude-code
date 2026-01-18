@@ -7,7 +7,6 @@ import pytest
 
 from src.database.models import (
     CommandHistory,
-    FileContext,
     GitCheckpoint,
     NotificationSettings,
     ParallelJob,
@@ -262,38 +261,6 @@ class TestUploadedFile:
         assert file.mimetype == "application/pdf"
         assert file.size == 102400
         assert file.local_path == "/tmp/uploads/report.pdf"
-
-
-class TestFileContext:
-    """Tests for FileContext model."""
-
-    def test_from_row_complete(self):
-        """from_row parses complete file context correctly."""
-        row = (
-            1,  # id
-            5,  # session_id
-            "/home/user/project/main.py",  # file_path
-            "modified",  # context_type
-            "2024-01-15T10:30:00",  # last_used
-            15,  # use_count
-            1,  # auto_include (True)
-        )
-
-        ctx = FileContext.from_row(row)
-
-        assert ctx.id == 1
-        assert ctx.file_path == "/home/user/project/main.py"
-        assert ctx.context_type == "modified"
-        assert ctx.use_count == 15
-        assert ctx.auto_include is True
-
-    def test_from_row_auto_include_false(self):
-        """from_row handles auto_include=0 correctly."""
-        row = (1, 1, "/path", "read", "2024-01-15T10:30:00", 1, 0)
-
-        ctx = FileContext.from_row(row)
-
-        assert ctx.auto_include is False
 
 
 class TestGitCheckpoint:

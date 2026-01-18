@@ -181,31 +181,6 @@ class UploadedFile:
 
 
 @dataclass
-class FileContext:
-    """Track file usage for smart context management."""
-
-    id: Optional[int] = None
-    session_id: int = 0
-    file_path: str = ""
-    context_type: str = ""  # 'modified', 'read', 'created', 'uploaded'
-    last_used: datetime = field(default_factory=datetime.now)
-    use_count: int = 1
-    auto_include: bool = False
-
-    @classmethod
-    def from_row(cls, row: tuple) -> "FileContext":
-        return cls(
-            id=row[0],
-            session_id=row[1],
-            file_path=row[2],
-            context_type=row[3],
-            last_used=datetime.fromisoformat(row[4]) if row[4] else datetime.now(),
-            use_count=row[5],
-            auto_include=bool(row[6]),
-        )
-
-
-@dataclass
 class GitCheckpoint:
     """Git checkpoint for version control."""
 

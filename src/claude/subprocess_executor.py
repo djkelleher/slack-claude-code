@@ -45,8 +45,7 @@ class SubprocessExecutor:
         db: Optional["DatabaseRepository"] = None,
     ) -> None:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
-        self._background_tasks: set[asyncio.Task] = set()  # Keep references to prevent GC
-        self.db = db  # Optional database for smart context tracking
+        self.db = db
         # Track ExitPlanMode for retry logic
         self._exit_plan_mode_tool_id: Optional[str] = None
         self._exit_plan_mode_error_detected: bool = False
@@ -221,18 +220,9 @@ class SubprocessExecutor:
                                 tool_name = block.get("name", "unknown")
                                 tool_input = block.get("input", {})
                                 # Log tool use summary and track file operations
-                                if tool_name == "Read":
+                                if tool_name in ("Read", "Edit", "Write"):
                                     file_path = tool_input.get("file_path", "")
-                                    logger.info(f"{log_prefix}Tool: Read {file_path}")
-                                    self._track_file_context(db_session_id, file_path, "read")
-                                elif tool_name == "Edit":
-                                    file_path = tool_input.get("file_path", "")
-                                    logger.info(f"{log_prefix}Tool: Edit {file_path}")
-                                    self._track_file_context(db_session_id, file_path, "modified")
-                                elif tool_name == "Write":
-                                    file_path = tool_input.get("file_path", "")
-                                    logger.info(f"{log_prefix}Tool: Write {file_path}")
-                                    self._track_file_context(db_session_id, file_path, "created")
+                                    logger.info(f"{log_prefix}Tool: {tool_name} {file_path}")
                                 elif tool_name == "Bash":
                                     command = tool_input.get("command", "")[:50]
                                     logger.info(f"{log_prefix}Tool: Bash '{command}...'")
@@ -434,38 +424,6 @@ class SubprocessExecutor:
         finally:
             self._active_processes.pop(track_id, None)
 
-    def _track_file_context(
-        self, db_session_id: Optional[int], file_path: str, context_type: str
-    ) -> None:
-        """Track file context usage in background (non-blocking).
-
-        Args:
-            db_session_id: Database session ID for file context tracking
-            file_path: Path to the file being accessed
-            context_type: Type of access ("read", "modified", "created")
-        """
-        if not self.db or not db_session_id or not file_path:
-            return
-
-        # Queue context update (async, non-blocking)
-        async def _do_track():
-            try:
-                await self.db.track_file_context(db_session_id, file_path, context_type)
-            except Exception as e:
-                logger.warning(f"Failed to track file context for {file_path}: {e}")
-
-        task = asyncio.create_task(_do_track())
-        self._background_tasks.add(task)
-
-        # Ensure task is always removed, even on exception
-        def remove_task(task):
-            try:
-                self._background_tasks.discard(task)
-            except Exception:
-                pass  # Ignore errors during cleanup
-
-        task.add_done_callback(remove_task)
-
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""
         process = self._active_processes.get(execution_id)
@@ -486,13 +444,3 @@ class SubprocessExecutor:
     async def shutdown(self) -> None:
         """Shutdown and cancel all active executions."""
         await self.cancel_all()
-        # Cancel and wait for any pending background tasks (file context tracking)
-        if self._background_tasks:
-            # Cancel all pending tasks
-            for task in self._background_tasks:
-                if not task.done():
-                    task.cancel()
-            # Wait for all tasks to complete or be cancelled
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
-            self._background_tasks.clear()
-            logger.info("Cleaned up background tasks during shutdown")

@@ -405,60 +405,6 @@ class TestParallelJobOperations:
         assert result is False
 
 
-class TestFileContextOperations:
-    """Tests for file context operations."""
-
-    @pytest.mark.asyncio
-    async def test_track_file_context_new(self, db_repo):
-        """track_file_context creates new record."""
-        session = await db_repo.get_or_create_session("C123ABC", None)
-        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
-
-        context = await db_repo.get_file_context(session.id)
-
-        assert len(context) == 1
-        assert context[0].file_path == "/path/to/file.py"
-        assert context[0].use_count == 1
-
-    @pytest.mark.asyncio
-    async def test_track_file_context_increment(self, db_repo):
-        """track_file_context increments existing record."""
-        session = await db_repo.get_or_create_session("C123ABC", None)
-        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
-        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
-        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
-
-        context = await db_repo.get_file_context(session.id)
-
-        assert len(context) == 1
-        assert context[0].use_count == 3
-
-    @pytest.mark.asyncio
-    async def test_set_file_auto_include(self, db_repo):
-        """set_file_auto_include updates auto_include flag."""
-        session = await db_repo.get_or_create_session("C123ABC", None)
-        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
-        await db_repo.set_file_auto_include(session.id, "/path/to/file.py", True)
-
-        context = await db_repo.get_file_context(session.id, auto_include_only=True)
-
-        assert len(context) == 1
-        assert context[0].auto_include is True
-
-    @pytest.mark.asyncio
-    async def test_clear_file_context(self, db_repo):
-        """clear_file_context removes all context for session."""
-        session = await db_repo.get_or_create_session("C123ABC", None)
-        await db_repo.track_file_context(session.id, "/path/one.py", "modified")
-        await db_repo.track_file_context(session.id, "/path/two.py", "read")
-
-        count = await db_repo.clear_file_context(session.id)
-
-        assert count == 2
-        context = await db_repo.get_file_context(session.id)
-        assert len(context) == 0
-
-
 class TestNotificationSettings:
     """Tests for notification settings operations."""
 

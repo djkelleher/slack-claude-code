@@ -8,7 +8,6 @@ import aiosqlite
 from ..config import config
 from .models import (
     CommandHistory,
-    FileContext,
     GitCheckpoint,
     NotificationSettings,
     ParallelJob,
@@ -549,75 +548,6 @@ class DatabaseRepository:
             )
             rows = await cursor.fetchall()
             return [UploadedFile.from_row(row) for row in rows]
-
-    # File context operations
-    async def track_file_context(self, session_id: int, file_path: str, context_type: str) -> None:
-        """Track or increment file usage for smart context."""
-        async with self._get_connection() as db:
-            # Try to increment existing record
-            cursor = await db.execute(
-                """UPDATE file_context
-                   SET use_count = use_count + 1, last_used = ?
-                   WHERE session_id = ? AND file_path = ? AND context_type = ?""",
-                (datetime.now(timezone.utc).isoformat(), session_id, file_path, context_type),
-            )
-
-            # If no rows updated, insert new record
-            if cursor.rowcount == 0:
-                await db.execute(
-                    """INSERT INTO file_context
-                       (session_id, file_path, context_type, use_count)
-                       VALUES (?, ?, ?, 1)""",
-                    (session_id, file_path, context_type),
-                )
-
-            await db.commit()
-
-    async def get_file_context(
-        self, session_id: int, auto_include_only: bool = False
-    ) -> list[FileContext]:
-        """Get file context for smart prompts."""
-        async with self._get_connection() as db:
-            if auto_include_only:
-                cursor = await db.execute(
-                    """SELECT * FROM file_context
-                       WHERE session_id = ? AND auto_include = 1
-                       ORDER BY use_count DESC, last_used DESC""",
-                    (session_id,),
-                )
-            else:
-                cursor = await db.execute(
-                    """SELECT * FROM file_context
-                       WHERE session_id = ?
-                       ORDER BY use_count DESC, last_used DESC
-                       LIMIT 10""",
-                    (session_id,),
-                )
-            rows = await cursor.fetchall()
-            return [FileContext.from_row(row) for row in rows]
-
-    async def set_file_auto_include(
-        self, session_id: int, file_path: str, auto_include: bool
-    ) -> None:
-        """Set auto-include flag for a file."""
-        async with self._get_connection() as db:
-            await db.execute(
-                """UPDATE file_context
-                   SET auto_include = ?
-                   WHERE session_id = ? AND file_path = ?""",
-                (1 if auto_include else 0, session_id, file_path),
-            )
-            await db.commit()
-
-    async def clear_file_context(self, session_id: int) -> int:
-        """Clear all file context for a session (used when resetting a session)."""
-        async with self._get_connection() as db:
-            cursor = await db.execute(
-                "DELETE FROM file_context WHERE session_id = ?",
-                (session_id,),
-            )
-            await db.commit()
-            return cursor.rowcount
 
     # Git checkpoint operations
     async def create_checkpoint(
