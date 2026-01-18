@@ -4,7 +4,6 @@ import pytest
 
 from src.config import (
     Config,
-    PTYTimeouts,
     ExecutionTimeouts,
     SlackTimeouts,
     CacheTimeouts,
@@ -13,39 +12,6 @@ from src.config import (
     TimeoutConfig,
     config,
 )
-
-
-class TestPTYTimeouts:
-    """Tests for PTYTimeouts settings."""
-
-    def test_default_values(self):
-        """PTYTimeouts has correct defaults."""
-        timeouts = PTYTimeouts()
-
-        assert timeouts.startup == 30.0
-        assert timeouts.inactivity == 10.0
-        assert timeouts.idle == 1800
-        assert timeouts.cleanup_interval == 60
-        assert timeouts.read == 0.1
-        assert timeouts.stop_grace == 0.5
-
-    def test_custom_values(self):
-        """PTYTimeouts accepts custom values."""
-        timeouts = PTYTimeouts(
-            startup=60.0,
-            inactivity=5.0,
-            idle=3600,
-            cleanup_interval=120,
-            read=0.2,
-            stop_grace=1.0,
-        )
-
-        assert timeouts.startup == 60.0
-        assert timeouts.inactivity == 5.0
-        assert timeouts.idle == 3600
-        assert timeouts.cleanup_interval == 120
-        assert timeouts.read == 0.2
-        assert timeouts.stop_grace == 1.0
 
 
 class TestExecutionTimeouts:
@@ -142,7 +108,6 @@ class TestTimeoutConfig:
         timeout_config = TimeoutConfig()
 
         # Access nested values
-        assert timeout_config.pty.startup == 30.0
         assert timeout_config.execution.permission == 300
         assert timeout_config.slack.message_update_throttle == 2.0
         assert timeout_config.cache.usage == 60
@@ -156,7 +121,6 @@ class TestConfig:
     def test_timeout_config_accessible(self):
         """Config.timeouts provides access to all timeout settings."""
         assert config.timeouts is not None
-        assert config.timeouts.pty is not None
         assert config.timeouts.execution is not None
         assert config.timeouts.slack is not None
         assert config.timeouts.cache is not None

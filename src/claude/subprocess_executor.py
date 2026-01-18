@@ -1,7 +1,4 @@
-"""Claude Code executor using subprocess with stream-json output.
-
-This is more reliable than PTY interaction for Claude Code's TUI.
-"""
+"""Claude Code executor using subprocess with stream-json output."""
 
 import asyncio
 import re

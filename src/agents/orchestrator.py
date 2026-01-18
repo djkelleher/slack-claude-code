@@ -77,7 +77,7 @@ class MultiAgentOrchestrator:
     """Orchestrates multi-agent workflows.
 
     Runs tasks through Planner -> Worker -> Evaluator pipeline.
-    Each agent uses its own isolated PTY session.
+    Each agent uses its own isolated subprocess session.
     """
 
     def __init__(

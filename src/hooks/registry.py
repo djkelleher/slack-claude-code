@@ -182,7 +182,7 @@ def create_context(
     """Helper factory for creating HookContext.
 
     Args:
-        session_id: The session ID (typically channel_id for PTY sessions)
+        session_id: The session ID (typically channel_id)
         channel_id: Slack channel ID (defaults to session_id if not provided)
         thread_ts: Optional Slack thread timestamp
         user_id: Optional user ID who initiated the action

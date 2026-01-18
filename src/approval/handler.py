@@ -96,7 +96,7 @@ class PermissionManager:
         """Request approval via Slack and wait for response.
 
         Args:
-            session_id: The PTY session requesting approval
+            session_id: The session requesting approval
             channel_id: Slack channel to post approval request
             tool_name: Name of the tool requesting permission
             tool_input: Optional input/arguments for the tool

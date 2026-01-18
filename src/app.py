@@ -3,7 +3,7 @@
 Slack Claude Code Bot - Main Application Entry Point
 
 A Slack app that allows running Claude Code CLI commands from Slack,
-with each channel representing a separate persistent PTY session.
+with each channel representing a separate session.
 """
 
 import asyncio
