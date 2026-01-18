@@ -104,6 +104,141 @@ Type messages in any channel where the bot is present. Each Slack thread maintai
 
 Claude creates a detailed plan before execution, shown with Approve/Reject buttons. Ideal for complex implementations where you want to review the approach first.
 
+### Multi-Agent Tasks
+
+The multi-agent system uses a **Planner → Worker → Evaluator** pipeline for complex tasks:
+
+```
+/task refactor the authentication module to use JWT tokens
+```
+
+**How it works:**
+1. **Planner** analyzes the task and creates an actionable plan
+2. **Worker** executes the plan step by step
+3. **Evaluator** reviews the output and determines if more work is needed
+
+The system iterates up to 3 times until the evaluator marks the task as complete.
+
+**Commands:**
+| Command | Description |
+|---------|-------------|
+| `/task <description>` | Start a new multi-agent task |
+| `/tasks` | List all active tasks with status |
+| `/task-cancel <id>` | Cancel a running task |
+
+**Example workflow:**
+```
+User: /task add unit tests for the user service
+
+🔄 Planning... (analyzing task and creating plan)
+🔨 Working... (executing the plan)
+✅ Evaluating... (reviewing results)
+
+✅ Task Complete
+Verdict: COMPLETE
+Created 12 unit tests covering UserService methods
+```
+
+### Command Queue
+
+Queue multiple commands for sequential execution while maintaining session context:
+
+```
+/q analyze the database schema
+/q suggest performance improvements
+/q implement the top 3 suggestions
+```
+
+Each command runs after the previous completes, preserving Claude's memory across the queue.
+
+**Commands:**
+| Command | Description |
+|---------|-------------|
+| `/q <prompt>` | Add command to queue (shows position) |
+| `/qv` | View queue status and pending items |
+| `/qc` | Clear all pending items |
+| `/qr <id>` | Remove specific item from queue |
+
+**Example:**
+```
+User: /q review the API endpoints
+Added to queue at position #1
+
+User: /q fix any security issues found
+Added to queue at position #2
+
+User: /qv
+📋 Queue Status
+Running: review the API endpoints
+Pending:
+  #2: fix any security issues found
+```
+
+### Jobs & Parallel Execution
+
+Monitor and control long-running operations:
+
+```
+/st          # Show status of all active jobs
+/cc          # Cancel all jobs in channel
+/cc abc123   # Cancel specific job by ID
+/esc         # Send interrupt signal (like Ctrl+C)
+```
+
+Jobs track parallel analysis tasks and sequential loops. Each job shows progress and provides cancel buttons in the Slack UI.
+
+**Example:**
+```
+User: /st
+📊 Active Jobs
+
+Job: abc123
+  Type: parallel_analysis
+  Status: running (3/5 complete)
+  [Cancel]
+
+Job: def456
+  Type: sequential_loop
+  Status: running (iteration 2/10)
+  [Cancel]
+```
+
+### Git Integration
+
+Full git workflow support without leaving Slack:
+
+```
+/status              # Show branch, staged/unstaged changes
+/diff                # Show uncommitted changes
+/diff --staged       # Show only staged changes
+/commit fix: resolve login race condition
+/branch              # Show current branch
+/branch create feature/auth
+/branch switch main
+```
+
+**Example workflow:**
+```
+User: /status
+📌 Branch: feature/auth
+↑2 ahead of origin
+
+📝 Staged:
+  src/auth.py
+  tests/test_auth.py
+
+📄 Modified:
+  README.md
+
+User: /diff --staged
+[Shows diff of staged files]
+
+User: /commit add JWT token refresh logic
+✅ Committed: a1b2c3d
+```
+
+Git commands include safety validations for branch names and commit messages, with automatic truncation for large diffs in Slack.
+
 
 ## Configuration
 
