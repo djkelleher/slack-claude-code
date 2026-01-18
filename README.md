@@ -6,8 +6,9 @@
   <a href="https://pypi.org/project/slack-claude-code/"><img src="https://img.shields.io/pypi/v/slack-claude-code" alt="PyPI version"></a>
   <a href="https://pypi.org/project/slack-claude-code/"><img src="https://img.shields.io/pypi/pyversions/slack-claude-code" alt="Python versions"></a>
   <a href="https://github.com/danklab/slack-claude-code/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
-  <a href="https://github.com/danklab/slack-claude-code/actions/workflows/tests.yml"><img src="https://github.com/danklab/slack-claude-code/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
 </p>
+
+[![Tests](https://github.com/djkelleher/slack-claude-code/actions/workflows/tests.yml/badge.svg)](https://github.com/djkelleher/slack-claude-code/actions/workflows/tests.yml)
 
 **Claude Code, but in Slack.** Access Claude Code remotely from any device, or use it full-time for a better UI experience.
 
@@ -49,6 +50,53 @@ Go to https://api.slack.com/apps → "Create New App" → "From scratch"
 
 **Slash Commands**: Add the commands from the tables below (or the subset that you plan to use)
 
+#### Configuration
+Customize Claude's behavior for your workflow.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/model` | Show or change AI model | `/model sonnet` |
+| `/mode` | Set permission mode | `/mode plan` |
+| `/permissions` | View/update permissions | `/permissions` |
+| `/notifications` | Configure notifications | `/notifications` |
+
+#### Session Management
+Each Slack thread maintains an isolated Claude session with its own context.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/clear` | Reset conversation | `/clear` |
+| `/compact` | Compact context | `/compact` |
+| `/cost` | Show session cost | `/cost` |
+| `/resume` | Resume previous session | `/resume` |
+| `/sessions` | List active sessions | `/sessions` |
+| `/session-cleanup` | Clean up inactive sessions | `/session-cleanup` |
+
+#### Navigation
+Control the working directory for Claude's file operations.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/ls` | List directory contents | `/ls src/` |
+| `/cd` | Change working directory | `/cd /home/user/project` |
+| `/pwd` | Print working directory | `/pwd` |
+| `/add-dir` | Add directory to context | `/add-dir ./lib` |
+
+#### CLI Tools
+Direct access to Claude Code CLI functionality.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/init` | Initialize project config | `/init` |
+| `/memory` | View/edit Claude's memory | `/memory` |
+| `/review` | Review code changes | `/review` |
+| `/doctor` | Diagnose installation | `/doctor` |
+| `/stats` | Show session statistics | `/stats` |
+| `/context` | Display context info | `/context` |
+| `/todos` | List and manage todos | `/todos` |
+| `/claude-help` | Show Claude Code help | `/claude-help` |
+| `/claude-config` | Show configuration | `/claude-config` |
+
 #### Multi-Agent Tasks
 Autonomous Planner → Worker → Evaluator pipeline for complex tasks. Iterates up to 3 times until complete.
 
@@ -87,52 +135,6 @@ Full git workflow without leaving Slack. Includes branch name and commit message
 | `/commit` | Commit staged changes | `/commit fix: resolve race condition` |
 | `/branch` | Manage branches | `/branch create feature/auth` |
 
-#### Session Management
-Each Slack thread maintains an isolated Claude session with its own context.
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/clear` | Reset conversation | `/clear` |
-| `/compact` | Compact context | `/compact` |
-| `/cost` | Show session cost | `/cost` |
-| `/resume` | Resume previous session | `/resume` |
-| `/sessions` | List active sessions | `/sessions` |
-| `/session-cleanup` | Clean up inactive sessions | `/session-cleanup` |
-
-#### Navigation
-Control the working directory for Claude's file operations.
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/ls` | List directory contents | `/ls src/` |
-| `/cd` | Change working directory | `/cd /home/user/project` |
-| `/pwd` | Print working directory | `/pwd` |
-| `/add-dir` | Add directory to context | `/add-dir ./lib` |
-
-#### Configuration
-Customize Claude's behavior for your workflow.
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/model` | Show or change AI model | `/model sonnet` |
-| `/mode` | Set permission mode | `/mode plan` |
-| `/permissions` | View/update permissions | `/permissions` |
-| `/notifications` | Configure notifications | `/notifications` |
-
-#### CLI Tools
-Direct access to Claude Code CLI functionality.
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/init` | Initialize project config | `/init` |
-| `/memory` | View/edit Claude's memory | `/memory` |
-| `/review` | Review code changes | `/review` |
-| `/doctor` | Diagnose installation | `/doctor` |
-| `/stats` | Show session statistics | `/stats` |
-| `/context` | Display context info | `/context` |
-| `/todos` | List and manage todos | `/todos` |
-| `/claude-help` | Show Claude Code help | `/claude-help` |
-| `/claude-config` | Show configuration | `/claude-config` |
 
 ### 3. Configure
 Key environment variables (see `.env.example` for optional settings):
@@ -186,4 +188,4 @@ MIT
 
 - - - 
 
-Congratulations, you can now use Claude Code from anywhere 💪
+Congratulations, you can now use Claude Code from anywhere 🎉💪
