@@ -1,8 +1,7 @@
 <p align="center">
-  <img src="assets/repo_logo.png" alt="Slack Claude Code Bot" width="400">
+  <img src="assets/repo_logo.png" alt="Slack Claude Code Bot" width="1000">
 </p>
 
-# Slack Claude Code Bot
 
 **Claude Code, but in Slack.** Access Claude Code remotely from any device, or use it full-time for a better UI experience.
 
