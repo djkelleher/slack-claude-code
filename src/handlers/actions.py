@@ -11,7 +11,6 @@ from src.approval.plan_manager import PlanApprovalManager
 from src.approval.slack_ui import build_approval_result_blocks, build_plan_result_blocks
 from src.claude.streaming import ToolActivity
 from src.config import config
-from src.pty.pool import PTYSessionPool
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.formatting import SlackFormatter
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
@@ -582,29 +581,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 user=body["user"]["id"],
                 text=f"Task `{task_id}` not found or already completed.",
             )
-
-    # -------------------------------------------------------------------------
-    # PTY session handlers
-    # -------------------------------------------------------------------------
-
-    @app.action("restart_pty")
-    async def handle_restart_pty(ack, action, body, client, logger):
-        """Handle PTY session restart button click."""
-        await ack()
-
-        channel_id = action["value"]
-        user_id = body["user"]["id"]
-
-        # Remove existing session
-        await PTYSessionPool.remove(channel_id)
-
-        await client.chat_postMessage(
-            channel=channel_id,
-            text=":arrows_counterclockwise: PTY session restarted. "
-            "A new session will be created on your next command.",
-        )
-
-        logger.info(f"PTY session for {channel_id} restarted by {user_id}")
 
     # -------------------------------------------------------------------------
     # Tool detail handlers

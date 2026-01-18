@@ -5,17 +5,6 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class PTYTimeouts(BaseModel):
-    """Timeout configuration for PTY sessions."""
-
-    startup: float = 30.0
-    inactivity: float = 10.0
-    idle: int = 1800
-    cleanup_interval: int = 60
-    read: float = 0.1
-    stop_grace: float = 0.5
-
-
 class ExecutionTimeouts(BaseModel):
     """Timeout configuration for command execution."""
 
@@ -61,7 +50,6 @@ class DisplayConfig(BaseModel):
 class TimeoutConfig(BaseModel):
     """Centralized timeout configuration."""
 
-    pty: PTYTimeouts = Field(default_factory=PTYTimeouts)
     execution: ExecutionTimeouts = Field(default_factory=ExecutionTimeouts)
     slack: SlackTimeouts = Field(default_factory=SlackTimeouts)
     cache: CacheTimeouts = Field(default_factory=CacheTimeouts)
@@ -122,12 +110,6 @@ class Config(BaseSettings):
     # GitHub repository for web viewer links
     GITHUB_REPO: str = ""
 
-    # PTY timeout overrides from environment
-    SESSION_STARTUP_TIMEOUT: float = 30.0
-    SESSION_INACTIVITY_TIMEOUT: float = 10.0
-    SESSION_IDLE_TIMEOUT: int = 1800
-    SESSION_CLEANUP_INTERVAL: int = 60
-
     # Execution timeout overrides from environment
     PERMISSION_TIMEOUT: int = 300
     USAGE_CHECK_TIMEOUT: int = 30
@@ -163,12 +145,6 @@ class Config(BaseSettings):
     def timeouts(self) -> TimeoutConfig:
         """Build TimeoutConfig from environment variables."""
         return TimeoutConfig(
-            pty=PTYTimeouts(
-                startup=self.SESSION_STARTUP_TIMEOUT,
-                inactivity=self.SESSION_INACTIVITY_TIMEOUT,
-                idle=self.SESSION_IDLE_TIMEOUT,
-                cleanup_interval=self.SESSION_CLEANUP_INTERVAL,
-            ),
             execution=ExecutionTimeouts(
                 permission=self.PERMISSION_TIMEOUT,
                 usage_check=self.USAGE_CHECK_TIMEOUT,

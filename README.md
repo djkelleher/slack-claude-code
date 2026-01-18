@@ -24,29 +24,10 @@
 - Python 3.10+
 - [Claude Code CLI](https://github.com/anthropics/claude-code) installed and authenticated
 
-### Configure 
-```bash
-cp .env.example .env
-# Add your tokens: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_SIGNING_SECRET
-```
-Key environment variables (see `.env.example` for full list):
-```bash
-# Required
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-SLACK_SIGNING_SECRET=...
-
-# Optional
-DEFAULT_WORKING_DIR=/path/to/projects
-CLAUDE_PERMISSION_MODE=approve-all  # or: prompt, deny
-AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP
-```
-
 ### 1. Install the `ccslack` executable
 ```bash
 pipx install slack-claude-code
 ```
-You can now run `ccslack` in your terminal. The working directory where you start the executable will be the defualt working direcotry for your Claude Code session(s)
 
 ### 2. Create Slack App
 Go to https://api.slack.com/apps → "Create New App" → "From scratch"
@@ -109,7 +90,6 @@ Each Slack thread maintains an isolated Claude session with its own context.
 | `/compact` | Compact context | `/compact` |
 | `/cost` | Show session cost | `/cost` |
 | `/resume` | Resume previous session | `/resume` |
-| `/pty` | PTY session management | `/pty` |
 | `/sessions` | List active sessions | `/sessions` |
 | `/session-cleanup` | Clean up inactive sessions | `/session-cleanup` |
 
@@ -148,12 +128,26 @@ Direct access to Claude Code CLI functionality.
 | `/claude-help` | Show Claude Code help | `/claude-help` |
 | `/claude-config` | Show configuration | `/claude-config` |
 
+### 3. Configure
+Key environment variables (see `.env.example` for optional settings):
+```bash
+# Required
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+SLACK_SIGNING_SECRET=...
+```
 
+**Where to find these values:**
+- `SLACK_BOT_TOKEN`: Your App → OAuth & Permissions → Bot User OAuth Token
+- `SLACK_APP_TOKEN`: Your App → Basic Information → App-Level Tokens → (token you created with `connections:write`)
+- `SLACK_SIGNING_SECRET`: Your App → Basic Information → App Credentials → Signing Secret
+
+### 4. Start the Slack bot
+You can now run `ccslack` in your terminal. The working directory where you start the executable will be the defualt working direcotry for your Claude Code session(s). If you have a .env file in this directory, it will automatically be loaded.   
 
 ## Usage
 
-Type messages in any channel where the bot is present. Each Slack thread maintains an independent Claude session with its own working directory and context.
-
+Type messages in any channel where the bot is installed. The main channel is a single Claude Code session. If you click `reply` to any message and start a thread, this will be a new Claude Code session.
 
 ## Architecture
 
@@ -162,8 +156,7 @@ src/
 ├── app.py                 # Main entry point
 ├── config.py              # Configuration
 ├── database/              # SQLite persistence (models, migrations, repository)
-├── claude/                # Claude CLI integration (executor, streaming)
-├── pty/                   # PTY session management (session, pool, parser)
+├── claude/                # Claude CLI integration (streaming)
 ├── handlers/              # Slack command handlers
 ├── agents/                # Multi-agent orchestration (planner→worker→evaluator)
 ├── approval/              # Permission & plan approval handling
@@ -180,8 +173,11 @@ src/
 |---------|----------|
 | Configuration errors on startup | Check `.env` has all required tokens |
 | Commands not appearing | Verify slash commands in Slack app settings |
-| PTY session errors | Use `/pty` → "Restart Session" |
 
 ## License
 
 MIT
+
+- - - 
+
+Congratulations, you can now use Claude Code from anywhere 💪

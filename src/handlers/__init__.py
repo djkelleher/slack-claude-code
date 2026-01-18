@@ -13,7 +13,6 @@ from .git import register_git_commands
 from .mode import register_mode_command
 from .notifications import register_notifications_command
 from .parallel import register_parallel_commands
-from .pty import register_pty_commands
 from .queue import register_queue_commands
 from .session_management import register_session_commands
 
@@ -46,7 +45,6 @@ def register_commands(
     register_queue_commands(app, deps)
     register_claude_cli_commands(app, deps)
     register_agent_commands(app, deps)
-    register_pty_commands(app, deps)
     register_mode_command(app, deps)
     register_notifications_command(app, deps)
     register_session_commands(app, deps)
