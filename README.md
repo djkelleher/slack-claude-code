@@ -15,6 +15,18 @@
 
 All Claude Code commands work the same way: `/clear`, `/compact`, `/model`, `/mode`, `/add-dir`, `/review`, plus filesystem and git commands.
 
+## Claude CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `/init` | Initialize Claude project configuration |
+| `/memory` | View/edit Claude's memory and context |
+| `/review` | Review code changes with Claude |
+| `/doctor` | Diagnose Claude Code installation issues |
+| `/stats` | Show session statistics |
+| `/context` | Display current context information |
+| `/todos` | List and manage todos |
+
 ## Installation
 
 ### Prerequisites
@@ -70,7 +82,6 @@ Type messages in any channel where the bot is present. Each Slack thread maintai
 | **Queue** | `/q <cmd>`, `/qv`, `/qc`, `/qr <id>` |
 | **Jobs** | `/st`, `/cc`, `/esc` |
 | **Multi-Agent** | `/task`, `/tasks`, `/task-cancel` |
-| **Claude CLI** | `/init`, `/memory`, `/review`, `/doctor`, `/stats`, `/context`, `/todos` |
 
 ### Plan Mode
 
