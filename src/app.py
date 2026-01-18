@@ -683,7 +683,18 @@ async def main():
     await handler.close_async()
 
 def run():
+    # Check for subcommands (e.g., ccslack config ...)
+    if len(sys.argv) > 1 and sys.argv[0].endswith(("ccslack", "ccslack.exe")):
+        subcommand = sys.argv[1].lower()
+        if subcommand == "config":
+            # Forward to config CLI with remaining args
+            sys.argv = sys.argv[1:]  # Remove 'ccslack' from argv
+            from src.cli import run as config_run
+
+            return config_run()
+
     asyncio.run(main())
+
 
 if __name__ == "__main__":
     run()

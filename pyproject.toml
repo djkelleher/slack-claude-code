@@ -8,6 +8,7 @@ packages = [{include = "src"}]
 
 [tool.poetry.scripts]
 ccslack = "src.app:run"
+ccslack-config = "src.cli:run"
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -18,6 +19,7 @@ pexpect = "^4.9.0"
 aiohttp = "^3.13.2"
 aiofiles = "^24.1.0"
 loguru = "^0.7.0"
+cryptography = "^44.0.0"
 
 
 [tool.poetry.group.dev.dependencies]

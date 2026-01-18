@@ -1,8 +1,10 @@
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.config_storage import get_storage
 
 
 class ExecutionTimeouts(BaseModel):
@@ -57,8 +59,28 @@ class TimeoutConfig(BaseModel):
     display: DisplayConfig = Field(default_factory=DisplayConfig)
 
 
+class EncryptedSettingsSource:
+    """Settings source that reads from encrypted storage."""
+
+    def __init__(self, settings_cls: type[BaseSettings]):
+        self.settings_cls = settings_cls
+
+    def __call__(self) -> dict[str, Any]:
+        """Load settings from encrypted storage."""
+        storage = get_storage()
+        return storage.get_all()
+
+
 class Config(BaseSettings):
-    """Application configuration loaded from environment variables."""
+    """
+    Application configuration loaded from multiple sources.
+
+    Priority (highest to lowest):
+    1. Encrypted storage (~/.slack-claude-code/config.enc)
+    2. Environment variables
+    3. .env file
+    4. Default values
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -66,6 +88,24 @@ class Config(BaseSettings):
         extra="ignore",
         populate_by_name=True,
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        """Customize settings sources to add encrypted storage with highest priority."""
+        return (
+            init_settings,
+            EncryptedSettingsSource(settings_cls),  # Encrypted storage (highest priority)
+            env_settings,  # Environment variables
+            dotenv_settings,  # .env file
+            file_secret_settings,
+        )
 
     # Slack configuration
     SLACK_BOT_TOKEN: str = ""
