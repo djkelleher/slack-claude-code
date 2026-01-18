@@ -42,48 +42,93 @@ Go to https://api.slack.com/apps → "Create New App" → "From scratch"
 
 **App Icon**: In "Basic Information" → "Display Information", upload `assets/claude_logo.png` from this repo as the app icon
 
-**Slash Commands**: Add the commands from this table (or the subset that you plan to use)
+**Slash Commands**: Add the commands from the tables below (or the subset that you plan to use)
 
-| Category | Command | Description |
-|----------|---------|-------------|
-| CLI | `/init` | Initialize Claude project configuration |
-| CLI | `/memory` | View/edit Claude's memory and context |
-| CLI | `/review` | Review code changes with Claude |
-| CLI | `/doctor` | Diagnose Claude Code installation issues |
-| CLI | `/stats` | Show session statistics |
-| CLI | `/context` | Display current context information |
-| CLI | `/todos` | List and manage todos |
-| CLI | `/claude-help` | Show Claude Code help |
-| CLI | `/claude-config` | Show Claude Code configuration |
-| Session | `/clear` | Clear session and reset conversation |
-| Session | `/compact` | Compact conversation context |
-| Session | `/cost` | Show session cost |
-| Session | `/resume` | Resume a previous Claude session |
-| Session | `/pty` | PTY session management |
-| Session | `/sessions` | List active sessions |
-| Session | `/session-cleanup` | Clean up inactive sessions |
-| Navigation | `/ls` | List directory contents |
-| Navigation | `/cd` | Change working directory |
-| Navigation | `/pwd` | Print working directory |
-| Navigation | `/add-dir` | Add directory to context |
-| Git | `/status` | Show git status |
-| Git | `/diff` | Show git diff |
-| Git | `/commit` | Commit staged changes |
-| Git | `/branch` | Show/create/switch branches |
-| Config | `/model` | Show or change AI model |
-| Config | `/mode` | Set permission mode (plan/approve/bypass) |
-| Config | `/permissions` | View or update permissions |
-| Config | `/notifications` | Configure notification settings |
-| Queue | `/q <cmd>` | Queue a command for execution |
-| Queue | `/qv` | View queued commands |
-| Queue | `/qc` | Clear the command queue |
-| Queue | `/qr <id>` | Remove a specific queued command |
-| Jobs | `/st` | Show status of running jobs |
-| Jobs | `/cc` | Cancel current job |
-| Jobs | `/esc` | Interrupt current operation |
-| Multi-Agent | `/task` | Create a new agent task |
-| Multi-Agent | `/tasks` | List running agent tasks |
-| Multi-Agent | `/task-cancel` | Cancel an agent task |
+#### Multi-Agent Tasks
+Autonomous Planner → Worker → Evaluator pipeline for complex tasks. Iterates up to 3 times until complete.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/task` | Start a multi-agent task | `/task add unit tests for UserService` |
+| `/tasks` | List active tasks with status | `/tasks` |
+| `/task-cancel` | Cancel a running task | `/task-cancel abc123` |
+
+#### Command Queue
+Queue commands for sequential execution while preserving Claude's session context across items.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/q` | Add command to queue | `/q analyze the API endpoints` |
+| `/qv` | View queue status | `/qv` |
+| `/qc` | Clear pending queue | `/qc` |
+| `/qr` | Remove specific item | `/qr 5` |
+
+#### Jobs & Control
+Monitor and control long-running operations with real-time progress updates.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/st` | Show active job status | `/st` |
+| `/cc` | Cancel jobs | `/cc` or `/cc abc123` |
+| `/esc` | Send interrupt (Ctrl+C) | `/esc` |
+
+#### Git
+Full git workflow without leaving Slack. Includes branch name and commit message validation.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/status` | Show branch and changes | `/status` |
+| `/diff` | Show uncommitted changes | `/diff --staged` |
+| `/commit` | Commit staged changes | `/commit fix: resolve race condition` |
+| `/branch` | Manage branches | `/branch create feature/auth` |
+
+#### Session Management
+Each Slack thread maintains an isolated Claude session with its own context.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/clear` | Reset conversation | `/clear` |
+| `/compact` | Compact context | `/compact` |
+| `/cost` | Show session cost | `/cost` |
+| `/resume` | Resume previous session | `/resume` |
+| `/pty` | PTY session management | `/pty` |
+| `/sessions` | List active sessions | `/sessions` |
+| `/session-cleanup` | Clean up inactive sessions | `/session-cleanup` |
+
+#### Navigation
+Control the working directory for Claude's file operations.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/ls` | List directory contents | `/ls src/` |
+| `/cd` | Change working directory | `/cd /home/user/project` |
+| `/pwd` | Print working directory | `/pwd` |
+| `/add-dir` | Add directory to context | `/add-dir ./lib` |
+
+#### Configuration
+Customize Claude's behavior for your workflow.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/model` | Show or change AI model | `/model sonnet` |
+| `/mode` | Set permission mode | `/mode plan` |
+| `/permissions` | View/update permissions | `/permissions` |
+| `/notifications` | Configure notifications | `/notifications` |
+
+#### CLI Tools
+Direct access to Claude Code CLI functionality.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/init` | Initialize project config | `/init` |
+| `/memory` | View/edit Claude's memory | `/memory` |
+| `/review` | Review code changes | `/review` |
+| `/doctor` | Diagnose installation | `/doctor` |
+| `/stats` | Show session statistics | `/stats` |
+| `/context` | Display context info | `/context` |
+| `/todos` | List and manage todos | `/todos` |
+| `/claude-help` | Show Claude Code help | `/claude-help` |
+| `/claude-config` | Show configuration | `/claude-config` |
 
 ### 3. Configure and run
 ```bash
@@ -95,150 +140,6 @@ poetry run python run.py
 ## Usage
 
 Type messages in any channel where the bot is present. Each Slack thread maintains an independent Claude session with its own working directory and context.
-
-### Plan Mode
-
-```
-/mode plan
-```
-
-Claude creates a detailed plan before execution, shown with Approve/Reject buttons. Ideal for complex implementations where you want to review the approach first.
-
-### Multi-Agent Tasks
-
-The multi-agent system uses a **Planner → Worker → Evaluator** pipeline for complex tasks:
-
-```
-/task refactor the authentication module to use JWT tokens
-```
-
-**How it works:**
-1. **Planner** analyzes the task and creates an actionable plan
-2. **Worker** executes the plan step by step
-3. **Evaluator** reviews the output and determines if more work is needed
-
-The system iterates up to 3 times until the evaluator marks the task as complete.
-
-**Commands:**
-| Command | Description |
-|---------|-------------|
-| `/task <description>` | Start a new multi-agent task |
-| `/tasks` | List all active tasks with status |
-| `/task-cancel <id>` | Cancel a running task |
-
-**Example workflow:**
-```
-User: /task add unit tests for the user service
-
-🔄 Planning... (analyzing task and creating plan)
-🔨 Working... (executing the plan)
-✅ Evaluating... (reviewing results)
-
-✅ Task Complete
-Verdict: COMPLETE
-Created 12 unit tests covering UserService methods
-```
-
-### Command Queue
-
-Queue multiple commands for sequential execution while maintaining session context:
-
-```
-/q analyze the database schema
-/q suggest performance improvements
-/q implement the top 3 suggestions
-```
-
-Each command runs after the previous completes, preserving Claude's memory across the queue.
-
-**Commands:**
-| Command | Description |
-|---------|-------------|
-| `/q <prompt>` | Add command to queue (shows position) |
-| `/qv` | View queue status and pending items |
-| `/qc` | Clear all pending items |
-| `/qr <id>` | Remove specific item from queue |
-
-**Example:**
-```
-User: /q review the API endpoints
-Added to queue at position #1
-
-User: /q fix any security issues found
-Added to queue at position #2
-
-User: /qv
-📋 Queue Status
-Running: review the API endpoints
-Pending:
-  #2: fix any security issues found
-```
-
-### Jobs & Parallel Execution
-
-Monitor and control long-running operations:
-
-```
-/st          # Show status of all active jobs
-/cc          # Cancel all jobs in channel
-/cc abc123   # Cancel specific job by ID
-/esc         # Send interrupt signal (like Ctrl+C)
-```
-
-Jobs track parallel analysis tasks and sequential loops. Each job shows progress and provides cancel buttons in the Slack UI.
-
-**Example:**
-```
-User: /st
-📊 Active Jobs
-
-Job: abc123
-  Type: parallel_analysis
-  Status: running (3/5 complete)
-  [Cancel]
-
-Job: def456
-  Type: sequential_loop
-  Status: running (iteration 2/10)
-  [Cancel]
-```
-
-### Git Integration
-
-Full git workflow support without leaving Slack:
-
-```
-/status              # Show branch, staged/unstaged changes
-/diff                # Show uncommitted changes
-/diff --staged       # Show only staged changes
-/commit fix: resolve login race condition
-/branch              # Show current branch
-/branch create feature/auth
-/branch switch main
-```
-
-**Example workflow:**
-```
-User: /status
-📌 Branch: feature/auth
-↑2 ahead of origin
-
-📝 Staged:
-  src/auth.py
-  tests/test_auth.py
-
-📄 Modified:
-  README.md
-
-User: /diff --staged
-[Shows diff of staged files]
-
-User: /commit add JWT token refresh logic
-✅ Committed: a1b2c3d
-```
-
-Git commands include safety validations for branch names and commit messages, with automatic truncation for large diffs in Slack.
-
 
 ## Configuration
 
