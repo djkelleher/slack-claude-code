@@ -12,11 +12,11 @@
 | **Code blocks** | Plain text | Syntax-highlighted with copy button |
 | **Long output** | Scrolls off screen | "View Details" modal |
 | **Permissions** | Y/n prompts | Approve/Deny buttons |
-| **Parallel work** | Multiple terminals | Threads with isolated sessions |
+| **Parallel work** | Multiple terminals | Threads = isolated sessions |
 | **File sharing** | `cat` or copy-paste | Drag & drop with preview |
 | **Notifications** | Watch the terminal | Alerts when tasks complete |
-
-All Claude Code commands work the same way: `/clear`, `/compact`, `/model`, `/mode`, `/add-dir`, `/review`, plus filesystem and git commands.
+| **Streaming** | Live terminal output | Watch responses as they generate |
+| **Smart context** | Manual file inclusion | Frequently-used files auto-included |
 
 ## Commands
 
@@ -97,13 +97,6 @@ poetry run python run.py
 ## Usage
 
 Type messages in any channel where the bot is present. Each Slack thread maintains an independent Claude session with its own working directory and context.
-
-### Key Features
-
-- **Threads = Sessions**: Each thread has isolated context; `/clear` only affects that thread
-- **File Uploads**: Drag & drop files—Claude sees them instantly (code, images, PDFs)
-- **Smart Context**: Frequently-used files are automatically included in prompts
-- **Streaming**: Watch Claude's responses as they're generated
 
 ### Plan Mode
 
