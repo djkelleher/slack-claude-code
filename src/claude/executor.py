@@ -9,7 +9,6 @@ import logging
 from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, Optional
 
-from ..config import config
 from ..hooks.registry import HookRegistry, create_context
 from ..hooks.types import HookEvent, HookEventType
 from ..pty.pool import PTYSessionPool
@@ -40,11 +39,7 @@ class ClaudeExecutor:
     allowing multiple commands to be sent without restarting.
     """
 
-    def __init__(
-        self,
-        timeout: int = None,
-    ) -> None:
-        self.timeout = timeout or config.timeouts.execution.command
+    def __init__(self) -> None:
         self._initialized = False
 
     async def _ensure_initialized(self) -> None:
@@ -109,7 +104,6 @@ class ClaudeExecutor:
                 prompt=prompt,
                 working_directory=working_directory,
                 on_chunk=handle_chunk,
-                timeout=self.timeout,
             )
 
             duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
@@ -217,7 +211,6 @@ class ClaudeExecutor:
                     prompt=prompt,
                     working_directory=working_directory,
                     on_chunk=on_chunk,
-                    timeout=self.timeout,
                 )
             except Exception as e:
                 await queue.put(

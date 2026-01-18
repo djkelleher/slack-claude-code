@@ -677,7 +677,6 @@ async def main():
 
     logger.info("Starting Slack Claude Code Bot...")
     logger.info(f"Default working directory: {config.DEFAULT_WORKING_DIR}")
-    logger.info(f"Command timeout: {config.timeouts.execution.command}s")
     logger.info(f"Session idle timeout: {config.timeouts.pty.idle}s")
 
     # Start the handler

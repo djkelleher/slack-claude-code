@@ -152,7 +152,7 @@ class TestTimeoutConfig:
 
         # Access nested values
         assert timeout_config.pty.startup == 30.0
-        assert timeout_config.execution.command == 300
+        assert timeout_config.execution.permission == 300
         assert timeout_config.slack.message_update_throttle == 2.0
         assert timeout_config.cache.usage == 60
         assert timeout_config.streaming.max_accumulated_size == 500000
@@ -220,7 +220,7 @@ class TestEnvironmentVariableOverrides:
                 startup=float(os.getenv("SESSION_STARTUP_TIMEOUT", "30.0")),
             ),
             execution=ExecutionTimeouts(
-                command=int(os.getenv("COMMAND_TIMEOUT", "300")),
+                permission=int(os.getenv("PERMISSION_TIMEOUT", "300")),
             ),
             slack=SlackTimeouts(
                 message_update_throttle=float(os.getenv("MESSAGE_UPDATE_THROTTLE", "2.0")),
@@ -234,7 +234,7 @@ class TestEnvironmentVariableOverrides:
 
         # Environment values should be used when set
         assert custom_timeouts.pty.startup == float(os.getenv("SESSION_STARTUP_TIMEOUT", "30.0"))
-        assert custom_timeouts.execution.command == int(os.getenv("COMMAND_TIMEOUT", "300"))
+        assert custom_timeouts.execution.permission == int(os.getenv("PERMISSION_TIMEOUT", "300"))
 
     def test_auto_approve_tools_parsing(self):
         """AUTO_APPROVE_TOOLS env var parsed correctly."""

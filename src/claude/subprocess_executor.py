@@ -46,10 +46,8 @@ class SubprocessExecutor:
 
     def __init__(
         self,
-        timeout: int = None,
         db: Optional["DatabaseRepository"] = None,
     ) -> None:
-        self.timeout = timeout or config.timeouts.execution.command
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._background_tasks: set[asyncio.Task] = set()  # Keep references to prevent GC
         self.db = db  # Optional database for smart context tracking
@@ -197,19 +195,7 @@ class SubprocessExecutor:
         try:
             # Read stdout line by line
             while True:
-                try:
-                    line = await asyncio.wait_for(process.stdout.readline(), timeout=self.timeout)
-                except asyncio.TimeoutError:
-                    logger.warning(f"{log_prefix}Timeout waiting for Claude output")
-                    process.terminate()
-                    await process.wait()  # Prevent zombie process
-                    return ExecutionResult(
-                        success=False,
-                        output=accumulated_output,
-                        detailed_output=accumulated_detailed,
-                        session_id=result_session_id,
-                        error="Command timed out",
-                    )
+                line = await process.stdout.readline()
 
                 if not line:
                     break

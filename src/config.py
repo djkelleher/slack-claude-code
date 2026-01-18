@@ -23,7 +23,6 @@ class PTYTimeouts:
 class ExecutionTimeouts:
     """Timeout configuration for command execution."""
 
-    command: int = 300  # max command runtime (5 min)
     permission: int = 300  # permission request timeout
     usage_check: int = 30  # usage CLI command timeout
     plan_approval: int = 600  # plan approval timeout (10 min)
@@ -131,7 +130,6 @@ class Config:
             cleanup_interval=int(os.getenv("SESSION_CLEANUP_INTERVAL", "60")),
         ),
         execution=ExecutionTimeouts(
-            command=int(os.getenv("COMMAND_TIMEOUT", "300")),
             permission=int(os.getenv("PERMISSION_TIMEOUT", "300")),
             usage_check=int(os.getenv("USAGE_CHECK_TIMEOUT", "30")),
             plan_approval=int(os.getenv("PLAN_APPROVAL_TIMEOUT", "600")),

@@ -38,7 +38,6 @@ SLACK_SIGNING_SECRET=...
 
 # Optional
 DEFAULT_WORKING_DIR=/path/to/projects
-COMMAND_TIMEOUT=300              # 5 min default
 CLAUDE_PERMISSION_MODE=approve-all  # or: prompt, deny
 AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP
 ```
@@ -181,7 +180,6 @@ src/
 |---------|----------|
 | Configuration errors on startup | Check `.env` has all required tokens |
 | Commands not appearing | Verify slash commands in Slack app settings |
-| Timeouts | Increase `COMMAND_TIMEOUT` |
 | PTY session errors | Use `/pty` → "Restart Session" |
 
 ## License

@@ -93,7 +93,7 @@ class PTYSession:
         self,
         prompt: str,
         on_chunk: Optional[Callable[[ResponseChunk], Awaitable[None]]] = None,
-        timeout: float = 300.0,
+        timeout: float = 86400.0,  # 24 hours - no practical limit
     ) -> SessionResponse:
         """Send a prompt and collect the response.
 
@@ -104,7 +104,7 @@ class PTYSession:
         on_chunk : Callable, optional
             Callback for streaming chunks.
         timeout : float
-            Maximum time to wait for response.
+            Maximum time to wait for response (default: 24 hours).
 
         Returns
         -------
@@ -228,7 +228,7 @@ class PTYSession:
     async def _read_until_prompt(
         self,
         on_chunk: Optional[Callable[[ResponseChunk], Awaitable[None]]] = None,
-        timeout: float = 300.0,
+        timeout: float = 86400.0,  # 24 hours - no practical limit
     ) -> SessionResponse:
         """Read output until a prompt is detected.
 

@@ -239,7 +239,7 @@ class PTYSessionPool:
         prompt: str,
         working_directory: str = "~",
         on_chunk: Optional[Callable] = None,
-        timeout: float = 300.0,
+        timeout: float = 86400.0,  # 24 hours - no practical limit
     ) -> SessionResponse:
         """Send a prompt to a session, creating it if needed.
 
@@ -250,7 +250,7 @@ class PTYSessionPool:
             prompt: The prompt to send
             working_directory: Working directory if creating new session
             on_chunk: Optional streaming callback
-            timeout: Maximum time to wait for response
+            timeout: Maximum time to wait for response (default: 24 hours)
 
         Returns:
             SessionResponse with the result
