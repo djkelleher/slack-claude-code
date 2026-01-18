@@ -7,10 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Package root directory (where src/ lives)
-PACKAGE_ROOT = Path(__file__).parent.parent
-
-
 @dataclass
 class PTYTimeouts:
     """Timeout configuration for PTY sessions."""
@@ -89,8 +85,8 @@ class Config:
     SLACK_APP_TOKEN: str = os.getenv("SLACK_APP_TOKEN", "")
     SLACK_SIGNING_SECRET: str = os.getenv("SLACK_SIGNING_SECRET", "")
 
-    # Database - use absolute path based on package location
-    DATABASE_PATH: str = os.getenv("DATABASE_PATH", str(PACKAGE_ROOT / "data" / "slack_claude.db"))
+    # Database - defaults to current working directory
+    DATABASE_PATH: str = os.getenv("DATABASE_PATH", str(Path.cwd() / "slack_claude.db"))
     DEFAULT_WORKING_DIR: str = os.getenv("DEFAULT_WORKING_DIR", os.getcwd())
 
     # Claude Code configuration

@@ -152,7 +152,7 @@ def sanitize_error(error: str) -> str:
     )
     # Redact environment variable values that might contain secrets
     sanitized = re.sub(
-        r"(SLACK_BOT_TOKEN|SLACK_APP_TOKEN|SLACK_SIGNING_SECRET|DATABASE_PATH)=[^\s]+",
+        r"(SLACK_BOT_TOKEN|SLACK_APP_TOKEN|SLACK_SIGNING_SECRET)=[^\s]+",
         r"\1=***",
         sanitized,
         flags=re.IGNORECASE,

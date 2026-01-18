@@ -24,11 +24,30 @@
 - Python 3.10+
 - [Claude Code CLI](https://github.com/anthropics/claude-code) installed and authenticated
 
+### Configure 
+```bash
+cp .env.example .env
+# Add your tokens: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_SIGNING_SECRET
+```
+Key environment variables (see `.env.example` for full list):
+```bash
+# Required
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+SLACK_SIGNING_SECRET=...
+
+# Optional
+DEFAULT_WORKING_DIR=/path/to/projects
+COMMAND_TIMEOUT=300              # 5 min default
+CLAUDE_PERMISSION_MODE=approve-all  # or: prompt, deny
+AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP
+```
+
 ### 1. Install the `ccslack` executable
 ```bash
 pipx install slack-claude-code
 ```
-You can now run `ccslack` in your termainl. The working directory where you start the executable will be the defualt working direcotry for your Claude Code session(s)
+You can now run `ccslack` in your terminal. The working directory where you start the executable will be the defualt working direcotry for your Claude Code session(s)
 
 ### 2. Create Slack App
 Go to https://api.slack.com/apps → "Create New App" → "From scratch"
@@ -130,33 +149,12 @@ Direct access to Claude Code CLI functionality.
 | `/claude-help` | Show Claude Code help | `/claude-help` |
 | `/claude-config` | Show configuration | `/claude-config` |
 
-### 3. Configure and run
-```bash
-cp .env.example .env
-# Add your tokens: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_SIGNING_SECRET
-poetry run python run.py
-```
+
 
 ## Usage
 
 Type messages in any channel where the bot is present. Each Slack thread maintains an independent Claude session with its own working directory and context.
 
-## Configuration
-
-Key environment variables (see `.env.example` for full list):
-
-```bash
-# Required
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-SLACK_SIGNING_SECRET=...
-
-# Optional
-DEFAULT_WORKING_DIR=/path/to/projects
-COMMAND_TIMEOUT=300              # 5 min default
-CLAUDE_PERMISSION_MODE=approve-all  # or: prompt, deny
-AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP
-```
 
 ## Architecture
 
