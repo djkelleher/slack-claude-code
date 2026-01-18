@@ -1,17 +1,15 @@
 """Low-level Claude Code process management with pexpect."""
 
 import asyncio
-import logging
 import os
 from pathlib import Path
 from typing import Optional
 
 import pexpect
+from loguru import logger
 
 from ..config import config
 from .types import PTYSessionConfig
-
-logger = logging.getLogger(__name__)
 
 
 class ClaudeProcess:

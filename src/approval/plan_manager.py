@@ -5,17 +5,15 @@ Similar to PermissionManager but specialized for plan mode workflow.
 """
 
 import asyncio
-import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
 from ..config import config
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass

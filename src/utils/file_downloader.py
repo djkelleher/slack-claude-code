@@ -1,15 +1,13 @@
 """File downloader for Slack uploaded files."""
 
-import logging
 import os
 from pathlib import Path
 from typing import Any
 
 import aiofiles
 import aiohttp
+from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
-
-logger = logging.getLogger(__name__)
 
 
 class FileTooLargeError(Exception):

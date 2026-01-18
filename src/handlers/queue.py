@@ -1,8 +1,8 @@
 """Queue command handlers: /q, /qv, /qc, /qr."""
 
 import asyncio
-import logging
 
+from loguru import logger
 from slack_bolt.async_app import AsyncApp
 
 from src.config import config
@@ -10,8 +10,6 @@ from src.tasks.manager import TaskManager
 from src.utils.formatting import SlackFormatter
 
 from .base import CommandContext, HandlerDependencies, slack_command
-
-logger = logging.getLogger(__name__)
 
 # Default timeout for queue processors (1 hour)
 QUEUE_PROCESSOR_TIMEOUT = 3600

@@ -4,12 +4,12 @@ Manages pending permission requests with async futures for approval responses.
 """
 
 import asyncio
-import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
 from ..config import config
@@ -17,8 +17,6 @@ from ..database.repository import DatabaseRepository
 from ..hooks.registry import HookRegistry, create_context
 from ..hooks.types import HookEvent, HookEventType
 from .slack_ui import build_approval_blocks
-
-logger = logging.getLogger(__name__)
 
 
 async def _post_permission_notification(

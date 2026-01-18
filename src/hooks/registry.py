@@ -4,14 +4,13 @@ Simple dict-based registry with thread-safe operations following project convent
 """
 
 import asyncio
-import logging
 import threading
 import time
 from typing import Any, Awaitable, Callable, Optional
 
-from .types import HookContext, HookEvent, HookEventType, HookResult
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from .types import HookContext, HookEvent, HookEventType, HookResult
 
 # Type alias for hook handlers
 HookHandler = Callable[[HookEvent], Awaitable[Optional[Any]]]

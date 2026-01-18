@@ -1,13 +1,10 @@
 """Notifications command handler: /notifications."""
 
-import logging
-
+from loguru import logger
 from slack_bolt.async_app import AsyncApp
 
 from ..utils.formatting import SlackFormatter
 from .base import CommandContext, HandlerDependencies, slack_command
-
-logger = logging.getLogger(__name__)
 
 
 def register_notifications_command(app: AsyncApp, deps: HandlerDependencies) -> None:

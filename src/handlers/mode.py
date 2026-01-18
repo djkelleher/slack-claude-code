@@ -1,14 +1,11 @@
 """Mode command handler: /mode."""
 
-import logging
-
+from loguru import logger
 from slack_bolt.async_app import AsyncApp
 
 from ..config import config
 from ..utils.formatting import SlackFormatter
 from .base import CommandContext, HandlerDependencies, slack_command
-
-logger = logging.getLogger(__name__)
 
 # Mode aliases: short name -> CLI mode value
 MODE_ALIASES = {

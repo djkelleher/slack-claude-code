@@ -4,16 +4,15 @@ Coordinates Planner -> Worker -> Evaluator pipeline for complex tasks.
 """
 
 import asyncio
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Awaitable, Callable, Optional
 
+from loguru import logger
+
 from ..claude.subprocess_executor import ExecutionResult, SubprocessExecutor
 from .roles import AgentRole, format_task_prompt
-
-logger = logging.getLogger(__name__)
 
 
 class TaskStatus(Enum):
