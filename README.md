@@ -93,6 +93,7 @@ Direct access to Claude Code CLI functionality.
 | `/stats` | Show session statistics | `/stats` |
 | `/context` | Display context info | `/context` |
 | `/todos` | List and manage todos | `/todos` |
+| `/mcp` | Show MCP server configuration | `/mcp` |
 | `/claude-help` | Show Claude Code help | `/claude-help` |
 | `/claude-config` | Show configuration | `/claude-config` |
 
