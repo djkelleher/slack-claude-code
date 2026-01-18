@@ -20,24 +20,24 @@ All Claude Code commands work the same way: `/clear`, `/compact`, `/model`, `/mo
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/init` | Initialize Claude project configuration |
-| `/memory` | View/edit Claude's memory and context |
-| `/review` | Review code changes with Claude |
-| `/doctor` | Diagnose Claude Code installation issues |
-| `/stats` | Show session statistics |
-| `/context` | Display current context information |
-| `/todos` | List and manage todos |
-| `/clear`, `/compact` | Clear session or compact context |
-| `/cost` | Show session cost |
-| `/pty`, `/sessions`, `/session-cleanup` | PTY session management |
-| `/ls`, `/cd`, `/pwd`, `/add-dir` | Directory navigation |
-| `/status`, `/diff`, `/commit`, `/branch` | Git operations |
-| `/model`, `/mode`, `/permissions`, `/notifications` | Configuration |
-| `/q <cmd>`, `/qv`, `/qc`, `/qr <id>` | Command queue management |
-| `/st`, `/cc`, `/esc` | Job control |
-| `/task`, `/tasks`, `/task-cancel` | Multi-agent task management |
+| Category | Command | Description |
+|----------|---------|-------------|
+| CLI | `/init` | Initialize Claude project configuration |
+| CLI | `/memory` | View/edit Claude's memory and context |
+| CLI | `/review` | Review code changes with Claude |
+| CLI | `/doctor` | Diagnose Claude Code installation issues |
+| CLI | `/stats` | Show session statistics |
+| CLI | `/context` | Display current context information |
+| CLI | `/todos` | List and manage todos |
+| Session | `/clear`, `/compact` | Clear session or compact context |
+| Session | `/cost` | Show session cost |
+| Session | `/pty`, `/sessions`, `/session-cleanup` | PTY session management |
+| Navigation | `/ls`, `/cd`, `/pwd`, `/add-dir` | Directory navigation |
+| Git | `/status`, `/diff`, `/commit`, `/branch` | Git operations |
+| Config | `/model`, `/mode`, `/permissions`, `/notifications` | Configuration |
+| Queue | `/q <cmd>`, `/qv`, `/qc`, `/qr <id>` | Command queue management |
+| Jobs | `/st`, `/cc`, `/esc` | Job control |
+| Multi-Agent | `/task`, `/tasks`, `/task-cancel` | Multi-agent task management |
 
 ## Installation
 
