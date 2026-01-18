@@ -49,7 +49,7 @@ class PendingQuestion:
     tool_use_id: str  # The tool_use_id from Claude
     questions: list[Question]  # Can have multiple questions
     message_ts: Optional[str] = None
-    future: asyncio.Future = field(default=None, repr=False)
+    future: Optional[asyncio.Future] = field(default=None, repr=False)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     # Collected answers: question_index -> list of selected labels
     answers: dict[int, list[str]] = field(default_factory=dict)

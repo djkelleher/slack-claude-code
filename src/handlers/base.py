@@ -3,7 +3,7 @@
 import threading
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from src.utils.formatting import SlackFormatter
 
@@ -72,7 +72,7 @@ class HandlerDependencies:
 
     db: Any  # DatabaseRepository
     executor: Any  # ClaudeExecutor
-    _orchestrator: Any = field(default=None, repr=False)
+    _orchestrator: Optional[Any] = field(default=None, repr=False)
     _init_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     @property

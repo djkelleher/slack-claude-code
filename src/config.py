@@ -80,6 +80,9 @@ class Config(BaseSettings):
     CLAUDE_PERMISSION_MODE: str = "bypassPermissions"
     DEFAULT_MODEL: Optional[str] = None
 
+    # Default permission mode constant (used as fallback when invalid mode specified)
+    DEFAULT_BYPASS_MODE: str = "bypassPermissions"
+
     # Slack API limits
     SLACK_BLOCK_TEXT_LIMIT: int = 2900
     SLACK_FILE_THRESHOLD: int = 2000

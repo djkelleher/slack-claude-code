@@ -544,7 +544,7 @@ async def main():
 
                 if exit_plan_attempted:
                     logger.info("ExitPlanMode detected, switching session to bypass mode")
-                    await deps.db.update_session_mode(channel_id, thread_ts, "bypassPermissions")
+                    await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
 
                     # Post notification
                     await client.chat_postMessage(

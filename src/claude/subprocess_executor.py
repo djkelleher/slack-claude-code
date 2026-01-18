@@ -123,8 +123,8 @@ class SubprocessExecutor:
             cmd.extend(["--permission-mode", mode])
             logger.info(f"{log_prefix}Using --permission-mode {mode}")
         else:
-            logger.warning(f"{log_prefix}Invalid permission mode: {mode}, using bypassPermissions")
-            cmd.extend(["--permission-mode", "bypassPermissions"])
+            logger.warning(f"{log_prefix}Invalid permission mode: {mode}, using {config.DEFAULT_BYPASS_MODE}")
+            cmd.extend(["--permission-mode", config.DEFAULT_BYPASS_MODE])
 
         # Add allowed tools restriction if configured
         if config.ALLOWED_TOOLS:
@@ -388,7 +388,7 @@ class SubprocessExecutor:
                     resume_session_id=resume_session_id,  # Keep the session
                     execution_id=execution_id,
                     on_chunk=on_chunk,
-                    permission_mode="bypassPermissions",  # Switch to bypass mode
+                    permission_mode=config.DEFAULT_BYPASS_MODE,  # Switch to bypass mode
                     db_session_id=db_session_id,
                     model=model,
                     _recursion_depth=_recursion_depth + 1,

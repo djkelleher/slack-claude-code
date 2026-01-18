@@ -1,5 +1,6 @@
 """Interactive component action handlers."""
 
+import asyncio
 import json
 import re
 import uuid
@@ -18,7 +19,35 @@ from src.utils.streaming import StreamingMessageState, create_streaming_callback
 from .base import HandlerDependencies
 
 
-def _get_github_file_url(tool: ToolActivity, working_directory: str) -> str | None:
+async def _get_git_commit_hash(working_directory: str) -> str | None:
+    """Get the current git commit hash asynchronously.
+
+    Parameters
+    ----------
+    working_directory : str
+        The working directory of the git repo.
+
+    Returns
+    -------
+    str | None
+        The commit hash or None if unavailable.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "HEAD",
+            cwd=working_directory,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=5)
+        if process.returncode != 0:
+            return None
+        return stdout.decode().strip()
+    except (asyncio.TimeoutError, Exception):
+        return None
+
+
+async def _get_github_file_url(tool: ToolActivity, working_directory: str) -> str | None:
     """Generate a GitHub URL for viewing a file.
 
     Parameters
@@ -33,8 +62,6 @@ def _get_github_file_url(tool: ToolActivity, working_directory: str) -> str | No
     str | None
         The GitHub URL or None if not applicable.
     """
-    import subprocess
-
     if not config.GITHUB_REPO:
         return None
 
@@ -53,25 +80,15 @@ def _get_github_file_url(tool: ToolActivity, working_directory: str) -> str | No
         relative_path = file_path.lstrip("/")
 
     # Get current commit hash
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=working_directory,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            return None
-        commit_hash = result.stdout.strip()
-    except Exception:
+    commit_hash = await _get_git_commit_hash(working_directory)
+    if not commit_hash:
         return None
 
     # Generate GitHub URL
     return f"https://github.com/{config.GITHUB_REPO}/blob/{commit_hash}/{relative_path}"
 
 
-def _get_github_diff_url(working_directory: str) -> str | None:
+async def _get_github_diff_url(working_directory: str) -> str | None:
     """Generate a GitHub URL for viewing the latest commit diff.
 
     Parameters
@@ -84,24 +101,12 @@ def _get_github_diff_url(working_directory: str) -> str | None:
     str | None
         The GitHub diff URL or None if not applicable.
     """
-    import subprocess
-
     if not config.GITHUB_REPO:
         return None
 
     # Get current commit hash
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=working_directory,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            return None
-        commit_hash = result.stdout.strip()
-    except Exception:
+    commit_hash = await _get_git_commit_hash(working_directory)
+    if not commit_hash:
         return None
 
     # Generate GitHub commit URL (shows diff)
@@ -634,7 +639,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         # Add GitHub link button if GITHUB_REPO is configured
         if config.GITHUB_REPO and tool.name in ("Read", "Edit", "Write"):
-            github_url = _get_github_file_url(tool, config.DEFAULT_WORKING_DIR)
+            github_url = await _get_github_file_url(tool, config.DEFAULT_WORKING_DIR)
             if github_url:
                 detail_blocks.append({"type": "divider"})
                 detail_blocks.append(

@@ -47,7 +47,7 @@ class StreamingMessageState:
     last_activity_time: float = field(default=0.0)
     tool_activities: dict[str, "ToolActivity"] = field(default_factory=dict)
     _last_chunk_was_newline: bool = field(default=False)
-    _heartbeat_task: Optional[asyncio.Task] = field(default=None, repr=False)
+    _heartbeat_task: Optional["asyncio.Task[None]"] = field(default=None, repr=False)
     _is_idle: bool = field(default=False)
 
     def get_tool_list(self) -> list["ToolActivity"]:

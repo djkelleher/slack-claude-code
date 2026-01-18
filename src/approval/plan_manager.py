@@ -29,7 +29,7 @@ class PendingPlanApproval:
     user_id: Optional[str] = None
     thread_ts: Optional[str] = None
     message_ts: Optional[str] = None
-    future: asyncio.Future = field(default=None, repr=False)
+    future: Optional[asyncio.Future] = field(default=None, repr=False)
     created_at: datetime = field(default_factory=datetime.now)
 
     def __post_init__(self):

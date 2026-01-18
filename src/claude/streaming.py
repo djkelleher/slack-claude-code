@@ -107,7 +107,7 @@ class StreamMessage:
     type: str  # init, assistant, user, result, error
     content: str = ""
     detailed_content: str = ""  # Full output with tool use details
-    tool_activities: list[ToolActivity] = None  # Structured tool data
+    tool_activities: Optional[list[ToolActivity]] = None  # Structured tool data
     session_id: Optional[str] = None
     is_final: bool = False
     cost_usd: Optional[float] = None

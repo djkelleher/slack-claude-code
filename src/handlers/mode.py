@@ -9,7 +9,7 @@ from .base import CommandContext, HandlerDependencies, slack_command
 
 # Mode aliases: short name -> CLI mode value
 MODE_ALIASES = {
-    "bypass": "bypassPermissions",
+    "bypass": config.DEFAULT_BYPASS_MODE,
     "accept": "acceptEdits",
     "default": "default",
     "plan": "plan",
