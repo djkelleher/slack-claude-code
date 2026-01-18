@@ -13,10 +13,11 @@ ccslack = "src.app:run"
 python = "^3.10"
 slack-bolt = "^1.27.0"
 aiosqlite = "^0.21.0"
-python-dotenv = "^1.2.1"
+pydantic-settings = "^2.7.0"
 pexpect = "^4.9.0"
 aiohttp = "^3.13.2"
 aiofiles = "^24.1.0"
+loguru = "^0.7.0"
 
 
 [tool.poetry.group.dev.dependencies]

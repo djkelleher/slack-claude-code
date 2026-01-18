@@ -1,8 +1,6 @@
 """Unit tests for configuration module."""
 
-import os
 import pytest
-from unittest import mock
 
 from src.config import (
     Config,
@@ -18,7 +16,7 @@ from src.config import (
 
 
 class TestPTYTimeouts:
-    """Tests for PTYTimeouts dataclass."""
+    """Tests for PTYTimeouts settings."""
 
     def test_default_values(self):
         """PTYTimeouts has correct defaults."""
@@ -51,31 +49,31 @@ class TestPTYTimeouts:
 
 
 class TestExecutionTimeouts:
-    """Tests for ExecutionTimeouts dataclass."""
+    """Tests for ExecutionTimeouts settings."""
 
     def test_default_values(self):
         """ExecutionTimeouts has correct defaults."""
         timeouts = ExecutionTimeouts()
 
-        assert timeouts.command == 300
         assert timeouts.permission == 300
         assert timeouts.usage_check == 30
+        assert timeouts.plan_approval == 600
 
     def test_custom_values(self):
         """ExecutionTimeouts accepts custom values."""
         timeouts = ExecutionTimeouts(
-            command=600,
             permission=120,
             usage_check=15,
+            plan_approval=300,
         )
 
-        assert timeouts.command == 600
         assert timeouts.permission == 120
         assert timeouts.usage_check == 15
+        assert timeouts.plan_approval == 300
 
 
 class TestSlackTimeouts:
-    """Tests for SlackTimeouts dataclass."""
+    """Tests for SlackTimeouts settings."""
 
     def test_default_values(self):
         """SlackTimeouts has correct defaults."""
@@ -91,7 +89,7 @@ class TestSlackTimeouts:
 
 
 class TestCacheTimeouts:
-    """Tests for CacheTimeouts dataclass."""
+    """Tests for CacheTimeouts settings."""
 
     def test_default_values(self):
         """CacheTimeouts has correct defaults."""
@@ -107,7 +105,7 @@ class TestCacheTimeouts:
 
 
 class TestDisplayConfig:
-    """Tests for DisplayConfig dataclass."""
+    """Tests for DisplayConfig settings."""
 
     def test_default_values(self):
         """DisplayConfig has correct defaults."""
@@ -137,18 +135,11 @@ class TestDisplayConfig:
 
 
 class TestTimeoutConfig:
-    """Tests for TimeoutConfig dataclass."""
+    """Tests for TimeoutConfig settings."""
 
     def test_nested_structure(self):
         """TimeoutConfig nests all timeout categories."""
-        timeout_config = TimeoutConfig(
-            pty=PTYTimeouts(),
-            execution=ExecutionTimeouts(),
-            slack=SlackTimeouts(),
-            cache=CacheTimeouts(),
-            streaming=StreamingConfig(),
-            display=DisplayConfig(),
-        )
+        timeout_config = TimeoutConfig()
 
         # Access nested values
         assert timeout_config.pty.startup == 30.0
@@ -176,14 +167,14 @@ class TestConfig:
         assert config.SLACK_FILE_THRESHOLD == 2000
 
     def test_validate_missing_tokens(self):
-        """validate() catches missing required config."""
-        # Create a new Config class with empty tokens for testing
-        class TestConfig(Config):
-            SLACK_BOT_TOKEN = ""
-            SLACK_APP_TOKEN = ""
-            SLACK_SIGNING_SECRET = ""
+        """validate_required() catches missing required config."""
+        test_config = Config(
+            SLACK_BOT_TOKEN="",
+            SLACK_APP_TOKEN="",
+            SLACK_SIGNING_SECRET="",
+        )
 
-        errors = TestConfig.validate()
+        errors = test_config.validate_required()
 
         assert len(errors) == 3
         assert any("SLACK_BOT_TOKEN" in e for e in errors)
@@ -191,14 +182,14 @@ class TestConfig:
         assert any("SLACK_SIGNING_SECRET" in e for e in errors)
 
     def test_validate_with_tokens(self):
-        """validate() passes when tokens are set."""
+        """validate_required() passes when tokens are set."""
+        test_config = Config(
+            SLACK_BOT_TOKEN="xoxb-test",
+            SLACK_APP_TOKEN="xapp-test",
+            SLACK_SIGNING_SECRET="secret123",
+        )
 
-        class TestConfig(Config):
-            SLACK_BOT_TOKEN = "xoxb-test"
-            SLACK_APP_TOKEN = "xapp-test"
-            SLACK_SIGNING_SECRET = "secret123"
-
-        errors = TestConfig.validate()
+        errors = test_config.validate_required()
         assert errors == []
 
     def test_multi_agent_defaults(self):
@@ -208,43 +199,25 @@ class TestConfig:
         assert config.EVALUATOR_MAX_TURNS == 10
 
 
-class TestEnvironmentVariableOverrides:
-    """Tests for environment variable configuration."""
+class TestAutoApproveToolsParsing:
+    """Tests for AUTO_APPROVE_TOOLS parsing."""
 
-    def test_timeout_env_override_structure(self):
-        """TimeoutConfig structure supports environment overrides."""
-        # The actual env override happens at module load time
-        # Here we verify the structure allows overrides
-        custom_timeouts = TimeoutConfig(
-            pty=PTYTimeouts(
-                startup=float(os.getenv("SESSION_STARTUP_TIMEOUT", "30.0")),
-            ),
-            execution=ExecutionTimeouts(
-                permission=int(os.getenv("PERMISSION_TIMEOUT", "300")),
-            ),
-            slack=SlackTimeouts(
-                message_update_throttle=float(os.getenv("MESSAGE_UPDATE_THROTTLE", "2.0")),
-            ),
-            cache=CacheTimeouts(
-                usage=int(os.getenv("USAGE_CACHE_DURATION", "60")),
-            ),
-            streaming=StreamingConfig(),
-            display=DisplayConfig(),
-        )
+    def test_empty_string(self):
+        """Empty string results in empty list."""
+        test_config = Config(AUTO_APPROVE_TOOLS="")
+        assert test_config.AUTO_APPROVE_TOOLS == []
 
-        # Environment values should be used when set
-        assert custom_timeouts.pty.startup == float(os.getenv("SESSION_STARTUP_TIMEOUT", "30.0"))
-        assert custom_timeouts.execution.permission == int(os.getenv("PERMISSION_TIMEOUT", "300"))
+    def test_comma_separated_string(self):
+        """Comma-separated string parses correctly."""
+        test_config = Config(AUTO_APPROVE_TOOLS="Read,Glob,Grep")
+        assert test_config.AUTO_APPROVE_TOOLS == ["Read", "Glob", "Grep"]
 
-    def test_auto_approve_tools_parsing(self):
-        """AUTO_APPROVE_TOOLS env var parsed correctly."""
-        # Test parsing logic directly
-        # Empty string should result in empty list
-        test_val = ""
-        result = test_val.split(",") if test_val else []
-        assert result == []
+    def test_list_passthrough(self):
+        """List values pass through unchanged."""
+        test_config = Config(AUTO_APPROVE_TOOLS=["Read", "Glob"])
+        assert test_config.AUTO_APPROVE_TOOLS == ["Read", "Glob"]
 
-        # Comma-separated string should split correctly
-        test_val = "Read,Glob,Grep"
-        result = test_val.split(",") if test_val else []
-        assert result == ["Read", "Glob", "Grep"]
+    def test_whitespace_handling(self):
+        """Whitespace around values is stripped."""
+        test_config = Config(AUTO_APPROVE_TOOLS=" Read , Glob , Grep ")
+        assert test_config.AUTO_APPROVE_TOOLS == ["Read", "Glob", "Grep"]

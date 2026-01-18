@@ -118,7 +118,7 @@ async def post_channel_notification(
 async def main():
     """Main application entry point."""
     # Validate configuration
-    errors = config.validate()
+    errors = config.validate_required()
     if errors:
         logger.error("Configuration errors:")
         for error in errors:
