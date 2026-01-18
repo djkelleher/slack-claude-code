@@ -2,6 +2,12 @@
   <img src="assets/repo_logo.png" alt="Slack Claude Code Bot" width="1000">
 </p>
 
+<p align="center">
+  <a href="https://pypi.org/project/slack-claude-code/"><img src="https://img.shields.io/pypi/v/slack-claude-code" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/slack-claude-code/"><img src="https://img.shields.io/pypi/pyversions/slack-claude-code" alt="Python versions"></a>
+  <a href="https://github.com/danklab/slack-claude-code/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
+  <a href="https://github.com/danklab/slack-claude-code/actions/workflows/tests.yml"><img src="https://github.com/danklab/slack-claude-code/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+</p>
 
 **Claude Code, but in Slack.** Access Claude Code remotely from any device, or use it full-time for a better UI experience.
 
