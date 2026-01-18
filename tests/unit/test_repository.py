@@ -1,0 +1,582 @@
+"""Unit tests for database repository."""
+
+import asyncio
+from datetime import datetime, timezone
+
+import pytest
+import pytest_asyncio
+
+from src.database.migrations import init_database
+from src.database.repository import DatabaseRepository
+
+
+@pytest_asyncio.fixture
+async def db_repo(tmp_path):
+    """Create a test database repository."""
+    db_path = str(tmp_path / "test.db")
+    await init_database(db_path)
+    return DatabaseRepository(db_path)
+
+
+class TestSessionOperations:
+    """Tests for session CRUD operations."""
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_creates_new(self, db_repo):
+        """get_or_create_session creates new session when none exists."""
+        session = await db_repo.get_or_create_session("C123ABC", None, "/home/user")
+
+        assert session.id is not None
+        assert session.channel_id == "C123ABC"
+        assert session.thread_ts is None
+        assert session.working_directory == "/home/user"
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_returns_existing(self, db_repo):
+        """get_or_create_session returns existing session."""
+        session1 = await db_repo.get_or_create_session("C123ABC", None)
+        session2 = await db_repo.get_or_create_session("C123ABC", None)
+
+        assert session1.id == session2.id
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_thread_isolation(self, db_repo):
+        """Different threads get different sessions."""
+        channel_session = await db_repo.get_or_create_session("C123ABC", None)
+        thread_session = await db_repo.get_or_create_session("C123ABC", "1234567890.123456")
+
+        assert channel_session.id != thread_session.id
+        assert channel_session.thread_ts is None
+        assert thread_session.thread_ts == "1234567890.123456"
+
+    @pytest.mark.asyncio
+    async def test_update_session_cwd(self, db_repo):
+        """update_session_cwd updates working directory."""
+        session = await db_repo.get_or_create_session("C123ABC", None, "~")
+        await db_repo.update_session_cwd("C123ABC", None, "/new/path")
+
+        updated = await db_repo.get_or_create_session("C123ABC", None)
+        assert updated.working_directory == "/new/path"
+
+    @pytest.mark.asyncio
+    async def test_update_session_claude_id(self, db_repo):
+        """update_session_claude_id updates claude session id."""
+        await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.update_session_claude_id("C123ABC", None, "claude-session-xyz")
+
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        assert session.claude_session_id == "claude-session-xyz"
+
+    @pytest.mark.asyncio
+    async def test_clear_session_claude_id(self, db_repo):
+        """clear_session_claude_id clears the session id."""
+        await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.update_session_claude_id("C123ABC", None, "claude-session-xyz")
+        await db_repo.clear_session_claude_id("C123ABC", None)
+
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        assert session.claude_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_update_session_mode(self, db_repo):
+        """update_session_mode updates permission mode."""
+        await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.update_session_mode("C123ABC", None, "plan")
+
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        assert session.permission_mode == "plan"
+
+    @pytest.mark.asyncio
+    async def test_update_session_model(self, db_repo):
+        """update_session_model updates model."""
+        await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.update_session_model("C123ABC", None, "opus")
+
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        assert session.model == "opus"
+
+    @pytest.mark.asyncio
+    async def test_get_sessions_by_channel(self, db_repo):
+        """get_sessions_by_channel returns all sessions for a channel."""
+        await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.get_or_create_session("C123ABC", "thread1")
+        await db_repo.get_or_create_session("C123ABC", "thread2")
+        await db_repo.get_or_create_session("C999OTHER", None)  # Different channel
+
+        sessions = await db_repo.get_sessions_by_channel("C123ABC")
+
+        assert len(sessions) == 3
+
+    @pytest.mark.asyncio
+    async def test_delete_session(self, db_repo):
+        """delete_session removes a session."""
+        await db_repo.get_or_create_session("C123ABC", None)
+        result = await db_repo.delete_session("C123ABC", None)
+
+        assert result is True
+
+        sessions = await db_repo.get_sessions_by_channel("C123ABC")
+        assert len(sessions) == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_session_nonexistent(self, db_repo):
+        """delete_session returns False for nonexistent session."""
+        result = await db_repo.delete_session("NONEXISTENT", None)
+        assert result is False
+
+
+class TestCommandHistoryOperations:
+    """Tests for command history operations."""
+
+    @pytest.mark.asyncio
+    async def test_add_command(self, db_repo):
+        """add_command creates command history entry."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        cmd = await db_repo.add_command(session.id, "analyze this code")
+
+        assert cmd.id is not None
+        assert cmd.session_id == session.id
+        assert cmd.command == "analyze this code"
+        assert cmd.status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_update_command_status_running(self, db_repo):
+        """update_command_status updates to running."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        cmd = await db_repo.add_command(session.id, "test")
+        await db_repo.update_command_status(cmd.id, "running")
+
+        updated = await db_repo.get_command_by_id(cmd.id)
+        assert updated.status == "running"
+
+    @pytest.mark.asyncio
+    async def test_update_command_status_completed(self, db_repo):
+        """update_command_status updates to completed with output."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        cmd = await db_repo.add_command(session.id, "test")
+        await db_repo.update_command_status(cmd.id, "completed", output="Success!")
+
+        updated = await db_repo.get_command_by_id(cmd.id)
+        assert updated.status == "completed"
+        assert updated.output == "Success!"
+        assert updated.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_update_command_status_failed(self, db_repo):
+        """update_command_status updates to failed with error."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        cmd = await db_repo.add_command(session.id, "test")
+        await db_repo.update_command_status(cmd.id, "failed", error_message="Something broke")
+
+        updated = await db_repo.get_command_by_id(cmd.id)
+        assert updated.status == "failed"
+        assert updated.error_message == "Something broke"
+
+    @pytest.mark.asyncio
+    async def test_append_command_output(self, db_repo):
+        """append_command_output appends to existing output."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        cmd = await db_repo.add_command(session.id, "test")
+
+        await db_repo.append_command_output(cmd.id, "First chunk. ")
+        await db_repo.append_command_output(cmd.id, "Second chunk.")
+
+        updated = await db_repo.get_command_by_id(cmd.id)
+        assert updated.output == "First chunk. Second chunk."
+
+    @pytest.mark.asyncio
+    async def test_get_command_history_pagination(self, db_repo):
+        """get_command_history supports pagination."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        for i in range(15):
+            await db_repo.add_command(session.id, f"command {i}")
+
+        # Get first page
+        history, total = await db_repo.get_command_history(session.id, limit=5, offset=0)
+        assert len(history) == 5
+        assert total == 15
+
+        # Get second page
+        history2, _ = await db_repo.get_command_history(session.id, limit=5, offset=5)
+        assert len(history2) == 5
+
+    @pytest.mark.asyncio
+    async def test_get_command_by_id_not_found(self, db_repo):
+        """get_command_by_id returns None for nonexistent."""
+        result = await db_repo.get_command_by_id(99999)
+        assert result is None
+
+
+class TestQueueOperations:
+    """Tests for queue operations."""
+
+    @pytest.mark.asyncio
+    async def test_add_to_queue(self, db_repo):
+        """add_to_queue creates queue item."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        item = await db_repo.add_to_queue(session.id, "C123ABC", "analyze code")
+
+        assert item.id is not None
+        assert item.prompt == "analyze code"
+        assert item.status == "pending"
+        assert item.position == 1
+
+    @pytest.mark.asyncio
+    async def test_add_to_queue_auto_position(self, db_repo):
+        """add_to_queue auto-increments position."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        item1 = await db_repo.add_to_queue(session.id, "C123ABC", "first")
+        item2 = await db_repo.add_to_queue(session.id, "C123ABC", "second")
+        item3 = await db_repo.add_to_queue(session.id, "C123ABC", "third")
+
+        assert item1.position == 1
+        assert item2.position == 2
+        assert item3.position == 3
+
+    @pytest.mark.asyncio
+    async def test_get_pending_queue_items(self, db_repo):
+        """get_pending_queue_items returns pending items in order."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.add_to_queue(session.id, "C123ABC", "first")
+        await db_repo.add_to_queue(session.id, "C123ABC", "second")
+
+        pending = await db_repo.get_pending_queue_items("C123ABC")
+
+        assert len(pending) == 2
+        assert pending[0].prompt == "first"
+        assert pending[1].prompt == "second"
+
+    @pytest.mark.asyncio
+    async def test_update_queue_item_status_running(self, db_repo):
+        """update_queue_item_status sets started_at for running."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        item = await db_repo.add_to_queue(session.id, "C123ABC", "test")
+        await db_repo.update_queue_item_status(item.id, "running")
+
+        updated = await db_repo.get_queue_item(item.id)
+        assert updated.status == "running"
+        assert updated.started_at is not None
+
+    @pytest.mark.asyncio
+    async def test_update_queue_item_status_completed(self, db_repo):
+        """update_queue_item_status sets completed_at for completed."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        item = await db_repo.add_to_queue(session.id, "C123ABC", "test")
+        await db_repo.update_queue_item_status(item.id, "completed", output="Done!")
+
+        updated = await db_repo.get_queue_item(item.id)
+        assert updated.status == "completed"
+        assert updated.output == "Done!"
+        assert updated.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_remove_queue_item(self, db_repo):
+        """remove_queue_item removes pending item."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        item = await db_repo.add_to_queue(session.id, "C123ABC", "test")
+        result = await db_repo.remove_queue_item(item.id)
+
+        assert result is True
+        assert await db_repo.get_queue_item(item.id) is None
+
+    @pytest.mark.asyncio
+    async def test_remove_queue_item_not_pending(self, db_repo):
+        """remove_queue_item only removes pending items."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        item = await db_repo.add_to_queue(session.id, "C123ABC", "test")
+        await db_repo.update_queue_item_status(item.id, "running")
+
+        result = await db_repo.remove_queue_item(item.id)
+        assert result is False  # Can't remove running item
+
+    @pytest.mark.asyncio
+    async def test_clear_queue(self, db_repo):
+        """clear_queue removes all pending items."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.add_to_queue(session.id, "C123ABC", "first")
+        await db_repo.add_to_queue(session.id, "C123ABC", "second")
+        await db_repo.add_to_queue(session.id, "C123ABC", "third")
+
+        count = await db_repo.clear_queue("C123ABC")
+
+        assert count == 3
+        pending = await db_repo.get_pending_queue_items("C123ABC")
+        assert len(pending) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_running_queue_item(self, db_repo):
+        """get_running_queue_item returns currently running item."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        item = await db_repo.add_to_queue(session.id, "C123ABC", "running task")
+        await db_repo.update_queue_item_status(item.id, "running")
+
+        running = await db_repo.get_running_queue_item("C123ABC")
+
+        assert running is not None
+        assert running.id == item.id
+
+    @pytest.mark.asyncio
+    async def test_get_running_queue_item_none(self, db_repo):
+        """get_running_queue_item returns None when nothing running."""
+        result = await db_repo.get_running_queue_item("C123ABC")
+        assert result is None
+
+
+class TestParallelJobOperations:
+    """Tests for parallel job operations."""
+
+    @pytest.mark.asyncio
+    async def test_create_parallel_job(self, db_repo):
+        """create_parallel_job creates a job."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        config = {"n_instances": 3, "commands": ["cmd1", "cmd2"]}
+        job = await db_repo.create_parallel_job(
+            session.id, "C123ABC", "parallel_analysis", config
+        )
+
+        assert job.id is not None
+        assert job.job_type == "parallel_analysis"
+        assert job.status == "pending"
+        assert job.config == config
+
+    @pytest.mark.asyncio
+    async def test_update_parallel_job(self, db_repo):
+        """update_parallel_job updates job fields."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        job = await db_repo.create_parallel_job(session.id, "C123ABC", "test", {})
+
+        await db_repo.update_parallel_job(
+            job.id,
+            status="completed",
+            results=[{"output": "result1"}],
+            aggregation_output="Summary",
+        )
+
+        updated = await db_repo.get_parallel_job(job.id)
+        assert updated.status == "completed"
+        assert updated.results == [{"output": "result1"}]
+        assert updated.aggregation_output == "Summary"
+        assert updated.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_get_active_jobs(self, db_repo):
+        """get_active_jobs returns pending/running jobs."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        job1 = await db_repo.create_parallel_job(session.id, "C123ABC", "test1", {})
+        job2 = await db_repo.create_parallel_job(session.id, "C123ABC", "test2", {})
+        await db_repo.update_parallel_job(job2.id, status="running")
+
+        active = await db_repo.get_active_jobs("C123ABC")
+
+        assert len(active) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_active_jobs_excludes_completed(self, db_repo):
+        """get_active_jobs excludes completed jobs."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        job = await db_repo.create_parallel_job(session.id, "C123ABC", "test", {})
+        await db_repo.update_parallel_job(job.id, status="completed")
+
+        active = await db_repo.get_active_jobs("C123ABC")
+
+        assert len(active) == 0
+
+    @pytest.mark.asyncio
+    async def test_cancel_job(self, db_repo):
+        """cancel_job cancels active job."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        job = await db_repo.create_parallel_job(session.id, "C123ABC", "test", {})
+
+        result = await db_repo.cancel_job(job.id)
+
+        assert result is True
+        updated = await db_repo.get_parallel_job(job.id)
+        assert updated.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_job_already_completed(self, db_repo):
+        """cancel_job returns False for completed jobs."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        job = await db_repo.create_parallel_job(session.id, "C123ABC", "test", {})
+        await db_repo.update_parallel_job(job.id, status="completed")
+
+        result = await db_repo.cancel_job(job.id)
+
+        assert result is False
+
+
+class TestFileContextOperations:
+    """Tests for file context operations."""
+
+    @pytest.mark.asyncio
+    async def test_track_file_context_new(self, db_repo):
+        """track_file_context creates new record."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
+
+        context = await db_repo.get_file_context(session.id)
+
+        assert len(context) == 1
+        assert context[0].file_path == "/path/to/file.py"
+        assert context[0].use_count == 1
+
+    @pytest.mark.asyncio
+    async def test_track_file_context_increment(self, db_repo):
+        """track_file_context increments existing record."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
+        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
+        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
+
+        context = await db_repo.get_file_context(session.id)
+
+        assert len(context) == 1
+        assert context[0].use_count == 3
+
+    @pytest.mark.asyncio
+    async def test_set_file_auto_include(self, db_repo):
+        """set_file_auto_include updates auto_include flag."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.track_file_context(session.id, "/path/to/file.py", "modified")
+        await db_repo.set_file_auto_include(session.id, "/path/to/file.py", True)
+
+        context = await db_repo.get_file_context(session.id, auto_include_only=True)
+
+        assert len(context) == 1
+        assert context[0].auto_include is True
+
+    @pytest.mark.asyncio
+    async def test_clear_file_context(self, db_repo):
+        """clear_file_context removes all context for session."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.track_file_context(session.id, "/path/one.py", "modified")
+        await db_repo.track_file_context(session.id, "/path/two.py", "read")
+
+        count = await db_repo.clear_file_context(session.id)
+
+        assert count == 2
+        context = await db_repo.get_file_context(session.id)
+        assert len(context) == 0
+
+
+class TestNotificationSettings:
+    """Tests for notification settings operations."""
+
+    @pytest.mark.asyncio
+    async def test_get_notification_settings_default(self, db_repo):
+        """get_notification_settings returns defaults for new channel."""
+        settings = await db_repo.get_notification_settings("C123ABC")
+
+        assert settings.channel_id == "C123ABC"
+        assert settings.notify_on_completion is True
+        assert settings.notify_on_permission is True
+
+    @pytest.mark.asyncio
+    async def test_update_notification_settings(self, db_repo):
+        """update_notification_settings creates/updates settings."""
+        await db_repo.update_notification_settings("C123ABC", True, False)
+
+        settings = await db_repo.get_notification_settings("C123ABC")
+
+        assert settings.notify_on_completion is True
+        assert settings.notify_on_permission is False
+
+    @pytest.mark.asyncio
+    async def test_update_notification_settings_upsert(self, db_repo):
+        """update_notification_settings updates existing record."""
+        await db_repo.update_notification_settings("C123ABC", True, True)
+        await db_repo.update_notification_settings("C123ABC", False, False)
+
+        settings = await db_repo.get_notification_settings("C123ABC")
+
+        assert settings.notify_on_completion is False
+        assert settings.notify_on_permission is False
+
+
+class TestGitCheckpointOperations:
+    """Tests for git checkpoint operations."""
+
+    @pytest.mark.asyncio
+    async def test_create_checkpoint(self, db_repo):
+        """create_checkpoint creates a checkpoint."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        checkpoint = await db_repo.create_checkpoint(
+            session.id,
+            "C123ABC",
+            "before-refactor",
+            "stash@{0}",
+            stash_message="checkpoint: before-refactor",
+            description="Saving state",
+        )
+
+        assert checkpoint.id is not None
+        assert checkpoint.name == "before-refactor"
+        assert checkpoint.stash_ref == "stash@{0}"
+
+    @pytest.mark.asyncio
+    async def test_get_checkpoints(self, db_repo):
+        """get_checkpoints returns checkpoints for channel."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.create_checkpoint(session.id, "C123ABC", "cp1", "stash@{0}")
+        await db_repo.create_checkpoint(session.id, "C123ABC", "cp2", "stash@{1}")
+
+        checkpoints = await db_repo.get_checkpoints("C123ABC")
+
+        assert len(checkpoints) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_checkpoints_excludes_auto(self, db_repo):
+        """get_checkpoints excludes auto checkpoints by default."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.create_checkpoint(session.id, "C123ABC", "manual", "stash@{0}")
+        await db_repo.create_checkpoint(
+            session.id, "C123ABC", "auto", "stash@{1}", is_auto=True
+        )
+
+        checkpoints = await db_repo.get_checkpoints("C123ABC", include_auto=False)
+
+        assert len(checkpoints) == 1
+        assert checkpoints[0].name == "manual"
+
+    @pytest.mark.asyncio
+    async def test_get_checkpoint_by_name(self, db_repo):
+        """get_checkpoint_by_name finds checkpoint by name."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.create_checkpoint(session.id, "C123ABC", "target", "stash@{0}")
+
+        checkpoint = await db_repo.get_checkpoint_by_name("C123ABC", "target")
+
+        assert checkpoint is not None
+        assert checkpoint.name == "target"
+
+    @pytest.mark.asyncio
+    async def test_delete_checkpoint(self, db_repo):
+        """delete_checkpoint removes a checkpoint."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        checkpoint = await db_repo.create_checkpoint(
+            session.id, "C123ABC", "to-delete", "stash@{0}"
+        )
+
+        result = await db_repo.delete_checkpoint(checkpoint.id)
+
+        assert result is True
+        assert await db_repo.get_checkpoint_by_name("C123ABC", "to-delete") is None
+
+    @pytest.mark.asyncio
+    async def test_delete_auto_checkpoints(self, db_repo):
+        """delete_auto_checkpoints removes only auto checkpoints."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.create_checkpoint(session.id, "C123ABC", "manual", "stash@{0}")
+        await db_repo.create_checkpoint(
+            session.id, "C123ABC", "auto1", "stash@{1}", is_auto=True
+        )
+        await db_repo.create_checkpoint(
+            session.id, "C123ABC", "auto2", "stash@{2}", is_auto=True
+        )
+
+        count = await db_repo.delete_auto_checkpoints("C123ABC")
+
+        assert count == 2
+        checkpoints = await db_repo.get_checkpoints("C123ABC", include_auto=True)
+        assert len(checkpoints) == 1
+        assert checkpoints[0].name == "manual"
