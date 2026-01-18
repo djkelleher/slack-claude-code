@@ -61,7 +61,7 @@ Go to https://api.slack.com/apps → "Create New App" → "From scratch"
 
 **Event Subscriptions**: Enable and add `message.channels`, `app_mention`
 
-**App Icon**: In "Basic Information" → "Display Information", upload `claude_logo.png` from this repo as the app icon
+**App Icon**: In "Basic Information" → "Display Information", upload `assets/claude_logo.png` from this repo as the app icon
 
 **Slash Commands** (optional): Create commands like `/clear`, `/model`, `/ls`, `/cd`, `/status`, `/diff`, etc.
 
@@ -91,6 +91,24 @@ Type messages in any channel where the bot is present. Each Slack thread maintai
 
 Claude creates a detailed plan before execution, shown with Approve/Reject buttons. Ideal for complex implementations where you want to review the approach first.
 
+
+## Configuration
+
+Key environment variables (see `.env.example` for full list):
+
+```bash
+# Required
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+SLACK_SIGNING_SECRET=...
+
+# Optional
+DEFAULT_WORKING_DIR=/path/to/projects
+COMMAND_TIMEOUT=300              # 5 min default
+CLAUDE_PERMISSION_MODE=approve-all  # or: prompt, deny
+AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP
+```
+
 ## Architecture
 
 ```
@@ -108,23 +126,6 @@ src/
 ├── question/              # AskUserQuestion tool support
 ├── tasks/                 # Background task management
 └── utils/                 # Formatters, helpers, validators
-```
-
-## Configuration
-
-Key environment variables (see `.env.example` for full list):
-
-```bash
-# Required
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-SLACK_SIGNING_SECRET=...
-
-# Optional
-DEFAULT_WORKING_DIR=/path/to/projects
-COMMAND_TIMEOUT=300              # 5 min default
-CLAUDE_PERMISSION_MODE=approve-all  # or: prompt, deny
-AUTO_APPROVE_TOOLS=Read,Glob,Grep,LSP
 ```
 
 ## Troubleshooting
