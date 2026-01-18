@@ -18,7 +18,31 @@
 | **Streaming** | Live terminal output | Watch responses as they generate |
 | **Smart context** | Manual file inclusion | Frequently-used files auto-included |
 
-## Commands
+## Installation
+
+### Prerequisites
+- Python 3.10+
+- [Claude Code CLI](https://github.com/anthropics/claude-code) installed and authenticated
+
+### 1. Install the `ccslack` executable
+```bash
+pipx install slack-claude-code
+```
+You can now run `ccslack` in your termainl. The working directory where you start the executable will be the defualt working direcotry for your Claude Code session(s)
+
+### 2. Create Slack App
+Go to https://api.slack.com/apps → "Create New App" → "From scratch"
+
+**Socket Mode**: Enable and create an app-level token with `connections:write` scope (save the `xapp-` token)
+
+**Bot Token Scopes** (OAuth & Permissions):
+- `chat:write`, `commands`, `channels:history`, `app_mentions:read`, `files:write`
+
+**Event Subscriptions**: Enable and add `message.channels`, `app_mention`
+
+**App Icon**: In "Basic Information" → "Display Information", upload `assets/claude_logo.png` from this repo as the app icon
+
+**Slash Commands**: Add the commands from this table (or the subset that you plan to use)
 
 | Category | Command | Description |
 |----------|---------|-------------|
@@ -60,32 +84,6 @@
 | Multi-Agent | `/task` | Create a new agent task |
 | Multi-Agent | `/tasks` | List running agent tasks |
 | Multi-Agent | `/task-cancel` | Cancel an agent task |
-
-## Installation
-
-### Prerequisites
-- Python 3.10+
-- [Claude Code CLI](https://github.com/anthropics/claude-code) installed and authenticated
-
-### 1. Install dependencies
-```bash
-cd slack-claude-code
-poetry install
-```
-
-### 2. Create Slack App
-Go to https://api.slack.com/apps → "Create New App" → "From scratch"
-
-**Socket Mode**: Enable and create an app-level token with `connections:write` scope (save the `xapp-` token)
-
-**Bot Token Scopes** (OAuth & Permissions):
-- `chat:write`, `commands`, `channels:history`, `app_mentions:read`, `files:write`
-
-**Event Subscriptions**: Enable and add `message.channels`, `app_mention`
-
-**App Icon**: In "Basic Information" → "Display Information", upload `assets/claude_logo.png` from this repo as the app icon
-
-**Slash Commands** (optional): Create commands like `/clear`, `/model`, `/ls`, `/cd`, `/status`, `/diff`, etc.
 
 ### 3. Configure and run
 ```bash
