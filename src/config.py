@@ -13,7 +13,6 @@ class ExecutionTimeouts(BaseModel):
     permission: int = 300
     usage_check: int = 30
     plan_approval: int = 600
-    question_wait: int = 600
     max_questions_per_conversation: int = 10
 
 
