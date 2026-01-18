@@ -369,3 +369,12 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_todos(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /todos command - list current TODO items."""
         await _send_claude_command(ctx, "/todos", deps)
+
+    @app.command("/mcp")
+    @slack_command()
+    async def handle_mcp(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /mcp command - show MCP server configuration."""
+        if ctx.text:
+            await _send_claude_command(ctx, f"/mcp {ctx.text}", deps)
+        else:
+            await _send_claude_command(ctx, "/mcp", deps)
