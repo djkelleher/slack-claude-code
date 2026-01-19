@@ -2,7 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from src.config import config
 from src.utils.formatting import SlackFormatter
@@ -33,6 +33,9 @@ class StreamingMessageState:
         If True, add newlines between chunks for better readability.
     track_tools : bool
         If True, track tool activities for display.
+    on_plan_file_written : Callable[[str], Awaitable[None]], optional
+        Async callback invoked when a plan file (.md) is written.
+        Receives the file path as argument.
     """
 
     channel_id: str
@@ -49,6 +52,8 @@ class StreamingMessageState:
     _last_chunk_was_newline: bool = field(default=False)
     _heartbeat_task: Optional["asyncio.Task[None]"] = field(default=None, repr=False)
     _is_idle: bool = field(default=False)
+    on_plan_file_written: Optional[Callable[[str], Any]] = field(default=None, repr=False)
+    _sent_plan_files: set[str] = field(default_factory=set)
 
     def get_tool_list(self) -> list["ToolActivity"]:
         """Get list of tracked tool activities."""
@@ -117,6 +122,22 @@ class StreamingMessageState:
         except asyncio.CancelledError:
             pass
 
+    async def _notify_plan_file(self, file_path: str) -> None:
+        """Notify that a plan file was written via callback.
+
+        Parameters
+        ----------
+        file_path : str
+            Path to the plan file that was written.
+        """
+        if self.on_plan_file_written:
+            try:
+                result = self.on_plan_file_written(file_path)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                self.logger.warning(f"Failed to notify plan file written: {e}")
+
     async def append_and_update(
         self,
         content: str,
@@ -139,7 +160,7 @@ class StreamingMessageState:
             if self._is_idle:
                 self._is_idle = False
 
-        # Track tool activities
+        # Track tool activities and detect plan file writes
         if self.track_tools and tools:
             for tool in tools:
                 if tool.id in self.tool_activities:
@@ -149,6 +170,18 @@ class StreamingMessageState:
                         existing.full_result = tool.full_result
                         existing.is_error = tool.is_error
                         existing.duration_ms = tool.duration_ms
+
+                        # Check if this is a completed Write of a plan file
+                        if (
+                            existing.name == "Write"
+                            and not existing.is_error
+                            and self.on_plan_file_written
+                        ):
+                            file_path = existing.input.get("file_path", "")
+                            if file_path.endswith(".md") and file_path not in self._sent_plan_files:
+                                self._sent_plan_files.add(file_path)
+                                # Call the callback (fire-and-forget for async)
+                                asyncio.create_task(self._notify_plan_file(file_path))
                 else:
                     self.tool_activities[tool.id] = tool
 
