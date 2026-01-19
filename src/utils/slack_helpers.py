@@ -213,8 +213,19 @@ async def post_text_snippet(
     if format_as_text:
         content = markdown_to_slack_mrkdwn(content)
 
+    # Calculate overhead for title that gets combined with content
+    # For format_as_text: "*{title}*\n\n" = len(title) + 6 chars
+    # For code blocks: "```...```" = 6 chars (title is in separate block)
+    if format_as_text:
+        title_overhead = len(title) + 6  # "*{title}*\n\n"
+    else:
+        title_overhead = 0  # Title is in a separate section block
+
+    code_block_overhead = 0 if format_as_text else 6  # "```...```"
+
     # If content is small enough, post as single message
-    if len(content) <= config.SLACK_BLOCK_TEXT_LIMIT:
+    content_limit = config.SLACK_BLOCK_TEXT_LIMIT - title_overhead - code_block_overhead
+    if len(content) <= content_limit:
         if format_as_text:
             # Format as text without code block
             blocks = [
@@ -249,9 +260,18 @@ async def post_text_snippet(
     # For larger content, split into multiple messages
     chunks = []
     remaining = content
+
+    # First chunk has title overhead, subsequent chunks don't
+    is_first_chunk = True
     while remaining:
         # Account for ``` markers (6 chars) if using code blocks
-        overhead = 0 if format_as_text else 6
+        # First chunk includes title, subsequent chunks don't
+        if format_as_text:
+            # format: "*{title}* (part X/Y)\n\n{chunk}" for first, just "{chunk}" for rest
+            # Extra overhead for "(part X/Y)" ~15 chars max
+            overhead = (len(title) + 6 + 15) if is_first_chunk else 0
+        else:
+            overhead = 6  # "```...```"
         chunk_size = config.SLACK_BLOCK_TEXT_LIMIT - overhead
         if len(remaining) <= chunk_size:
             chunks.append(remaining)
@@ -264,6 +284,7 @@ async def post_text_snippet(
 
         chunks.append(remaining[:break_point])
         remaining = remaining[break_point:].lstrip("\n")
+        is_first_chunk = False
 
     result = None
     for i, chunk in enumerate(chunks):
@@ -294,11 +315,12 @@ async def post_text_snippet(
                     },
                 ]
         else:
+            continued_text = f"_continued ({i+1}/{len(chunks)})_"
             if format_as_text:
                 blocks = [
                     {
                         "type": "context",
-                        "elements": [{"type": "mrkdwn", "text": f"_continued ({i+1}/{len(chunks)})_"}],
+                        "elements": [{"type": "mrkdwn", "text": continued_text}],
                     },
                     {
                         "type": "section",
@@ -309,7 +331,7 @@ async def post_text_snippet(
                 blocks = [
                     {
                         "type": "context",
-                        "elements": [{"type": "mrkdwn", "text": f"_continued ({i+1}/{len(chunks)})_"}],
+                        "elements": [{"type": "mrkdwn", "text": continued_text}],
                     },
                     {
                         "type": "section",
