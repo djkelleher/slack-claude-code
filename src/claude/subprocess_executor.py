@@ -31,6 +31,7 @@ class ExecutionResult:
     cost_usd: Optional[float] = None
     duration_ms: Optional[int] = None
     was_cancelled: bool = False
+    has_pending_question: bool = False  # True if terminated due to AskUserQuestion
 
 
 class SubprocessExecutor:
@@ -50,6 +51,8 @@ class SubprocessExecutor:
         self._exit_plan_mode_tool_id: Optional[str] = None
         self._exit_plan_mode_error_detected: bool = False
         self._is_retry_after_exit_plan_error: bool = False
+        # Track AskUserQuestion for early termination
+        self._ask_user_question_detected: bool = False
 
     async def execute(
         self,
@@ -101,6 +104,8 @@ class SubprocessExecutor:
         self._exit_plan_mode_tool_id = None
         self._exit_plan_mode_error_detected = False
         # Note: _is_retry_after_exit_plan_error is preserved during retry to prevent infinite loops
+        # Reset AskUserQuestion detection
+        self._ask_user_question_detected = False
 
         # Build command
         cmd = [
@@ -235,6 +240,9 @@ class SubprocessExecutor:
                                         )
                                     else:
                                         logger.info(f"{log_prefix}Tool: AskUserQuestion")
+                                    # Mark for early termination to handle question in Slack
+                                    self._ask_user_question_detected = True
+                                    logger.info(f"{log_prefix}AskUserQuestion detected - will terminate for Slack handling")
                                 elif tool_name == "ExitPlanMode":
                                     self._exit_plan_mode_tool_id = block.get("id")
                                     logger.info(f"{log_prefix}Tool: ExitPlanMode")
@@ -311,6 +319,17 @@ class SubprocessExecutor:
                 # If ExitPlanMode error detected, terminate early and retry
                 if self._exit_plan_mode_error_detected:
                     logger.info(f"{log_prefix}Terminating execution to retry without plan mode")
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                    break  # Exit the message processing loop
+
+                # If AskUserQuestion detected, terminate early to handle in Slack
+                # This must happen before Claude CLI returns the error to Claude
+                if self._ask_user_question_detected:
+                    logger.info(f"{log_prefix}Terminating execution to handle AskUserQuestion in Slack")
                     process.terminate()
                     try:
                         await asyncio.wait_for(process.wait(), timeout=5.0)
@@ -397,6 +416,7 @@ class SubprocessExecutor:
                 error=error_msg,
                 cost_usd=cost_usd,
                 duration_ms=duration_ms,
+                has_pending_question=self._ask_user_question_detected,
             )
 
         except asyncio.CancelledError:

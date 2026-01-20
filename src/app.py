@@ -328,23 +328,28 @@ async def main():
                         logger.debug(
                             f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})"
                         )
-                        if tool.name == "AskUserQuestion" and tool.result is None:
-                            if tool.id not in state.tool_activities:
-                                # Create pending question when we first see the tool
-                                pending_question = await QuestionManager.create_pending_question(
-                                    session_id=str(session.id),
-                                    channel_id=channel_id,
-                                    thread_ts=thread_ts,
-                                    tool_use_id=tool.id,
-                                    tool_input=tool.input,
-                                )
-                                logger.info(
-                                    f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}"
-                                )
-                            else:
-                                logger.debug(
-                                    f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping"
-                                )
+                        if tool.name == "AskUserQuestion":
+                            logger.info(
+                                f"AskUserQuestion detected: id={tool.id[:8]}, result={tool.result is not None}, "
+                                f"in_state={tool.id in state.tool_activities}, pending={pending_question is not None}"
+                            )
+                            if tool.result is None:
+                                if tool.id not in state.tool_activities:
+                                    # Create pending question when we first see the tool
+                                    pending_question = await QuestionManager.create_pending_question(
+                                        session_id=str(session.id),
+                                        channel_id=channel_id,
+                                        thread_ts=thread_ts,
+                                        tool_use_id=tool.id,
+                                        tool_input=tool.input,
+                                    )
+                                    logger.info(
+                                        f"Created pending question {pending_question.question_id} for AskUserQuestion {tool.id[:8]}"
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping"
+                                    )
 
                 # Update streaming state
                 content = msg.content if msg.type == "assistant" else ""
@@ -376,6 +381,10 @@ async def main():
             # Handle AskUserQuestion - loop to handle multiple questions
             question_count = 0
             max_questions = config.timeouts.execution.max_questions_per_conversation
+            if pending_question and not result.session_id:
+                logger.error(
+                    f"AskUserQuestion detected but no session_id available - cannot handle question"
+                )
             while pending_question and result.session_id and question_count < max_questions:
                 question_count += 1
                 logger.info("Claude asked a question, posting to Slack and waiting for response")
