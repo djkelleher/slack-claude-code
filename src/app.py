@@ -17,6 +17,7 @@ from loguru import logger
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 
+from src.approval.plan_manager import PlanApprovalManager
 from src.claude.subprocess_executor import SubprocessExecutor
 from src.config import config
 from src.database.migrations import init_database
@@ -501,9 +502,8 @@ async def main():
                     cmd_history.id, "failed", result.output, result.error
                 )
 
-            # Check if plan mode should auto-exit
-            # If we're in plan mode and ExitPlanMode was called (even if failed),
-            # or if a plan file was written, automatically switch to bypass mode
+            # Check if plan mode should request approval before exiting
+            # If we're in plan mode and ExitPlanMode was called, request user approval
             if session.permission_mode == "plan":
                 # Check if ExitPlanMode tool was attempted
                 exit_plan_attempted = any(
@@ -511,26 +511,70 @@ async def main():
                 )
 
                 if exit_plan_attempted:
-                    logger.info("ExitPlanMode detected, switching session to bypass mode")
-                    await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
+                    logger.info("ExitPlanMode detected, requesting user approval")
 
-                    # Post notification
-                    await client.chat_postMessage(
-                        channel=channel_id,
+                    # Get plan content from plan file if available
+                    plan_file_path = streaming_state.get_plan_file_path()
+                    plan_content = ""
+                    if plan_file_path:
+                        try:
+                            with open(plan_file_path) as f:
+                                plan_content = f.read()
+                        except Exception as e:
+                            logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
+                            plan_content = streaming_state.accumulated_output
+
+                    if not plan_content:
+                        plan_content = streaming_state.accumulated_output or "No plan content available"
+
+                    # Request approval via Slack buttons and wait for response
+                    approved = await PlanApprovalManager.request_approval(
+                        session_id=session.id,
+                        channel_id=channel_id,
+                        plan_content=plan_content,
+                        claude_session_id=result.session_id or "",
+                        prompt=prompt,
+                        user_id=user_id,
                         thread_ts=thread_ts,
-                        text="Plan completed - switching to execution mode",
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": ":white_check_mark: *Plan completed!* Automatically switched to bypass mode for execution.\n\n_Use `/mode plan` to return to planning mode if needed._",
-                                },
-                            }
-                        ],
+                        slack_client=client,
                     )
-                    # Note: Plan file is already posted immediately when written via
-                    # on_plan_file_written callback
+
+                    if approved:
+                        logger.info("Plan approved, switching session to bypass mode")
+                        await deps.db.update_session_mode(
+                            channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
+                        )
+
+                        await client.chat_postMessage(
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            text="Plan approved - switching to execution mode",
+                            blocks=[
+                                {
+                                    "type": "section",
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": ":white_check_mark: *Plan approved!* Switched to bypass mode for execution.\n\n_Send a message to continue with the plan implementation._",
+                                    },
+                                }
+                            ],
+                        )
+                    else:
+                        logger.info("Plan rejected or timed out, staying in plan mode")
+                        await client.chat_postMessage(
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            text="Plan not approved - staying in plan mode",
+                            blocks=[
+                                {
+                                    "type": "section",
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": ":x: *Plan not approved.* Staying in plan mode.\n\n_Provide feedback to revise the plan, or use `/mode bypass` to switch modes manually._",
+                                    },
+                                }
+                            ],
+                        )
 
             # Stop heartbeat before sending final response
             streaming_state.stop_heartbeat()
