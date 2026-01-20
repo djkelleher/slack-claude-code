@@ -157,6 +157,7 @@ async def main():
 
         channel_id = event.get("channel")
         thread_ts = event.get("thread_ts")  # Extract thread timestamp
+        user_id = event.get("user")  # User who sent the message
         prompt = event.get("text", "").strip()
         files = event.get("files", [])  # Extract uploaded files
 
