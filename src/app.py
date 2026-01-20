@@ -14,7 +14,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.subprocess_executor import SubprocessExecutor
 from src.config import config
-from src.database.migrations import initialize_database
+from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import (
     register_agent_commands,
@@ -51,7 +51,7 @@ app = AsyncApp(
 
 async def startup() -> tuple[DatabaseRepository, SubprocessExecutor]:
     """Initialize database and executor."""
-    await initialize_database(config.DATABASE_PATH)
+    await init_database(config.DATABASE_PATH)
     db = DatabaseRepository(config.DATABASE_PATH)
     executor = SubprocessExecutor()
     return db, executor
