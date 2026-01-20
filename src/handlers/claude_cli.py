@@ -131,8 +131,6 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @slack_command()
     async def handle_esc(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /esc command - interrupt current operation (like pressing Escape)."""
-        logger = logging.getLogger(__name__)
-
         # Cancel all active executor processes for this channel
         cancelled_count = 0
         active_processes = deps.executor._active_processes
@@ -143,7 +141,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 try:
                     process.send_signal(signal.SIGINT)
                 except (ProcessLookupError, OSError):
-                    logger.debug(f"Process {exec_id} already terminated")
+                    ctx.logger.debug(f"Process {exec_id} already terminated")
                 cancelled_count += 1
                 ctx.logger.info(f"Sent interrupt to process: {exec_id}")
 

@@ -1,6 +1,5 @@
 """Mode command handler: /mode."""
 
-from loguru import logger
 from slack_bolt.async_app import AsyncApp
 
 from ..config import config

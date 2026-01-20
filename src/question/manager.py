@@ -401,8 +401,6 @@ class QuestionManager:
         Returns:
             Number of expired questions cleaned up
         """
-        from datetime import datetime, timedelta, timezone
-
         now = datetime.now(timezone.utc)
         expired = []
 

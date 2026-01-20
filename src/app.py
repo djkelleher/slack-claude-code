@@ -1,381 +1,298 @@
-#!/usr/bin/env python3
-"""
-Slack Claude Code Bot - Main Application Entry Point
-
-A Slack app that allows running Claude Code CLI commands from Slack,
-with each channel representing a separate session.
-"""
+"""Main Slack app entrypoint with real-time streaming updates."""
 
 import asyncio
-import os
 import signal
 import sys
 import traceback
-import uuid
+from typing import Optional
 
 from loguru import logger
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
+from slack_sdk.web.async_client import AsyncWebClient
 
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.subprocess_executor import SubprocessExecutor
 from src.config import config
-from src.database.migrations import init_database
+from src.database.migrations import initialize_database
 from src.database.repository import DatabaseRepository
-from src.handlers import register_commands
-from src.handlers.actions import register_actions
-from src.question.manager import QuestionManager
-from src.utils.detail_cache import DetailCache
-from src.utils.file_downloader import (
-    FileDownloadError,
-    FileTooLargeError,
-    download_slack_file,
+from src.handlers import (
+    register_agent_commands,
+    register_basic_commands,
+    register_claude_cli_commands,
+    register_git_commands,
+    register_model_command,
+    register_mode_command,
+    register_notifications_command,
+    register_parallel_commands,
+    register_queue_commands,
+    register_session_commands,
 )
+from src.handlers.actions import register_actions
+from src.handlers.base import HandlerDependencies
+from src.question.manager import QuestionManager
+from src.utils.file_downloader import download_slack_file
 from src.utils.formatting import SlackFormatter
-from src.utils.slack_helpers import post_text_snippet
 from src.utils.streaming import StreamingMessageState
+
+# Validate configuration
+errors = config.validate_required()
+if errors:
+    for error in errors:
+        logger.error(error)
+    sys.exit(1)
+
+# Initialize app with bot token
+app = AsyncApp(
+    token=config.SLACK_BOT_TOKEN,
+    signing_secret=config.SLACK_SIGNING_SECRET,
+)
+
+
+async def startup() -> tuple[DatabaseRepository, SubprocessExecutor]:
+    """Initialize database and executor."""
+    await initialize_database(config.DATABASE_PATH)
+    db = DatabaseRepository(config.DATABASE_PATH)
+    executor = SubprocessExecutor()
+    return db, executor
 
 
 async def shutdown(executor: SubprocessExecutor) -> None:
-    """Graceful shutdown: cleanup active processes."""
-    logger.info("Shutting down - cleaning up active processes...")
-    await executor.shutdown()
-    logger.info("All processes terminated")
+    """Cleanup resources on shutdown."""
+    await executor.cleanup()
 
 
-async def post_channel_notification(
-    client,
-    db: DatabaseRepository,
-    channel_id: str,
-    thread_ts: str | None,
-    notification_type: str,
-    max_retries: int = 3,
-) -> None:
-    """
-    Post a brief notification to the channel (not thread) to trigger Slack sounds and unread badges.
+async def main() -> None:
+    """Main entrypoint."""
+    logger.info("Starting Slack Claude Code bot...")
 
-    Args:
-        client: Slack WebClient
-        db: Database repository
-        channel_id: Slack channel ID
-        thread_ts: Thread timestamp (for linking)
-        notification_type: "completion" or "permission"
-        max_retries: Maximum number of retry attempts (default: 3)
-    """
-    try:
-        settings = await db.get_notification_settings(channel_id)
+    # Initialize resources
+    db, executor = await startup()
+    deps = HandlerDependencies(db=db, executor=executor)
 
-        if notification_type == "completion" and not settings.notify_on_completion:
-            return
-        elif notification_type == "permission" and not settings.notify_on_permission:
-            return
+    # Register all command handlers
+    register_basic_commands(app, deps)
+    register_claude_cli_commands(app, deps)
+    register_mode_command(app, deps)
+    register_model_command(app, deps)
+    register_notifications_command(app, deps)
+    register_session_commands(app, deps)
+    register_git_commands(app, deps)
+    register_queue_commands(app, deps)
+    register_parallel_commands(app, deps)
+    register_agent_commands(app, deps)
 
-        # Build thread link if we have a thread_ts
-        if thread_ts:
-            thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
-            if notification_type == "completion":
-                message = f"✅ Claude finished • <{thread_link}|View thread>"
-            else:
-                message = f"⚠️ Claude needs permission • <{thread_link}|Respond in thread>"
-        else:
-            if notification_type == "completion":
-                message = "✅ Claude finished"
-            else:
-                message = "⚠️ Claude needs permission"
-
-        # Post to channel with retry logic for transient failures
-        for attempt in range(max_retries):
-            try:
-                await client.chat_postMessage(
-                    channel=channel_id,
-                    text=message,
-                )
-                logger.debug(f"Posted {notification_type} notification to channel {channel_id}")
-                return  # Success, exit
-
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    logger.warning(
-                        f"Failed to post channel notification (attempt {attempt + 1}/{max_retries}): {e}"
-                    )
-                    await asyncio.sleep(1.0)  # Brief delay before retry
-                else:
-                    # Final attempt failed
-                    raise
-
-    except Exception as e:
-        # Don't fail the main operation if all notification attempts fail
-        logger.error(f"Failed to post channel notification after {max_retries} attempts: {e}")
-
-
-async def main():
-    """Main application entry point."""
-    # Validate configuration
-    errors = config.validate_required()
-    if errors:
-        logger.error("Configuration errors:")
-        for error in errors:
-            logger.error(f"  - {error}")
-        sys.exit(1)
-
-    # Initialize database
-    logger.info(f"Initializing database at {config.DATABASE_PATH}")
-    await init_database(config.DATABASE_PATH)
-
-    # Create app components
-    db = DatabaseRepository(config.DATABASE_PATH)
-
-    executor = SubprocessExecutor(db=db)
-
-    # Create Slack app
-    app = AsyncApp(
-        token=config.SLACK_BOT_TOKEN,
-        signing_secret=config.SLACK_SIGNING_SECRET,
-    )
-
-    # Register handlers
-    deps = register_commands(app, db, executor)
+    # Register actions (button clicks, etc.)
     register_actions(app, deps)
 
-    # Add a simple health check
-    @app.event("app_mention")
-    async def handle_mention(event, say, logger):
-        """Respond to @mentions."""
-        await say(text="Hi! I'm Claude Code Bot. Just send me a message to run commands.")
-
     @app.event("message")
-    async def handle_message(event, client, logger):
-        """Handle messages and pipe them to Claude Code."""
-        logger.info(f"Message event received: {event.get('text', '')[:50]}...")
-
-        # Ignore bot messages to avoid responding to ourselves
-        if event.get("bot_id") or event.get("subtype"):
-            logger.debug(
-                f"Ignoring bot/subtype message: bot_id={event.get('bot_id')}, subtype={event.get('subtype')}"
-            )
+    async def handle_message(client: AsyncWebClient, event: dict, logger):
+        """Handle incoming messages and run Claude."""
+        # Ignore bot messages and edited messages
+        if event.get("subtype") in ("bot_message", "message_changed"):
             return
 
-        channel_id = event.get("channel")
-        thread_ts = event.get("thread_ts")  # Extract thread timestamp
-        user_id = event.get("user")  # User who sent the message
-        prompt = event.get("text", "").strip()
-        files = event.get("files", [])  # Extract uploaded files
+        # Get user ID and check for app mentions
+        user_id = event.get("user")
+        channel_id = event["channel"]
+        channel_type = event.get("channel_type", "")
+        text = event.get("text", "").strip()
 
-        # Allow messages with files but no text
-        if not prompt and not files:
-            logger.debug("Empty prompt and no files, ignoring")
+        # Get thread_ts for thread-based sessions
+        # If message is in a thread, use thread_ts
+        # If message starts a thread, message ts becomes the thread identifier
+        thread_ts = event.get("thread_ts")
+        message_ts = event.get("ts")
+
+        # Determine if we should respond:
+        # 1. Direct messages (IMs) - always respond
+        # 2. Mentions - respond when bot is mentioned
+        # 3. Thread replies - respond to our own threads
+
+        is_dm = channel_type == "im"
+        is_mention = f"<@{app.client.auth_test()['user_id']}>" in text if text else False
+        is_thread_reply = thread_ts is not None and thread_ts != message_ts
+
+        # For DMs, always process
+        # For channels, need mention or be in a thread we started
+        should_respond = False
+
+        if is_dm:
+            should_respond = True
+        elif is_mention:
+            should_respond = True
+            # Remove the mention from the text
+            bot_mention = f"<@{(await app.client.auth_test())['user_id']}>"
+            text = text.replace(bot_mention, "").strip()
+        elif is_thread_reply:
+            # Check if bot participated in this thread
+            try:
+                result = await client.conversations_replies(channel=channel_id, ts=thread_ts)
+                messages = result.get("messages", [])
+                bot_info = await app.client.auth_test()
+                bot_id = bot_info.get("user_id")
+                bot_participated = any(msg.get("user") == bot_id for msg in messages)
+                should_respond = bot_participated
+            except Exception as e:
+                logger.warning(f"Failed to check thread participation: {e}")
+
+        if not should_respond:
             return
 
-        # Get or create session (thread-aware)
+        # Don't process empty messages
+        if not text and not event.get("files"):
+            return
+
+        # Get or create session for this channel/thread
         session = await deps.db.get_or_create_session(
             channel_id, thread_ts=thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
-        logger.info(f"Using session: {session.session_display_name()}")
 
-        # Process file uploads
-        uploaded_files = []
-        if files:
-            logger.info(f"Processing {len(files)} uploaded file(s)")
+        # Handle file uploads
+        files_info = event.get("files", [])
+        uploaded_file_paths = []
 
-            # Create .slack_uploads directory in session working directory
-            uploads_dir = os.path.join(session.working_directory, ".slack_uploads")
-            os.makedirs(uploads_dir, exist_ok=True)
+        for file_info in files_info:
+            file_id = file_info.get("id")
+            file_name = file_info.get("name", "unnamed")
+            file_url = file_info.get("url_private_download") or file_info.get("url_private")
 
-            for file_info in files:
-                try:
-                    logger.info(f"Downloading file: {file_info.get('name')}")
+            if not file_url:
+                logger.warning(f"No download URL for file: {file_name}")
+                continue
 
-                    # Download file
-                    local_path, metadata = await download_slack_file(
-                        client=client,
-                        file_id=file_info["id"],
-                        slack_bot_token=config.SLACK_BOT_TOKEN,
-                        destination_dir=uploads_dir,
-                        max_size_bytes=config.MAX_FILE_SIZE_MB * 1024 * 1024,
-                    )
+            try:
+                local_path = await download_slack_file(
+                    file_url=file_url,
+                    filename=file_name,
+                    session_id=session.id,
+                    bot_token=config.SLACK_BOT_TOKEN,
+                    max_size_mb=config.MAX_FILE_SIZE_MB,
+                )
 
-                    # Track in database
-                    uploaded_file = await deps.db.add_uploaded_file(
-                        session_id=session.id,
-                        slack_file_id=file_info["id"],
-                        filename=file_info["name"],
-                        local_path=local_path,
-                        mimetype=file_info.get("mimetype", ""),
-                        size=file_info.get("size", 0),
-                    )
-                    uploaded_files.append(uploaded_file)
-                    logger.info(f"File downloaded and tracked: {local_path}")
+                # Track uploaded file in database
+                await deps.db.add_uploaded_file(
+                    session_id=session.id,
+                    slack_file_id=file_id,
+                    filename=file_name,
+                    local_path=local_path,
+                    mimetype=file_info.get("mimetype", ""),
+                    size=file_info.get("size", 0),
+                )
 
-                    # For images, show thumbnail in thread
-                    if file_info.get("mimetype", "").startswith("image/"):
-                        thumb_url = file_info.get("thumb_360") or file_info.get("thumb_160")
-                        if thumb_url:
-                            await client.chat_postMessage(
-                                channel=channel_id,
-                                thread_ts=thread_ts
-                                or event.get("ts"),  # Use message ts if not in thread
-                                text=f"📎 Uploaded: {file_info['name']}",
-                                blocks=[
-                                    {
-                                        "type": "section",
-                                        "text": {
-                                            "type": "mrkdwn",
-                                            "text": f":frame_with_picture: Uploaded image: *{file_info['name']}*",
-                                        },
-                                    },
-                                    {
-                                        "type": "image",
-                                        "image_url": thumb_url,
-                                        "alt_text": file_info["name"],
-                                    },
-                                ],
-                            )
+                uploaded_file_paths.append(local_path)
+                logger.info(f"Downloaded file: {file_name} -> {local_path}")
 
-                except FileTooLargeError as e:
-                    logger.warning(f"File too large: {file_info.get('name')} - {e}")
-                    await client.chat_postMessage(
-                        channel=channel_id,
-                        thread_ts=thread_ts or event.get("ts"),
-                        text=f"⚠️ File too large: {file_info['name']} ({e.size_mb:.1f}MB, max: {e.max_mb}MB)",
-                    )
-                except FileDownloadError as e:
-                    logger.error(f"File download failed: {file_info.get('name')} - {e}")
-                    await client.chat_postMessage(
-                        channel=channel_id,
-                        thread_ts=thread_ts or event.get("ts"),
-                        text=f"⚠️ Failed to download file: {file_info['name']} - {str(e)}",
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Unexpected error processing file {file_info.get('name')}: {e}\n{traceback.format_exc()}"
-                    )
-                    await client.chat_postMessage(
-                        channel=channel_id,
-                        thread_ts=thread_ts or event.get("ts"),
-                        text=f"⚠️ Error processing file: {file_info['name']} - {str(e)}",
-                    )
+            except Exception as e:
+                logger.error(f"Failed to download file {file_name}: {e}")
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts or message_ts,
+                    text=f"Failed to download file `{file_name}`: {str(e)}",
+                )
 
-        # Enhance prompt with uploaded file references
-        if uploaded_files:
-            file_refs = "\n".join([f"- {f.filename} (at {f.local_path})" for f in uploaded_files])
+        # Build prompt with file references
+        prompt = text
+        if uploaded_file_paths:
+            file_refs = "\n".join(f"- {path}" for path in uploaded_file_paths)
+            prompt = f"{text}\n\nAttached files:\n{file_refs}"
 
-            if prompt:
-                prompt = f"{prompt}\n\nUploaded files:\n{file_refs}"
-            else:
-                # No text, only files - provide default prompt
-                prompt = f"Please analyze these uploaded files:\n{file_refs}"
+        if not prompt.strip():
+            return
 
-        # Create command history entry
+        # Add command to history
         cmd_history = await deps.db.add_command(session.id, prompt)
-        await deps.db.update_command_status(cmd_history.id, "running")
 
-        # Send initial processing message (in thread if applicable)
+        # Determine reply thread
+        # If user is in a thread, reply there
+        # Otherwise start a new thread from their message
+        reply_thread_ts = thread_ts or message_ts
+
+        # Post initial "thinking" message
         response = await client.chat_postMessage(
             channel=channel_id,
-            thread_ts=thread_ts,  # Reply in thread if this is a thread message
-            text=f"Processing: {prompt[:100]}...",  # Fallback for notifications
-            blocks=SlackFormatter.processing_message(prompt),
+            thread_ts=reply_thread_ts,
+            text="Processing...",
+            blocks=SlackFormatter.processing_message(prompt[:100] + "..." if len(prompt) > 100 else prompt),
         )
         message_ts = response["ts"]
 
-        # Setup streaming state with tool tracking
-        execution_id = str(uuid.uuid4())
+        # Update session's thread_ts if this is a new thread
+        if not thread_ts:
+            thread_ts = reply_thread_ts
 
-        # Callback to post plan files to Slack when Claude writes them
-        async def on_plan_file_written(file_path: str) -> None:
-            try:
-                expanded_path = os.path.expanduser(file_path)
-                if os.path.exists(expanded_path):
-                    with open(expanded_path, "r", encoding="utf-8") as f:
-                        plan_content = f.read()
+        # Determine permission mode (session override or default)
+        permission_mode = session.permission_mode or config.CLAUDE_PERMISSION_MODE
 
-                    filename = os.path.basename(file_path)
-                    await post_text_snippet(
-                        client=client,
-                        channel_id=channel_id,
-                        content=plan_content,
-                        title=f":page_facing_up: Plan: {filename}",
-                        thread_ts=thread_ts,
-                        format_as_text=True,
-                    )
-                    logger.info(f"Posted plan file to channel: {file_path}")
-                else:
-                    logger.warning(f"Plan file not found when trying to post: {file_path}")
-            except Exception as e:
-                logger.error(f"Failed to post plan file: {e}")
-
+        # Create streaming state
         streaming_state = StreamingMessageState(
+            client=client,
             channel_id=channel_id,
             message_ts=message_ts,
             prompt=prompt,
-            client=client,
-            logger=logger,
-            track_tools=True,
-            smart_concat=True,
-            on_plan_file_written=on_plan_file_written,
+            max_tools_display=config.timeouts.streaming.max_tools_display,
+            update_interval=config.timeouts.slack.message_update_throttle,
+            thread_ts=reply_thread_ts,
         )
-        # Start heartbeat to show progress during idle periods
-        streaming_state.start_heartbeat()
-        pending_question = None  # Track if we detect an AskUserQuestion
-
-        # Factory function to create on_chunk callback with proper closures
-        def create_on_chunk_callback(state: StreamingMessageState):
-            async def on_chunk(msg):
-                nonlocal pending_question
-
-                # Detect AskUserQuestion tool before updating state
-                if msg.tool_activities:
-                    for tool in msg.tool_activities:
-                        logger.debug(
-                            f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})"
-                        )
-                        if tool.name == "AskUserQuestion":
-                            logger.info(
-                                f"AskUserQuestion detected: id={tool.id[:8]}, result={tool.result is not None}, "
-                                f"in_state={tool.id in state.tool_activities}, pending={pending_question is not None}"
-                            )
-                            if tool.result is None:
-                                if tool.id not in state.tool_activities:
-                                    # Create pending question when we first see the tool
-                                    pending_question = await QuestionManager.create_pending_question(
-                                        session_id=str(session.id),
-                                        channel_id=channel_id,
-                                        thread_ts=thread_ts,
-                                        tool_use_id=tool.id,
-                                        tool_input=tool.input,
-                                    )
-                                    logger.info(
-                                        f"Created pending question {pending_question.question_id} for AskUserQuestion {tool.id[:8]}"
-                                    )
-                                else:
-                                    logger.debug(
-                                        f"AskUserQuestion tool {tool.id[:8]}... already tracked, skipping"
-                                    )
-
-                # Update streaming state
-                content = msg.content if msg.type == "assistant" else ""
-                tools = msg.tool_activities
-                if content or tools:
-                    await state.append_and_update(content or "", tools)
-
-            return on_chunk
-
-        on_chunk = create_on_chunk_callback(streaming_state)
 
         try:
-            result = await executor.execute(
+            # Update command status
+            await deps.db.update_command_status(cmd_history.id, "running")
+
+            # Execute with streaming
+            streaming_state.start_heartbeat()
+
+            pending_question = None  # Track if we detect an AskUserQuestion
+
+            # Factory function to create on_chunk callback with proper closures
+            def create_on_chunk_callback(state: StreamingMessageState):
+                async def on_chunk(msg):
+                    nonlocal pending_question
+
+                    # Detect AskUserQuestion tool before updating state
+                    if msg.tool_activities:
+                        for tool in msg.tool_activities:
+                            logger.debug(
+                                f"Tool activity: {tool.name} (id={tool.id[:8]}..., result={'has result' if tool.result else 'None'})"
+                            )
+                            if tool.name == "AskUserQuestion":
+                                logger.info(
+                                    f"AskUserQuestion detected: id={tool.id[:8]}, result={tool.result is not None}, "
+                                    f"in_state={tool.id in state.tool_activities}, pending={pending_question is not None}"
+                                )
+                                if tool.result is None:
+                                    if tool.id not in state.tool_activities:
+                                        # Create pending question when we first see the tool
+                                        pending_question = await QuestionManager.create_pending_question(
+                                            session_id=str(session.id),
+                                            channel_id=channel_id,
+                                            thread_ts=thread_ts,
+                                            tool_use_id=tool.id,
+                                            tool_input=tool.input,
+                                        )
+                                        logger.info(
+                                            f"Created pending question {pending_question.question_id} for AskUserQuestion {tool.id[:8]}"
+                                        )
+
+                    await state.update(msg.text, msg.tool_activities)
+
+                return on_chunk
+
+            on_chunk = create_on_chunk_callback(streaming_state)
+
+            result = await deps.executor.execute(
                 prompt=prompt,
                 working_directory=session.working_directory,
-                session_id=channel_id,
-                resume_session_id=session.claude_session_id,  # Resume previous session if exists
-                execution_id=execution_id,
+                session_id=f"{channel_id}:{thread_ts}",
+                resume_session_id=session.claude_session_id,
+                execution_id=f"{channel_id}:{message_ts}",
                 on_chunk=on_chunk,
-                permission_mode=session.permission_mode,  # Use session's mode (falls back to config)
-                db_session_id=session.id,  # Pass for smart context tracking
-                model=session.model,  # Use session's selected model
+                permission_mode=permission_mode,
+                db_session_id=session.id,
+                model=session.model,
             )
 
-            # Update session with Claude session ID for resume
+            # Store Claude session ID for continuation
             if result.session_id:
                 await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
@@ -384,7 +301,7 @@ async def main():
             max_questions = config.timeouts.execution.max_questions_per_conversation
             if pending_question and not result.session_id:
                 logger.error(
-                    f"AskUserQuestion detected but no session_id available - cannot handle question"
+                    "AskUserQuestion detected but no session_id available - cannot handle question"
                 )
             while pending_question and result.session_id and question_count < max_questions:
                 question_count += 1
@@ -392,275 +309,190 @@ async def main():
 
                 # Update the main message to show Claude is waiting
                 try:
-                    text_preview = (
-                        streaming_state.accumulated_output[:100] + "..."
-                        if len(streaming_state.accumulated_output) > 100
-                        else streaming_state.accumulated_output
-                    )
                     await client.chat_update(
                         channel=channel_id,
                         ts=message_ts,
-                        text=text_preview,
+                        text="Claude is asking a question...",
                         blocks=SlackFormatter.streaming_update(
-                            prompt,
-                            streaming_state.accumulated_output
-                            + "\n\n_Waiting for your response..._",
-                            tool_activities=streaming_state.get_tool_list(),
+                            prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                            result.output + "\n\n⏳ _Waiting for your answer below..._",
+                            list(streaming_state.tool_activities.values()),
+                            is_complete=False,
                         ),
                     )
                 except Exception as e:
-                    logger.warning(f"Failed to update message: {e}")
+                    logger.warning(f"Failed to update message with question state: {e}")
 
-                # Post the question to Slack with context from Claude's message
-                await QuestionManager.post_question_to_slack(
-                    pending_question,
-                    client,
-                    deps.db,
-                    context_text=streaming_state.accumulated_output,
+                # Post the question to Slack and wait for response
+                questions_data = pending_question.tool_input.get("questions", [])
+                user_response = await QuestionManager.post_and_wait(
+                    pending=pending_question,
+                    slack_client=client,
+                    questions=questions_data,
+                    timeout=config.timeouts.execution.plan_approval,
                 )
 
-                # Wait for user to answer (no timeout)
-                answers = await QuestionManager.wait_for_answer(
-                    pending_question.question_id,
-                )
-
-                if answers:
-                    # User answered - format and send as follow-up to Claude
-                    answer_text = QuestionManager.format_answer_for_claude(pending_question)
-                    logger.info(f"User answered question, sending to Claude: {answer_text[:100]}")
-
-                    # Reset pending_question before continuing - on_chunk may set a new one
-                    pending_question = None
-
-                    # Stop the old heartbeat
-                    streaming_state.stop_heartbeat()
-
-                    # Post a new message below the answered question for continued streaming
-                    continue_response = await client.chat_postMessage(
+                if user_response is None:
+                    # Timed out or cancelled
+                    logger.warning("Question timed out or was cancelled")
+                    # Update the message to indicate timeout
+                    await client.chat_update(
                         channel=channel_id,
-                        thread_ts=thread_ts,
-                        text="Continuing...",
-                        blocks=SlackFormatter.processing_message("Processing your answer..."),
+                        ts=message_ts,
+                        text="Question timed out",
+                        blocks=SlackFormatter.streaming_update(
+                            prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                            result.output + "\n\n⏱️ _Question timed out - no response received._",
+                            list(streaming_state.tool_activities.values()),
+                            is_complete=True,
+                        ),
                     )
-                    new_message_ts = continue_response["ts"]
-
-                    # Create new streaming state for the continuation
-                    streaming_state = StreamingMessageState(
-                        channel_id=channel_id,
-                        message_ts=new_message_ts,
-                        prompt=prompt,
-                        client=client,
-                        logger=logger,
-                        track_tools=True,
-                        smart_concat=True,
-                        on_plan_file_written=on_plan_file_written,
-                    )
-                    streaming_state.start_heartbeat()
-
-                    # Create new on_chunk callback for new streaming state
-                    on_chunk = create_on_chunk_callback(streaming_state)
-
-                    # Continue the conversation with the user's answer
-                    # This will resume the session
-                    result = await executor.execute(
-                        prompt=answer_text,
-                        working_directory=session.working_directory,
-                        session_id=channel_id,
-                        resume_session_id=result.session_id,  # Resume the same session
-                        execution_id=str(uuid.uuid4()),
-                        on_chunk=on_chunk,  # Use updated chunk handler
-                        permission_mode=session.permission_mode,
-                        db_session_id=session.id,
-                        model=session.model,
-                    )
-
-                    # Update the new message_ts for any future operations
-                    message_ts = new_message_ts
-
-                    # Update session with new Claude session ID
-                    if result.session_id:
-                        await deps.db.update_session_claude_id(
-                            channel_id, thread_ts, result.session_id
-                        )
-                    # Loop continues - will check if pending_question was set by on_chunk
-                else:
-                    # Timeout or cancelled - update message and break
-                    logger.info("Question timed out or cancelled")
-                    result.output = (
-                        streaming_state.accumulated_output
-                        + "\n\n_Question timed out - no response received._"
-                    )
-                    result.success = False
                     break
 
-            # Check if we hit the question limit
-            if question_count >= max_questions and pending_question:
-                logger.warning(
-                    f"Hit maximum question limit ({max_questions}), stopping question loop"
+                # Continue the conversation with the user's response
+                logger.info(f"User responded: {user_response[:100]}...")
+
+                # Reset pending_question for next iteration
+                pending_question = None
+
+                # Create new streaming state for continuation
+                streaming_state = StreamingMessageState(
+                    client=client,
+                    channel_id=channel_id,
+                    message_ts=message_ts,
+                    prompt=prompt,
+                    max_tools_display=config.timeouts.streaming.max_tools_display,
+                    update_interval=config.timeouts.slack.message_update_throttle,
+                    thread_ts=reply_thread_ts,
                 )
-                result.output = (
-                    streaming_state.accumulated_output
-                    + f"\n\n_Reached maximum question limit ({max_questions}). Please start a new conversation._"
-                )
-                result.success = False
+                streaming_state.start_heartbeat()
 
-            # Update command history
-            if result.success:
-                await deps.db.update_command_status(cmd_history.id, "completed", result.output)
-            else:
-                await deps.db.update_command_status(
-                    cmd_history.id, "failed", result.output, result.error
-                )
+                # Create fresh callback for new streaming state
+                on_chunk = create_on_chunk_callback(streaming_state)
 
-            # Check if plan mode should request approval before exiting
-            # If we're in plan mode and ExitPlanMode was called, request user approval
-            if session.permission_mode == "plan":
-                # Check if ExitPlanMode tool was attempted
-                exit_plan_attempted = any(
-                    tool.name == "ExitPlanMode" for tool in streaming_state.get_tool_list()
+                # Resume Claude with the user's response
+                continuation_prompt = user_response
+                result = await deps.executor.execute(
+                    prompt=continuation_prompt,
+                    working_directory=session.working_directory,
+                    session_id=f"{channel_id}:{thread_ts}",
+                    resume_session_id=result.session_id,  # Resume from the same session
+                    execution_id=f"{channel_id}:{message_ts}:q{question_count}",
+                    on_chunk=on_chunk,
+                    permission_mode=permission_mode,
+                    db_session_id=session.id,
+                    model=session.model,
                 )
 
-                if exit_plan_attempted:
-                    logger.info("ExitPlanMode detected, requesting user approval")
+                streaming_state.stop_heartbeat()
 
-                    # Get plan content from plan file if available
-                    plan_file_path = streaming_state.get_plan_file_path()
-                    plan_content = ""
-                    if plan_file_path:
-                        try:
-                            with open(plan_file_path) as f:
-                                plan_content = f.read()
-                        except Exception as e:
-                            logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
-                            plan_content = streaming_state.accumulated_output
+                # Update Claude session ID after continuation
+                if result.session_id:
+                    await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
-                    if not plan_content:
-                        plan_content = streaming_state.accumulated_output or "No plan content available"
+            # Handle ExitPlanMode (plan approval workflow)
+            if result.has_pending_plan_approval:
+                logger.info("ExitPlanMode detected, initiating plan approval workflow")
 
-                    # Request approval via Slack buttons and wait for response
-                    approved = await PlanApprovalManager.request_approval(
-                        session_id=session.id,
-                        channel_id=channel_id,
-                        plan_content=plan_content,
-                        claude_session_id=result.session_id or "",
-                        prompt=prompt,
-                        user_id=user_id,
-                        thread_ts=thread_ts,
-                        slack_client=client,
+                # Retrieve the plan content from the plan file
+                plan_content: Optional[str] = None
+                if result.plan_file_path:
+                    try:
+                        with open(result.plan_file_path, "r") as f:
+                            plan_content = f.read()
+                        logger.info(f"Read plan from {result.plan_file_path}: {len(plan_content)} chars")
+                    except Exception as e:
+                        logger.error(f"Failed to read plan file {result.plan_file_path}: {e}")
+
+                # Request approval via Slack
+                approved = await PlanApprovalManager.request_approval(
+                    session_id=f"{channel_id}:{thread_ts}",
+                    channel_id=channel_id,
+                    plan_content=plan_content or result.output,
+                    thread_ts=reply_thread_ts,
+                    slack_client=client,
+                    timeout=config.timeouts.execution.plan_approval,
+                    db=deps.db,
+                    user_id=user_id,
+                )
+
+                if approved:
+                    logger.info("Plan approved, updating session to bypass mode")
+                    # Update session to bypass mode for implementation
+                    await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
+
+                    # Update the streaming message to show approval
+                    await client.chat_update(
+                        channel=channel_id,
+                        ts=message_ts,
+                        text="Plan approved! Proceeding with implementation...",
+                        blocks=SlackFormatter.streaming_update(
+                            prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                            result.output + "\n\n✅ Plan approved. Implementation will proceed.",
+                            list(streaming_state.tool_activities.values()),
+                            is_complete=True,
+                        ),
                     )
+                else:
+                    logger.info("Plan not approved or timed out")
+                    # Update message to show plan was not approved
+                    await client.chat_update(
+                        channel=channel_id,
+                        ts=message_ts,
+                        text="Plan not approved",
+                        blocks=SlackFormatter.streaming_update(
+                            prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                            result.output + "\n\n❌ Plan not approved. You can modify your request or provide more details.",
+                            list(streaming_state.tool_activities.values()),
+                            is_complete=True,
+                        ),
+                    )
+                return
 
-                    if approved:
-                        logger.info("Plan approved, switching session to bypass mode")
-                        await deps.db.update_session_mode(
-                            channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
-                        )
-
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            text="Plan approved - switching to execution mode",
-                            blocks=[
-                                {
-                                    "type": "section",
-                                    "text": {
-                                        "type": "mrkdwn",
-                                        "text": ":white_check_mark: *Plan approved!* Switched to bypass mode for execution.\n\n_Send a message to continue with the plan implementation._",
-                                    },
-                                }
-                            ],
-                        )
-                    else:
-                        logger.info("Plan rejected or timed out, staying in plan mode")
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            text="Plan not approved - staying in plan mode",
-                            blocks=[
-                                {
-                                    "type": "section",
-                                    "text": {
-                                        "type": "mrkdwn",
-                                        "text": ":x: *Plan not approved.* Staying in plan mode.\n\n_Provide feedback to revise the plan, or use `/mode bypass` to switch modes manually._",
-                                    },
-                                }
-                            ],
-                        )
-
-            # Stop heartbeat before sending final response
+            # Final update with complete status
             streaming_state.stop_heartbeat()
 
-            # Send final response
-            output = result.output or result.error or "No output"
+            await deps.db.update_command_status(
+                cmd_history.id,
+                "completed" if result.success else "failed",
+                output=result.output,
+                error_message=result.error,
+            )
 
-            if SlackFormatter.should_attach_file(output):
-                # Large response - attach as file
-                blocks, file_content, file_title = SlackFormatter.command_response_with_file(
-                    prompt=prompt,
-                    output=output,
+            # Check if output is too long for Slack
+            if SlackFormatter.should_attach_file(result.output):
+                blocks, filename, content = SlackFormatter.command_response_with_file(
+                    prompt=prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                    output=result.output,
                     command_id=cmd_history.id,
                     duration_ms=result.duration_ms,
                     cost_usd=result.cost_usd,
                     is_error=not result.success,
                 )
+
                 await client.chat_update(
                     channel=channel_id,
                     ts=message_ts,
-                    text=output[:100] + "..." if len(output) > 100 else output,
+                    text=f"Completed (see file for full output)",
                     blocks=blocks,
                 )
-                # Post response content
-                try:
-                    # Post summary as formatted text (converts markdown to Slack mrkdwn)
-                    await post_text_snippet(
-                        client=client,
-                        channel_id=channel_id,
-                        content=file_content,
-                        title="📄 Response summary",
-                        thread_ts=thread_ts,
-                        format_as_text=True,
-                    )
-                    # Store detailed output in cache and post button to view it
-                    if result.detailed_output and result.detailed_output != output:
-                        DetailCache.store(cmd_history.id, result.detailed_output)
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            text="📋 Detailed output available",
-                            blocks=[
-                                {
-                                    "type": "section",
-                                    "text": {
-                                        "type": "mrkdwn",
-                                        "text": f"📋 *Detailed output* ({len(result.detailed_output):,} chars)",
-                                    },
-                                    "accessory": {
-                                        "type": "button",
-                                        "text": {
-                                            "type": "plain_text",
-                                            "text": "View Details",
-                                            "emoji": True,
-                                        },
-                                        "action_id": "view_detailed_output",
-                                        "value": str(cmd_history.id),
-                                    },
-                                },
-                            ],
-                        )
-                except Exception as post_error:
-                    logger.error(f"Failed to post snippet: {post_error}")
-                    await client.chat_postMessage(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        text=f"⚠️ Could not post detailed output: {str(post_error)[:100]}",
-                    )
+
+                # Upload as file
+                await client.files_upload_v2(
+                    channel=channel_id,
+                    thread_ts=reply_thread_ts,
+                    content=content,
+                    filename=filename,
+                    title="Full Output",
+                )
             else:
                 await client.chat_update(
                     channel=channel_id,
                     ts=message_ts,
-                    text=output[:100] + "..." if len(output) > 100 else output,
+                    text=f"Completed: {result.output[:500]}",
                     blocks=SlackFormatter.command_response(
-                        prompt=prompt,
-                        output=output,
+                        prompt=prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                        output=result.output,
                         command_id=cmd_history.id,
                         duration_ms=result.duration_ms,
                         cost_usd=result.cost_usd,
@@ -670,6 +502,10 @@ async def main():
 
         except Exception as e:
             logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")
+            streaming_state.stop_heartbeat()  # Stop heartbeat on error
+            # Clean up pending question if one was created
+            if pending_question:
+                QuestionManager.cancel(pending_question.question_id)
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
@@ -682,22 +518,18 @@ async def main():
     handler = AsyncSocketModeHandler(app, config.SLACK_APP_TOKEN)
 
     # Setup shutdown handler
-    loop = asyncio.get_event_loop()
     shutdown_event = asyncio.Event()
 
-    def signal_handler():
+    def signal_handler(sig, frame):
         logger.info("Received shutdown signal")
         shutdown_event.set()
 
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, signal_handler)
-
-    logger.info("Starting Slack Claude Code Bot...")
-    logger.info(f"Default working directory: {config.DEFAULT_WORKING_DIR}")
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     # Start the handler
-    await handler.connect_async()
-    logger.info("Connected to Slack")
+    await handler.start_async()
+    logger.info("Bot is ready!")
 
     # Wait for shutdown signal
     await shutdown_event.wait()
@@ -705,6 +537,7 @@ async def main():
     # Cleanup
     await shutdown(executor)
     await handler.close_async()
+
 
 def run():
     # Check for subcommands (e.g., ccslack config ...)
@@ -722,4 +555,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-    

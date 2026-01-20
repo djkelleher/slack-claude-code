@@ -1,6 +1,5 @@
 """Notifications command handler: /notifications."""
 
-from loguru import logger
 from slack_bolt.async_app import AsyncApp
 
 from ..utils.formatting import SlackFormatter

@@ -135,17 +135,6 @@ class SubprocessExecutor:
             cmd.extend(["--allowed-tools", config.ALLOWED_TOOLS])
             logger.info(f"{log_prefix}Using --allowed-tools {config.ALLOWED_TOOLS}")
 
-        # In plan mode, inject instructions to ask clarifying questions
-        if mode == "plan":
-            plan_instructions = (
-                "When in plan mode, you MUST ask clarifying questions using the AskUserQuestion tool "
-                "before creating your implementation plan. Do not proceed to write the plan until you "
-                "have gathered enough information from the user about their requirements, preferences, "
-                "and constraints. Ask 2-4 focused questions to understand the scope and approach."
-            )
-            # cmd.extend(["--append-system-prompt", plan_instructions])
-            # logger.info(f"{log_prefix}Added plan mode question instructions")
-
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):
             cmd.extend(["--resume", resume_session_id])
@@ -390,23 +379,23 @@ class SubprocessExecutor:
                 # Prevent infinite retry loop
                 self._is_retry_after_exit_plan_error = True
 
-                result = await self.execute(
-                    prompt=prompt,
-                    working_directory=working_directory,
-                    session_id=session_id,
-                    resume_session_id=resume_session_id,  # Keep the session
-                    execution_id=execution_id,
-                    on_chunk=on_chunk,
-                    permission_mode=config.DEFAULT_BYPASS_MODE,  # Switch to bypass mode
-                    db_session_id=db_session_id,
-                    model=model,
-                    _recursion_depth=_recursion_depth + 1,
-                )
-
-                # Reset retry flag after completion so future executions work normally
-                self._is_retry_after_exit_plan_error = False
-
-                return result
+                try:
+                    result = await self.execute(
+                        prompt=prompt,
+                        working_directory=working_directory,
+                        session_id=session_id,
+                        resume_session_id=resume_session_id,  # Keep the session
+                        execution_id=execution_id,
+                        on_chunk=on_chunk,
+                        permission_mode=config.DEFAULT_BYPASS_MODE,  # Switch to bypass mode
+                        db_session_id=db_session_id,
+                        model=model,
+                        _recursion_depth=_recursion_depth + 1,
+                    )
+                    return result
+                finally:
+                    # Reset retry flag after completion so future executions work normally
+                    self._is_retry_after_exit_plan_error = False
 
             return ExecutionResult(
                 success=success,

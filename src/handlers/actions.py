@@ -926,7 +926,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         else:
             # Split into chunks
             remaining = content
-            part = 1
             while remaining:
                 chunk_size = config.SLACK_BLOCK_TEXT_LIMIT - 6  # Account for ```
                 if len(remaining) <= chunk_size:
@@ -946,7 +945,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                         "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
                     }
                 )
-                part += 1
 
                 # Modal has a limit of ~100 blocks
                 if len(blocks) >= 50:
