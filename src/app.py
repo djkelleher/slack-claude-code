@@ -527,8 +527,8 @@ async def main() -> None:
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Start the handler
-    await handler.start_async()
+    # Start the handler (connect_async returns after connecting, start_async blocks forever)
+    await handler.connect_async()
     logger.info("Bot is ready!")
 
     # Wait for shutdown signal
