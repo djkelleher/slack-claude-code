@@ -530,7 +530,7 @@ async def main():
 
                     # Request approval via Slack buttons and wait for response
                     approved = await PlanApprovalManager.request_approval(
-                        session_id=session.id,
+                        session_id=str(session.id),
                         channel_id=channel_id,
                         plan_content=plan_content,
                         claude_session_id=result.session_id or "",
