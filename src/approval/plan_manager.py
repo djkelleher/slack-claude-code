@@ -13,8 +13,6 @@ from typing import Optional
 from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
-from ..config import config
-
 
 @dataclass
 class PendingPlanApproval:
@@ -57,7 +55,6 @@ class PlanApprovalManager:
         user_id: Optional[str] = None,
         thread_ts: Optional[str] = None,
         slack_client: Optional[AsyncWebClient] = None,
-        timeout: int = None,
     ) -> bool:
         """Request plan approval via Slack and wait for response.
 
@@ -70,14 +67,10 @@ class PlanApprovalManager:
             user_id: Optional user who initiated the request
             thread_ts: Optional thread to post in
             slack_client: Slack client for posting message
-            timeout: Timeout in seconds (defaults to config)
 
         Returns:
-            True if approved, False if denied or timed out
+            True if approved, False if denied
         """
-        if timeout is None:
-            timeout = config.timeouts.execution.plan_approval
-
         approval_id = str(uuid.uuid4())[:8]
 
         approval = PendingPlanApproval(
@@ -113,17 +106,10 @@ class PlanApprovalManager:
 
                 approval.message_ts = result.get("ts")
 
-            # Wait for response with timeout
-            approved = await asyncio.wait_for(
-                approval.future,
-                timeout=timeout,
-            )
+            # Wait for response (no timeout - user can take as long as needed)
+            approved = await approval.future
 
             return approved
-
-        except asyncio.TimeoutError:
-            logger.info(f"Plan approval {approval_id} timed out after {timeout}s")
-            return False
 
         except asyncio.CancelledError:
             logger.info(f"Plan approval {approval_id} was cancelled")
