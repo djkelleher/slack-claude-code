@@ -2,6 +2,8 @@
 
 import re
 
+from .base import flatten_text
+
 
 def markdown_to_slack_mrkdwn(text: str) -> str:
     """Convert markdown text to Slack mrkdwn format.
@@ -27,6 +29,9 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
     """
     if not text:
         return text
+
+    # First flatten text to join single newlines into spaces
+    text = flatten_text(text)
 
     # Preserve code blocks (triple backticks) by replacing them temporarily
     # Use \x00 (null byte) as delimiter since it won't appear in normal text

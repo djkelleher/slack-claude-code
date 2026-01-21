@@ -10,6 +10,87 @@ MAX_TEXT_LENGTH = config.SLACK_BLOCK_TEXT_LIMIT
 FILE_THRESHOLD = config.SLACK_FILE_THRESHOLD
 
 
+def flatten_text(text: str) -> str:
+    """Flatten text by joining single newlines into spaces.
+
+    This makes text flow across the full width in Slack instead of being
+    broken into short lines. Preserves intentional structure like code blocks,
+    lists, headers, and paragraph breaks (double newlines).
+
+    Parameters
+    ----------
+    text : str
+        The text to flatten.
+
+    Returns
+    -------
+    str
+        Text with single newlines converted to spaces where appropriate.
+    """
+    if not text:
+        return text
+
+    # Protect code blocks by extracting them first
+    code_blocks = []
+
+    def save_code_block(match: re.Match) -> str:
+        code_blocks.append(match.group(0))
+        return f"\x00CODEBLOCK{len(code_blocks) - 1}\x00"
+
+    text = re.sub(r"```[\s\S]*?```", save_code_block, text)
+
+    # Normalize paragraph breaks to a consistent marker
+    text = re.sub(r"\n\s*\n", "\x00PARA\x00", text)
+
+    # Process each paragraph separately
+    paragraphs = text.split("\x00PARA\x00")
+    result_paragraphs = []
+
+    for para in paragraphs:
+        lines = para.split("\n")
+        result_lines = []
+        buffer = []
+
+        for line in lines:
+            stripped = line.strip()
+            # Check if this line should stay on its own
+            is_structural = (
+                stripped.startswith("#")  # Headers
+                or stripped.startswith("•")  # Bullet points
+                or stripped.startswith("-")  # Dashes (lists)
+                or stripped.startswith("*")  # Asterisk lists
+                or re.match(r"^\d+\.", stripped)  # Numbered lists
+                or stripped.startswith(">")  # Blockquotes
+                or stripped == ""  # Empty lines
+            )
+
+            if is_structural:
+                # Flush the buffer first
+                if buffer:
+                    result_lines.append(" ".join(buffer))
+                    buffer = []
+                result_lines.append(line)
+            else:
+                # Add to buffer for joining
+                if stripped:
+                    buffer.append(stripped)
+
+        # Flush remaining buffer
+        if buffer:
+            result_lines.append(" ".join(buffer))
+
+        result_paragraphs.append("\n".join(result_lines))
+
+    # Rejoin paragraphs with double newlines
+    text = "\n\n".join(result_paragraphs)
+
+    # Restore code blocks
+    for i, block in enumerate(code_blocks):
+        text = text.replace(f"\x00CODEBLOCK{i}\x00", block)
+
+    return text
+
+
 def escape_markdown(text: str) -> str:
     """Escape special Slack mrkdwn characters.
 
@@ -45,6 +126,9 @@ def markdown_to_mrkdwn(text: str) -> str:
     Note: In standard Markdown, **text** is bold and *text* is italic.
     In Slack mrkdwn, *text* is bold and _text_ is italic.
     """
+    # First flatten text to join single newlines into spaces
+    text = flatten_text(text)
+
     # Protect code blocks and inline code first
     protected_content = []
 
