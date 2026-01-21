@@ -14,6 +14,7 @@ from typing import Optional
 from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
+from ..config import config
 from .slack_ui import build_plan_approval_blocks
 
 
@@ -59,6 +60,7 @@ class PlanApprovalManager:
         thread_ts: Optional[str] = None,
         slack_client: Optional[AsyncWebClient] = None,
         plan_file_path: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> bool:
         """Request plan approval via Slack and wait for response.
 
@@ -72,10 +74,13 @@ class PlanApprovalManager:
             thread_ts: Optional thread to post in
             slack_client: Slack client for posting message
             plan_file_path: Optional path to plan markdown file for attachment
+            timeout: Timeout in seconds (defaults to config.timeouts.execution.plan_approval)
 
         Returns:
-            True if approved, False if denied
+            True if approved, False if denied or timed out
         """
+        if timeout is None:
+            timeout = config.timeouts.execution.plan_approval
         approval_id = str(uuid.uuid4())[:8]
 
         approval = PendingPlanApproval(
@@ -124,10 +129,14 @@ class PlanApprovalManager:
                     except Exception as e:
                         logger.warning(f"Failed to upload plan file: {e}")
 
-            # Wait for response (no timeout - user can take as long as needed)
-            approved = await approval.future
+            # Wait for response with timeout
+            approved = await asyncio.wait_for(approval.future, timeout=timeout)
 
             return approved
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Plan approval {approval_id} timed out after {timeout}s")
+            return False
 
         except asyncio.CancelledError:
             logger.info(f"Plan approval {approval_id} was cancelled")
