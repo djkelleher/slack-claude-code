@@ -156,6 +156,7 @@ async def main():
             return
 
         channel_id = event.get("channel")
+        user_id = event.get("user")  # Extract user ID for plan approval
         thread_ts = event.get("thread_ts")  # Extract thread timestamp
         prompt = event.get("text", "").strip()
         files = event.get("files", [])  # Extract uploaded files
@@ -660,6 +661,10 @@ async def main():
 
         except Exception as e:
             logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")
+            streaming_state.stop_heartbeat()  # Stop heartbeat on error
+            # Clean up pending question if one was created
+            if pending_question:
+                QuestionManager.cancel(pending_question.question_id)
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
@@ -696,6 +701,7 @@ async def main():
     await shutdown(executor)
     await handler.close_async()
 
+
 def run():
     # Check for subcommands (e.g., ccslack config ...)
     if len(sys.argv) > 1 and sys.argv[0].endswith(("ccslack", "ccslack.exe")):
@@ -712,4 +718,4 @@ def run():
 
 if __name__ == "__main__":
     run()
-    
+
