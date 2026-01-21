@@ -517,26 +517,30 @@ async def main() -> None:
     # Start Socket Mode handler
     handler = AsyncSocketModeHandler(app, config.SLACK_APP_TOKEN)
 
-    # Setup shutdown handler
+    # Setup shutdown handler using asyncio's signal handling
     shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
 
-    def signal_handler(sig, frame):
+    def signal_handler():
         logger.info("Received shutdown signal")
         shutdown_event.set()
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    loop.add_signal_handler(signal.SIGINT, signal_handler)
+    loop.add_signal_handler(signal.SIGTERM, signal_handler)
 
     # Start the handler (connect_async returns after connecting, start_async blocks forever)
     await handler.connect_async()
     logger.info("Bot is ready!")
 
-    # Wait for shutdown signal
-    await shutdown_event.wait()
-
-    # Cleanup
-    await shutdown(executor)
-    await handler.close_async()
+    try:
+        # Wait for shutdown signal
+        await shutdown_event.wait()
+    finally:
+        # Cleanup
+        logger.info("Shutting down...")
+        await shutdown(executor)
+        await handler.close_async()
+        logger.info("Shutdown complete")
 
 
 def run():
