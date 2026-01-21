@@ -32,6 +32,7 @@ class ExecutionResult:
     duration_ms: Optional[int] = None
     was_cancelled: bool = False
     has_pending_question: bool = False  # True if terminated due to AskUserQuestion
+    has_pending_plan_approval: bool = False  # True if terminated due to ExitPlanMode
 
 
 class SubprocessExecutor:
@@ -47,9 +48,10 @@ class SubprocessExecutor:
     ) -> None:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self.db = db
-        # Track ExitPlanMode for retry logic
+        # Track ExitPlanMode for retry logic and early termination
         self._exit_plan_mode_tool_id: Optional[str] = None
         self._exit_plan_mode_error_detected: bool = False
+        self._exit_plan_mode_detected: bool = False  # For early termination to show approval UI
         self._is_retry_after_exit_plan_error: bool = False
         # Track AskUserQuestion for early termination
         self._ask_user_question_detected: bool = False
@@ -99,10 +101,11 @@ class SubprocessExecutor:
                 error=f"Max retry depth ({MAX_RECURSION_DEPTH}) exceeded",
             )
 
-        # Reset ExitPlanMode error detection for this execution
+        # Reset ExitPlanMode detection for this execution
         # Always reset these flags so each execution starts fresh
         self._exit_plan_mode_tool_id = None
         self._exit_plan_mode_error_detected = False
+        self._exit_plan_mode_detected = False
         # Note: _is_retry_after_exit_plan_error is preserved during retry to prevent infinite loops
         # Reset AskUserQuestion detection
         self._ask_user_question_detected = False
@@ -234,7 +237,14 @@ class SubprocessExecutor:
                                     logger.info(f"{log_prefix}AskUserQuestion detected - will terminate for Slack handling")
                                 elif tool_name == "ExitPlanMode":
                                     self._exit_plan_mode_tool_id = block.get("id")
-                                    logger.info(f"{log_prefix}Tool: ExitPlanMode")
+                                    # Mark for early termination to handle approval in Slack
+                                    if permission_mode == "plan":
+                                        self._exit_plan_mode_detected = True
+                                        logger.info(
+                                            f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval"
+                                        )
+                                    else:
+                                        logger.info(f"{log_prefix}Tool: ExitPlanMode")
                                 else:
                                     logger.info(f"{log_prefix}Tool: {tool_name}")
                 elif msg.type == "user" and msg.raw:
@@ -326,6 +336,17 @@ class SubprocessExecutor:
                         process.kill()
                     break  # Exit the message processing loop
 
+                # If ExitPlanMode detected in plan mode, terminate early to show approval UI
+                # The CLI would otherwise block waiting for interactive approval
+                if self._exit_plan_mode_detected:
+                    logger.info(f"{log_prefix}Terminating execution to handle plan approval in Slack")
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                    break  # Exit the message processing loop
+
                 if msg.is_final:
                     break
 
@@ -406,6 +427,7 @@ class SubprocessExecutor:
                 cost_usd=cost_usd,
                 duration_ms=duration_ms,
                 has_pending_question=self._ask_user_question_detected,
+                has_pending_plan_approval=self._exit_plan_mode_detected,
             )
 
         except asyncio.CancelledError:

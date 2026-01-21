@@ -505,109 +505,103 @@ async def main():
 
             # Check if plan mode should request approval before exiting
             # If we're in plan mode and ExitPlanMode was called, request user approval
-            if session.permission_mode == "plan":
-                # Check if ExitPlanMode tool was attempted
-                exit_plan_attempted = any(
-                    tool.name == "ExitPlanMode" for tool in streaming_state.get_tool_list()
+            if result.has_pending_plan_approval:
+                logger.info("ExitPlanMode detected, requesting user approval")
+
+                # Get plan content from plan file if available
+                plan_file_path = streaming_state.get_plan_file_path()
+                plan_content = ""
+                if plan_file_path:
+                    try:
+                        with open(plan_file_path) as f:
+                            plan_content = f.read()
+                    except Exception as e:
+                        logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
+                        plan_content = streaming_state.accumulated_output
+
+                if not plan_content:
+                    plan_content = streaming_state.accumulated_output or "No plan content available"
+
+                # Request approval via Slack buttons and wait for response
+                approved = await PlanApprovalManager.request_approval(
+                    session_id=str(session.id),
+                    channel_id=channel_id,
+                    plan_content=plan_content,
+                    claude_session_id=result.session_id or "",
+                    prompt=prompt,
+                    user_id=user_id,
+                    thread_ts=thread_ts,
+                    slack_client=client,
                 )
 
-                if exit_plan_attempted:
-                    logger.info("ExitPlanMode detected, requesting user approval")
-
-                    # Get plan content from plan file if available
-                    plan_file_path = streaming_state.get_plan_file_path()
-                    plan_content = ""
-                    if plan_file_path:
-                        try:
-                            with open(plan_file_path) as f:
-                                plan_content = f.read()
-                        except Exception as e:
-                            logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
-                            plan_content = streaming_state.accumulated_output
-
-                    if not plan_content:
-                        plan_content = streaming_state.accumulated_output or "No plan content available"
-
-                    # Request approval via Slack buttons and wait for response
-                    approved = await PlanApprovalManager.request_approval(
-                        session_id=str(session.id),
-                        channel_id=channel_id,
-                        plan_content=plan_content,
-                        claude_session_id=result.session_id or "",
-                        prompt=prompt,
-                        user_id=user_id,
-                        thread_ts=thread_ts,
-                        slack_client=client,
+                if approved:
+                    logger.info("Plan approved, switching session to bypass mode")
+                    await deps.db.update_session_mode(
+                        channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
                     )
 
-                    if approved:
-                        logger.info("Plan approved, switching session to bypass mode")
-                        await deps.db.update_session_mode(
-                            channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
-                        )
+                    # Post initial message and automatically execute the plan
+                    exec_response = await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text="Plan approved - executing...",
+                        blocks=SlackFormatter.processing_message(
+                            ":white_check_mark: *Plan approved!* Executing implementation..."
+                        ),
+                    )
+                    exec_message_ts = exec_response["ts"]
 
-                        # Post initial message and automatically execute the plan
-                        exec_response = await client.chat_postMessage(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            text="Plan approved - executing...",
-                            blocks=SlackFormatter.processing_message(
-                                ":white_check_mark: *Plan approved!* Executing implementation..."
-                            ),
-                        )
-                        exec_message_ts = exec_response["ts"]
+                    # Create new streaming state for execution
+                    streaming_state = StreamingMessageState(
+                        channel_id=channel_id,
+                        message_ts=exec_message_ts,
+                        prompt="[Plan Execution]",
+                        client=client,
+                        logger=logger,
+                        track_tools=True,
+                        smart_concat=True,
+                        on_plan_file_written=on_plan_file_written,
+                    )
+                    streaming_state.start_heartbeat()
+                    on_chunk = create_on_chunk_callback(streaming_state)
 
-                        # Create new streaming state for execution
-                        streaming_state = StreamingMessageState(
-                            channel_id=channel_id,
-                            message_ts=exec_message_ts,
-                            prompt="[Plan Execution]",
-                            client=client,
-                            logger=logger,
-                            track_tools=True,
-                            smart_concat=True,
-                            on_plan_file_written=on_plan_file_written,
-                        )
-                        streaming_state.start_heartbeat()
-                        on_chunk = create_on_chunk_callback(streaming_state)
+                    # Resume Claude session to execute the plan
+                    result = await executor.execute(
+                        prompt="Plan approved. Please proceed with the implementation.",
+                        working_directory=session.working_directory,
+                        session_id=channel_id,
+                        resume_session_id=result.session_id,
+                        execution_id=str(uuid.uuid4()),
+                        on_chunk=on_chunk,
+                        permission_mode=config.DEFAULT_BYPASS_MODE,
+                        db_session_id=session.id,
+                        model=session.model,
+                    )
 
-                        # Resume Claude session to execute the plan
-                        result = await executor.execute(
-                            prompt="Plan approved. Please proceed with the implementation.",
-                            working_directory=session.working_directory,
-                            session_id=channel_id,
-                            resume_session_id=result.session_id,
-                            execution_id=str(uuid.uuid4()),
-                            on_chunk=on_chunk,
-                            permission_mode=config.DEFAULT_BYPASS_MODE,
-                            db_session_id=session.id,
-                            model=session.model,
-                        )
+                    # Update message_ts for final response
+                    message_ts = exec_message_ts
 
-                        # Update message_ts for final response
-                        message_ts = exec_message_ts
-
-                        # Update session with new Claude session ID
-                        if result.session_id:
-                            await deps.db.update_session_claude_id(
-                                channel_id, thread_ts, result.session_id
-                            )
-                    else:
-                        logger.info("Plan rejected or timed out, staying in plan mode")
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            text="Plan not approved - staying in plan mode",
-                            blocks=[
-                                {
-                                    "type": "section",
-                                    "text": {
-                                        "type": "mrkdwn",
-                                        "text": ":x: *Plan not approved.* Staying in plan mode.\n\n_Provide feedback to revise the plan, or use `/mode bypass` to switch modes manually._",
-                                    },
-                                }
-                            ],
+                    # Update session with new Claude session ID
+                    if result.session_id:
+                        await deps.db.update_session_claude_id(
+                            channel_id, thread_ts, result.session_id
                         )
+                else:
+                    logger.info("Plan rejected or timed out, staying in plan mode")
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text="Plan not approved - staying in plan mode",
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": ":x: *Plan not approved.* Staying in plan mode.\n\n_Provide feedback to revise the plan, or use `/mode bypass` to switch modes manually._",
+                                },
+                            }
+                        ],
+                    )
 
             # Stop heartbeat before sending final response
             streaming_state.stop_heartbeat()
