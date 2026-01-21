@@ -107,8 +107,13 @@ async def main() -> None:
         # 2. Mentions - respond when bot is mentioned
         # 3. Thread replies - respond to our own threads
 
+        # Get bot user ID once for all checks
+        bot_info = await app.client.auth_test()
+        bot_id = bot_info.get("user_id")
+        bot_mention = f"<@{bot_id}>"
+
         is_dm = channel_type == "im"
-        is_mention = f"<@{app.client.auth_test()['user_id']}>" in text if text else False
+        is_mention = bot_mention in text if text else False
         is_thread_reply = thread_ts is not None and thread_ts != message_ts
 
         # For DMs, always process
@@ -120,15 +125,12 @@ async def main() -> None:
         elif is_mention:
             should_respond = True
             # Remove the mention from the text
-            bot_mention = f"<@{(await app.client.auth_test())['user_id']}>"
             text = text.replace(bot_mention, "").strip()
         elif is_thread_reply:
             # Check if bot participated in this thread
             try:
                 result = await client.conversations_replies(channel=channel_id, ts=thread_ts)
                 messages = result.get("messages", [])
-                bot_info = await app.client.auth_test()
-                bot_id = bot_info.get("user_id")
                 bot_participated = any(msg.get("user") == bot_id for msg in messages)
                 should_respond = bot_participated
             except Exception as e:
