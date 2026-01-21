@@ -546,20 +546,52 @@ async def main():
                             channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
                         )
 
-                        await client.chat_postMessage(
+                        # Post initial message and automatically execute the plan
+                        exec_response = await client.chat_postMessage(
                             channel=channel_id,
                             thread_ts=thread_ts,
-                            text="Plan approved - switching to execution mode",
-                            blocks=[
-                                {
-                                    "type": "section",
-                                    "text": {
-                                        "type": "mrkdwn",
-                                        "text": ":white_check_mark: *Plan approved!* Switched to bypass mode for execution.\n\n_Send a message to continue with the plan implementation._",
-                                    },
-                                }
-                            ],
+                            text="Plan approved - executing...",
+                            blocks=SlackFormatter.processing_message(
+                                ":white_check_mark: *Plan approved!* Executing implementation..."
+                            ),
                         )
+                        exec_message_ts = exec_response["ts"]
+
+                        # Create new streaming state for execution
+                        streaming_state = StreamingMessageState(
+                            channel_id=channel_id,
+                            message_ts=exec_message_ts,
+                            prompt="[Plan Execution]",
+                            client=client,
+                            logger=logger,
+                            track_tools=True,
+                            smart_concat=True,
+                            on_plan_file_written=on_plan_file_written,
+                        )
+                        streaming_state.start_heartbeat()
+                        on_chunk = create_on_chunk_callback(streaming_state)
+
+                        # Resume Claude session to execute the plan
+                        result = await executor.execute(
+                            prompt="Plan approved. Please proceed with the implementation.",
+                            working_directory=session.working_directory,
+                            session_id=channel_id,
+                            resume_session_id=result.session_id,
+                            execution_id=str(uuid.uuid4()),
+                            on_chunk=on_chunk,
+                            permission_mode=config.DEFAULT_BYPASS_MODE,
+                            db_session_id=session.id,
+                            model=session.model,
+                        )
+
+                        # Update message_ts for final response
+                        message_ts = exec_message_ts
+
+                        # Update session with new Claude session ID
+                        if result.session_id:
+                            await deps.db.update_session_claude_id(
+                                channel_id, thread_ts, result.session_id
+                            )
                     else:
                         logger.info("Plan rejected or timed out, staying in plan mode")
                         await client.chat_postMessage(
