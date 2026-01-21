@@ -34,20 +34,6 @@ from src.utils.file_downloader import download_slack_file
 from src.utils.formatting import SlackFormatter
 from src.utils.streaming import StreamingMessageState
 
-# Validate configuration
-errors = config.validate_required()
-if errors:
-    for error in errors:
-        logger.error(error)
-    sys.exit(1)
-
-# Initialize app with bot token
-app = AsyncApp(
-    token=config.SLACK_BOT_TOKEN,
-    signing_secret=config.SLACK_SIGNING_SECRET,
-)
-
-
 async def startup() -> tuple[DatabaseRepository, SubprocessExecutor]:
     """Initialize database and executor."""
     await init_database(config.DATABASE_PATH)
@@ -63,7 +49,20 @@ async def cleanup_executor(executor: SubprocessExecutor) -> None:
 
 async def main() -> None:
     """Main entrypoint."""
+    # Validate configuration
+    errors = config.validate_required()
+    if errors:
+        for error in errors:
+            logger.error(error)
+        sys.exit(1)
+
     logger.info("Starting Slack Claude Code bot...")
+
+    # Create Slack app
+    app = AsyncApp(
+        token=config.SLACK_BOT_TOKEN,
+        signing_secret=config.SLACK_SIGNING_SECRET,
+    )
 
     # Initialize resources
     db, executor = await startup()
