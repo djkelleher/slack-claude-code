@@ -56,9 +56,9 @@ async def startup() -> tuple[DatabaseRepository, SubprocessExecutor]:
     return db, executor
 
 
-async def shutdown(executor: SubprocessExecutor) -> None:
+async def cleanup_executor(executor: SubprocessExecutor) -> None:
     """Cleanup resources on shutdown."""
-    await executor.cleanup()
+    await executor.shutdown()
 
 
 async def main() -> None:
@@ -541,7 +541,7 @@ async def main() -> None:
     finally:
         # Cleanup
         logger.info("Shutting down...")
-        await shutdown(executor)
+        await cleanup_executor(executor)
         await handler.close_async()
         logger.info("Shutdown complete")
 
