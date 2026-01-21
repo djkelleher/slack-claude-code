@@ -206,7 +206,7 @@ def build_plan_approval_blocks(
     # Add plan content (truncated to 2000 chars to fit in Slack block)
     display_plan = plan_content[:2000]
     if len(plan_content) > 2000:
-        display_plan += "\n\n... _(truncated, see full plan below)_"
+        display_plan += "\n\n... _(truncated, full plan attached below)_"
 
     blocks.append(
         {

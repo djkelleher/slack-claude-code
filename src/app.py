@@ -532,6 +532,7 @@ async def main():
                     user_id=user_id,
                     thread_ts=thread_ts,
                     slack_client=client,
+                    plan_file_path=plan_file_path,
                 )
 
                 if approved:

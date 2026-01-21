@@ -5,6 +5,7 @@ Similar to PermissionManager but specialized for plan mode workflow.
 """
 
 import asyncio
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -12,6 +13,8 @@ from typing import Optional
 
 from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
+
+from .slack_ui import build_plan_approval_blocks
 
 
 @dataclass
@@ -55,6 +58,7 @@ class PlanApprovalManager:
         user_id: Optional[str] = None,
         thread_ts: Optional[str] = None,
         slack_client: Optional[AsyncWebClient] = None,
+        plan_file_path: Optional[str] = None,
     ) -> bool:
         """Request plan approval via Slack and wait for response.
 
@@ -67,6 +71,7 @@ class PlanApprovalManager:
             user_id: Optional user who initiated the request
             thread_ts: Optional thread to post in
             slack_client: Slack client for posting message
+            plan_file_path: Optional path to plan markdown file for attachment
 
         Returns:
             True if approved, False if denied
@@ -89,8 +94,6 @@ class PlanApprovalManager:
         try:
             # Post approval message to Slack
             if slack_client:
-                from .slack_ui import build_plan_approval_blocks
-
                 blocks = build_plan_approval_blocks(
                     approval_id=approval_id,
                     plan_content=plan_content,
@@ -105,6 +108,21 @@ class PlanApprovalManager:
                 )
 
                 approval.message_ts = result.get("ts")
+
+                # Upload full plan file as attachment if available
+                if plan_file_path and plan_content:
+                    try:
+                        filename = os.path.basename(plan_file_path)
+                        await slack_client.files_upload_v2(
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            content=plan_content,
+                            filename=filename,
+                            title=f"Full Plan: {filename}",
+                            initial_comment="Full plan content attached above.",
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to upload plan file: {e}")
 
             # Wait for response (no timeout - user can take as long as needed)
             approved = await approval.future
