@@ -46,6 +46,10 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
 
     text = re.sub(r"`[^`\n]+?`", preserve_inline_code, text)
 
+    # Escape Python dunder methods by wrapping them in backticks
+    # This prevents __init__ etc from being interpreted as bold
+    text = re.sub(r"(?<!`)(__[a-zA-Z_][a-zA-Z0-9_]*__)(?!`)", r"`\1`", text)
+
     # Preserve Slack bold by using placeholders for converted bold text
     slack_bolds = []
     def preserve_slack_bold(match):
