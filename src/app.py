@@ -21,7 +21,6 @@ from src.handlers import (
     register_basic_commands,
     register_claude_cli_commands,
     register_git_commands,
-    register_model_command,
     register_mode_command,
     register_notifications_command,
     register_parallel_commands,
@@ -74,7 +73,6 @@ async def main() -> None:
     register_basic_commands(app, deps)
     register_claude_cli_commands(app, deps)
     register_mode_command(app, deps)
-    register_model_command(app, deps)
     register_notifications_command(app, deps)
     register_session_commands(app, deps)
     register_git_commands(app, deps)
