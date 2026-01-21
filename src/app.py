@@ -86,8 +86,11 @@ async def main() -> None:
     @app.event("message")
     async def handle_message(client: AsyncWebClient, event: dict, logger):
         """Handle incoming messages and run Claude."""
+        logger.info(f"Received message event: channel={event.get('channel')}, text={event.get('text', '')[:50]}")
+
         # Ignore bot messages and edited messages
         if event.get("subtype") in ("bot_message", "message_changed"):
+            logger.debug(f"Ignoring message with subtype: {event.get('subtype')}")
             return
 
         # Get user ID and check for app mentions
