@@ -6,6 +6,7 @@ from src.claude.subprocess_executor import SubprocessExecutor
 from src.database.repository import DatabaseRepository
 
 from .agents import register_agent_commands
+from .agents_command import register_agents_command
 from .base import HandlerDependencies
 from .basic import register_basic_commands
 from .claude_cli import register_claude_cli_commands
@@ -45,6 +46,7 @@ def register_commands(
     register_queue_commands(app, deps)
     register_claude_cli_commands(app, deps)
     register_agent_commands(app, deps)
+    register_agents_command(app, deps)
     register_mode_command(app, deps)
     register_notifications_command(app, deps)
     register_session_commands(app, deps)
