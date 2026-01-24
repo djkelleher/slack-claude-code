@@ -97,14 +97,23 @@ Direct access to Claude Code CLI functionality.
 | `/claude-help` | Show Claude Code help | `/claude-help` |
 | `/claude-config` | Show configuration | `/claude-config` |
 
-#### Multi-Agent Tasks
-Autonomous Planner → Worker → Evaluator pipeline for complex tasks. Iterates up to 3 times until complete.
+#### Agents
+Configurable subagents for specialized tasks. Matches terminal Claude Code's agent system.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/task` | Start a multi-agent task | `/task add unit tests for UserService` |
-| `/tasks` | List active tasks with status | `/tasks` |
-| `/task-cancel` | Cancel a running task | `/task-cancel abc123` |
+| `/agents` | List all available agents | `/agents` |
+| `/agents run` | Run a specific agent | `/agents run explore find all API endpoints` |
+| `/agents info` | Show agent configuration | `/agents info plan` |
+| `/agents create` | Show how to create custom agents | `/agents create` |
+
+**Built-in agents:**
+- `explore` - Read-only codebase exploration (fast, uses Haiku)
+- `plan` - Create detailed implementation plans
+- `bash` - Execute shell commands, git, npm, etc.
+- `general` - Full capabilities for implementation
+
+**Custom agents:** Create `.claude/agents/<name>.md` files with YAML frontmatter to define project-specific agents.
 
 #### Command Queue
 Queue commands for sequential execution while preserving Claude's session context across items.
@@ -180,7 +189,7 @@ src/
 ├── database/              # SQLite persistence (models, migrations, repository)
 ├── claude/                # Claude CLI integration (streaming)
 ├── handlers/              # Slack command handlers
-├── agents/                # Multi-agent orchestration (planner→worker→evaluator)
+├── agents/                # Configurable subagent system (explore, plan, bash, general)
 ├── approval/              # Permission & plan approval handling
 ├── git/                   # Git operations (status, diff, commit, branch)
 ├── hooks/                 # Event hook system
