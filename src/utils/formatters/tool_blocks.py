@@ -7,7 +7,7 @@ in Slack messages during streaming updates.
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from .base import escape_markdown, truncate_output
+from .base import truncate_output
 
 if TYPE_CHECKING:
     from src.claude.streaming import ToolActivity
@@ -222,7 +222,8 @@ def format_tool_detail_blocks(tool: "ToolActivity") -> list[dict]:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Input:*\n```{escape_markdown(input_display)}```",
+                    # Don't escape content inside code blocks - Slack renders them literally
+                    "text": f"*Input:*\n```{input_display}```",
                 },
             }
         )
@@ -241,7 +242,8 @@ def format_tool_detail_blocks(tool: "ToolActivity") -> list[dict]:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"{result_label}\n```{escape_markdown(result_display)}```",
+                        # Don't escape content inside code blocks - Slack renders them literally
+                        "text": f"{result_label}\n```{result_display}```",
                     },
                 }
             )

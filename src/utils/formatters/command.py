@@ -134,12 +134,13 @@ def command_response_with_file(
 def error_message(error: str) -> list[dict]:
     """Format an error message with sensitive information redacted."""
     sanitized = sanitize_error(error)
+    # Don't escape content inside code blocks - Slack renders them literally
     return [
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f":x: *Error*\n```{escape_markdown(sanitized)}```",
+                "text": f":x: *Error*\n```{sanitized}```",
             },
         }
     ]
