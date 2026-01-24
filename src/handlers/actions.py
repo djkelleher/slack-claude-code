@@ -561,33 +561,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
 
     # -------------------------------------------------------------------------
-    # Task management handlers
-    # -------------------------------------------------------------------------
-
-    @app.action("cancel_task")
-    async def handle_cancel_task(ack, action, body, client, logger):
-        """Handle cancel task button click."""
-        await ack()
-
-        channel_id = body["channel"]["id"]
-        task_id = action["value"]
-
-        # Use the shared orchestrator from dependencies
-        cancelled = await deps.orchestrator.cancel_task(task_id)
-
-        if cancelled:
-            await client.chat_postMessage(
-                channel=channel_id,
-                text=f":no_entry: Task `{task_id}` cancelled.",
-            )
-        else:
-            await client.chat_postEphemeral(
-                channel=channel_id,
-                user=body["user"]["id"],
-                text=f"Task `{task_id}` not found or already completed.",
-            )
-
-    # -------------------------------------------------------------------------
     # Tool detail handlers
     # -------------------------------------------------------------------------
 

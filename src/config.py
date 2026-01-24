@@ -137,11 +137,6 @@ class Config(BaseSettings):
         "plan",
     )
 
-    # Multi-agent workflow turn limits
-    PLANNER_MAX_TURNS: int = 10
-    WORKER_MAX_TURNS: int = 30
-    EVALUATOR_MAX_TURNS: int = 10
-
     # Permissions - stored as comma-separated string, converted to list via property
     AUTO_APPROVE_TOOLS_STR: str = Field(default="", alias="AUTO_APPROVE_TOOLS")
     ALLOWED_TOOLS: Optional[str] = None

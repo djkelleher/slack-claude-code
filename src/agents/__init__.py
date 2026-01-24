@@ -1,8 +1,4 @@
-"""Agents module - configurable subagent system.
-
-Provides both the new configurable agent system and the legacy
-multi-agent orchestrator for backwards compatibility.
-"""
+"""Agents module - configurable subagent system."""
 
 from .executor import AgentExecutor
 from .models import (
@@ -14,12 +10,4 @@ from .models import (
     AgentRunResult,
     AgentSource,
 )
-from .orchestrator import (
-    AgentTask,
-    EvalResult,
-    MultiAgentOrchestrator,
-    TaskStatus,
-    WorkflowResult,
-)
 from .registry import AgentRegistry, get_registry
-from .roles import AgentRole

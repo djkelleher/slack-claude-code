@@ -1,9 +1,8 @@
 """Base infrastructure for Slack command handlers."""
 
-import threading
 import traceback
-from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from src.utils.formatting import SlackFormatter
 
@@ -66,24 +65,10 @@ class HandlerDependencies:
     """Container for handler dependencies.
 
     Provides access to shared instances across all handlers.
-    Optional dependencies are lazily initialized on first access.
-    Thread-safe through RLock.
     """
 
     db: Any  # DatabaseRepository
-    executor: Any  # ClaudeExecutor
-    _orchestrator: Optional[Any] = field(default=None, repr=False)
-    _init_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
-
-    @property
-    def orchestrator(self) -> Any:
-        """Get or create the MultiAgentOrchestrator (thread-safe)."""
-        with self._init_lock:
-            if self._orchestrator is None:
-                from src.agents import MultiAgentOrchestrator
-
-                self._orchestrator = MultiAgentOrchestrator(self.executor)
-            return self._orchestrator
+    executor: Any  # SubprocessExecutor
 
 
 def slack_command(
