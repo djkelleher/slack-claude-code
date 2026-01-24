@@ -11,10 +11,15 @@ FILE_THRESHOLD = config.SLACK_FILE_THRESHOLD
 
 
 def flatten_text(text: str) -> str:
-    """Flatten text by replacing all newlines with spaces.
+    """Flatten paragraph text while preserving markdown structure.
 
-    This makes text flow across the full width in Slack instead of being
-    broken into short lines. Only preserves newlines inside code blocks.
+    Joins consecutive paragraph lines into single lines for better Slack display,
+    but preserves structure for:
+    - Code blocks (triple backticks)
+    - Tables (lines with | characters)
+    - Headers (lines starting with #)
+    - List items (lines starting with -, *, or numbers)
+    - Blank lines (paragraph separators)
 
     Parameters
     ----------
@@ -24,7 +29,7 @@ def flatten_text(text: str) -> str:
     Returns
     -------
     str
-        Text with all newlines converted to spaces (except in code blocks).
+        Text with paragraph lines joined, but structure preserved.
     """
     if not text:
         return text
@@ -38,11 +43,71 @@ def flatten_text(text: str) -> str:
 
     text = re.sub(r"```[\s\S]*?```", save_code_block, text)
 
-    # Replace all newlines with spaces
-    text = re.sub(r"\n+", " ", text)
+    # Protect tables by wrapping them in code blocks for monospace display
+    # A table is a sequence of lines containing | characters
+    tables = []
 
-    # Clean up multiple spaces
-    text = re.sub(r" +", " ", text)
+    def save_table(match: re.Match) -> str:
+        # Wrap table in code block for proper display
+        table_content = match.group(0).strip()
+        tables.append(f"```\n{table_content}\n```")
+        return f"\x00TABLE{len(tables) - 1}\x00"
+
+    # Match consecutive lines that look like table rows (contain |)
+    # Table pattern: lines starting with | or containing | at least twice
+    text = re.sub(
+        r"(?:^|\n)((?:\|[^\n]*\|[^\n]*\n?)+)",
+        lambda m: "\n" + save_table(m),
+        text,
+    )
+
+    # Process line by line to preserve structure
+    lines = text.split("\n")
+    result_lines = []
+    current_paragraph = []
+
+    def flush_paragraph():
+        if current_paragraph:
+            # Join paragraph lines with spaces
+            result_lines.append(" ".join(current_paragraph))
+            current_paragraph.clear()
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Check if this is a structural line that should be preserved
+        is_structural = (
+            not stripped  # Blank line (paragraph separator)
+            or stripped.startswith("#")  # Header
+            or stripped.startswith("- ")  # Bullet list
+            or stripped.startswith("* ")  # Bullet list
+            or stripped.startswith("• ")  # Already converted bullet
+            or re.match(r"^\d+\.\s", stripped)  # Numbered list
+            or stripped.startswith(">")  # Blockquote
+            or stripped.startswith("\x00")  # Protected content placeholder
+            or stripped.startswith("---")  # Horizontal rule
+            or stripped.startswith("***")  # Horizontal rule
+        )
+
+        if is_structural:
+            flush_paragraph()
+            result_lines.append(stripped)
+        else:
+            # Regular paragraph text - collect for joining
+            if stripped:
+                current_paragraph.append(stripped)
+
+    flush_paragraph()
+
+    # Rejoin with newlines
+    text = "\n".join(result_lines)
+
+    # Clean up multiple blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # Restore tables
+    for i, table in enumerate(tables):
+        text = text.replace(f"\x00TABLE{i}\x00", table)
 
     # Restore code blocks
     for i, block in enumerate(code_blocks):
