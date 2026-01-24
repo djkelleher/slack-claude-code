@@ -521,10 +521,15 @@ async def main():
                             plan_content = f.read()
                     except Exception as e:
                         logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
-                        plan_content = streaming_state.accumulated_output
 
+                # Fallback: use detailed output which includes tool results
+                # This captures plan content even when Claude doesn't write a plan file
                 if not plan_content:
-                    plan_content = streaming_state.accumulated_output or "No plan content available"
+                    plan_content = (
+                        result.detailed_output
+                        or result.output
+                        or "No plan content available"
+                    )
 
                 # Request approval via Slack buttons and wait for response
                 approved = await PlanApprovalManager.request_approval(
