@@ -12,7 +12,6 @@ class ExecutionTimeouts(BaseModel):
 
     permission: int = 300
     usage_check: int = 30
-    plan_approval: int = 600
     max_questions_per_conversation: int = 10
 
 
@@ -157,7 +156,6 @@ class Config(BaseSettings):
     # Execution timeout overrides from environment
     PERMISSION_TIMEOUT: int = 300
     USAGE_CHECK_TIMEOUT: int = 30
-    PLAN_APPROVAL_TIMEOUT: int = 600
     MAX_QUESTIONS_PER_CONVERSATION: int = 10
 
     # Slack timeout overrides from environment
@@ -192,7 +190,6 @@ class Config(BaseSettings):
             execution=ExecutionTimeouts(
                 permission=self.PERMISSION_TIMEOUT,
                 usage_check=self.USAGE_CHECK_TIMEOUT,
-                plan_approval=self.PLAN_APPROVAL_TIMEOUT,
                 max_questions_per_conversation=self.MAX_QUESTIONS_PER_CONVERSATION,
             ),
             slack=SlackTimeouts(
