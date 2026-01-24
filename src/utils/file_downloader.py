@@ -179,6 +179,17 @@ async def download_slack_file(
         file_size = file_data.get("size", 0)
         file_url = file_data.get("url_private")
 
+        # Check if this is a snippet (pasted text/code) - handle specially
+        if is_snippet(file_data):
+            logger.info(f"Detected snippet: {filename} (mode={file_data.get('mode')})")
+            return await save_snippet_content(
+                client=client,
+                file_id=file_id,
+                file_info=file_data,
+                destination_dir=destination_dir,
+                max_size_bytes=max_size_bytes,
+            )
+
         if not file_url:
             raise FileDownloadError(f"No private URL for file {filename}")
 

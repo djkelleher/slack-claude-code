@@ -30,8 +30,6 @@ from src.utils.file_downloader import (
     FileDownloadError,
     FileTooLargeError,
     download_slack_file,
-    is_snippet,
-    save_snippet_content,
 )
 from src.utils.formatting import SlackFormatter
 from src.utils.slack_helpers import post_text_snippet
@@ -187,37 +185,17 @@ async def main():
                 try:
                     file_name = file_info.get("name", "unknown")
                     file_id = file_info["id"]
+                    logger.info(f"Processing file: {file_name}")
 
-                    # Check if this is a snippet (pasted code/text)
-                    if is_snippet(file_info):
-                        logger.info(f"Processing snippet: {file_name}")
-
-                        # Fetch full file info to get content
-                        full_info = await client.files_info(file=file_id)
-                        if not full_info["ok"]:
-                            raise FileDownloadError(
-                                f"Failed to get snippet info: {full_info.get('error')}"
-                            )
-
-                        # Save snippet content to file
-                        local_path, metadata = await save_snippet_content(
-                            client=client,
-                            file_id=file_id,
-                            file_info=full_info["file"],
-                            destination_dir=uploads_dir,
-                            max_size_bytes=config.MAX_FILE_SIZE_MB * 1024 * 1024,
-                        )
-                    else:
-                        logger.info(f"Downloading file: {file_name}")
-
-                        # Download regular file
-                        local_path, metadata = await download_slack_file(
-                            client=client,
-                            file_id=file_id,
-                            slack_bot_token=config.SLACK_BOT_TOKEN,
-                            destination_dir=uploads_dir,
-                            max_size_bytes=config.MAX_FILE_SIZE_MB * 1024 * 1024,
-                        )
+                    # download_slack_file handles both regular files and snippets
+                    # It detects snippets from the full file info and extracts content
+                    local_path, metadata = await download_slack_file(
+                        client=client,
+                        file_id=file_id,
+                        slack_bot_token=config.SLACK_BOT_TOKEN,
+                        destination_dir=uploads_dir,
+                        max_size_bytes=config.MAX_FILE_SIZE_MB * 1024 * 1024,
+                    )
 
                     # Track in database
                     uploaded_file = await deps.db.add_uploaded_file(
