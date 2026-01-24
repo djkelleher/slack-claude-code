@@ -512,7 +512,8 @@ async def main():
                 logger.info("ExitPlanMode detected, requesting user approval")
 
                 # Get plan content from plan file if available
-                plan_file_path = streaming_state.get_plan_file_path()
+                # Pass working directory for fallback search (handles subagent-written plans)
+                plan_file_path = streaming_state.get_plan_file_path(session.working_directory)
                 plan_content = ""
                 if plan_file_path:
                     try:

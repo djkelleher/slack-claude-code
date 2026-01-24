@@ -59,17 +59,25 @@ class StreamingMessageState:
         """Get list of tracked tool activities."""
         return list(self.tool_activities.values())
 
-    def get_plan_file_path(self) -> Optional[str]:
+    def get_plan_file_path(self, working_directory: Optional[str] = None) -> Optional[str]:
         """Get the plan file path if one was written during plan mode.
 
-        Looks for Write tool calls that created markdown files, prioritizing
-        files with 'plan' in the name. Returns the most likely plan file path.
+        First looks for Write tool calls that created markdown files, prioritizing
+        files with 'plan' in the name. If no Write tools are found (e.g., when
+        a subagent wrote the plan), falls back to searching the working directory
+        for recently modified plan files.
+
+        Parameters
+        ----------
+        working_directory : str, optional
+            Working directory to search for plan files as a fallback.
 
         Returns
         -------
         str or None
             Path to the plan file, or None if not found.
         """
+        # First try to find plan file from tracked Write tool activities
         plan_files = []
         for tool in self.tool_activities.values():
             if tool.name == "Write" and not tool.is_error:
@@ -77,16 +85,76 @@ class StreamingMessageState:
                 if file_path.endswith(".md"):
                     plan_files.append(file_path)
 
-        if not plan_files:
+        if plan_files:
+            # Prioritize files with 'plan' in the name
+            for path in plan_files:
+                if "plan" in path.lower():
+                    return path
+            # Otherwise return the last markdown file written
+            return plan_files[-1]
+
+        # Fallback: search working directory for recently modified plan files
+        # This handles cases where a Task subagent wrote the plan file
+        if working_directory:
+            return self._find_plan_file_in_directory(working_directory)
+
+        return None
+
+    def _find_plan_file_in_directory(self, directory: str) -> Optional[str]:
+        """Search directory for recently modified plan files.
+
+        Parameters
+        ----------
+        directory : str
+            Directory to search for plan files.
+
+        Returns
+        -------
+        str or None
+            Path to the most recently modified plan file, or None if not found.
+        """
+        import os
+        import time
+
+        candidates = []
+        now = time.time()
+        max_age_seconds = 300  # Only consider files modified in last 5 minutes
+
+        # Common plan file patterns
+        plan_patterns = ["plan.md", "implementation-plan.md", "implementation_plan.md"]
+
+        # Check common locations
+        for pattern in plan_patterns:
+            # Check in working directory root
+            path = os.path.join(directory, pattern)
+            if os.path.isfile(path):
+                mtime = os.path.getmtime(path)
+                if now - mtime < max_age_seconds:
+                    candidates.append((path, mtime))
+
+            # Check in .claude directory
+            claude_path = os.path.join(directory, ".claude", pattern)
+            if os.path.isfile(claude_path):
+                mtime = os.path.getmtime(claude_path)
+                if now - mtime < max_age_seconds:
+                    candidates.append((claude_path, mtime))
+
+        # Also search for any .md file with "plan" in the name
+        try:
+            for entry in os.scandir(directory):
+                if entry.is_file() and entry.name.endswith(".md") and "plan" in entry.name.lower():
+                    mtime = entry.stat().st_mtime
+                    if now - mtime < max_age_seconds:
+                        candidates.append((entry.path, mtime))
+        except OSError:
+            pass
+
+        if not candidates:
             return None
 
-        # Prioritize files with 'plan' in the name
-        for path in plan_files:
-            if "plan" in path.lower():
-                return path
-
-        # Otherwise return the last markdown file written
-        return plan_files[-1]
+        # Return the most recently modified plan file
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return candidates[0][0]
 
     def start_heartbeat(self) -> None:
         """Start the heartbeat task to show progress during idle periods."""
