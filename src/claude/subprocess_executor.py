@@ -55,6 +55,9 @@ class SubprocessExecutor:
         self._is_retry_after_exit_plan_error: bool = False
         # Track AskUserQuestion for early termination
         self._ask_user_question_detected: bool = False
+        # Track Plan subagent (Task tool with subagent_type=Plan) for plan approval
+        self._plan_subagent_tool_id: Optional[str] = None
+        self._plan_subagent_completed: bool = False
 
     async def execute(
         self,
@@ -109,6 +112,9 @@ class SubprocessExecutor:
         # Note: _is_retry_after_exit_plan_error is preserved during retry to prevent infinite loops
         # Reset AskUserQuestion detection
         self._ask_user_question_detected = False
+        # Reset Plan subagent detection
+        self._plan_subagent_tool_id = None
+        self._plan_subagent_completed = False
 
         # Build command
         cmd = [
@@ -245,6 +251,17 @@ class SubprocessExecutor:
                                         )
                                     else:
                                         logger.info(f"{log_prefix}Tool: ExitPlanMode")
+                                elif tool_name == "Task":
+                                    # Track Task tool with Plan subagent for plan approval
+                                    subagent_type = tool_input.get("subagent_type", "")
+                                    if subagent_type == "Plan" and permission_mode == "plan":
+                                        self._plan_subagent_tool_id = block.get("id")
+                                        logger.info(
+                                            f"{log_prefix}Tool: Task (Plan subagent) - will trigger approval on completion"
+                                        )
+                                    else:
+                                        desc = tool_input.get("description", "")[:50]
+                                        logger.info(f"{log_prefix}Tool: Task '{desc}...'")
                                 else:
                                     logger.info(f"{log_prefix}Tool: {tool_name}")
                 elif msg.type == "user" and msg.raw:
@@ -269,6 +286,18 @@ class SubprocessExecutor:
                                     f"{log_prefix}ExitPlanMode failed - will retry with bypass mode"
                                 )
                                 self._exit_plan_mode_error_detected = True
+
+                            # Detect Plan subagent completion - trigger plan approval
+                            if (
+                                not is_error
+                                and self._plan_subagent_tool_id
+                                and tool_use_id.startswith(self._plan_subagent_tool_id[:8])
+                                and permission_mode == "plan"
+                            ):
+                                logger.info(
+                                    f"{log_prefix}Plan subagent completed - will trigger Slack approval"
+                                )
+                                self._plan_subagent_completed = True
                 elif msg.type == "init":
                     logger.info(f"{log_prefix}Session initialized: {msg.session_id}")
                 elif msg.type == "error":
@@ -347,6 +376,17 @@ class SubprocessExecutor:
                         process.kill()
                     break  # Exit the message processing loop
 
+                # If Plan subagent completed in plan mode, terminate early to show approval UI
+                # This handles the case where Claude uses Task(subagent_type=Plan) instead of ExitPlanMode
+                if self._plan_subagent_completed:
+                    logger.info(f"{log_prefix}Terminating execution to handle Plan subagent approval in Slack")
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                    break  # Exit the message processing loop
+
                 if msg.is_final:
                     break
 
@@ -418,6 +458,9 @@ class SubprocessExecutor:
                     # Reset retry flag after completion so future executions work normally
                     self._is_retry_after_exit_plan_error = False
 
+            # Plan approval is triggered by either ExitPlanMode or Plan subagent completion
+            has_plan_approval = self._exit_plan_mode_detected or self._plan_subagent_completed
+
             return ExecutionResult(
                 success=success,
                 output=accumulated_output,
@@ -427,7 +470,7 @@ class SubprocessExecutor:
                 cost_usd=cost_usd,
                 duration_ms=duration_ms,
                 has_pending_question=self._ask_user_question_detected,
-                has_pending_plan_approval=self._exit_plan_mode_detected,
+                has_pending_plan_approval=has_plan_approval,
             )
 
         except asyncio.CancelledError:
