@@ -284,29 +284,6 @@ async def main():
         # Setup streaming state with tool tracking
         execution_id = str(uuid.uuid4())
 
-        # Callback to post plan files to Slack when Claude writes them
-        async def on_plan_file_written(file_path: str) -> None:
-            try:
-                expanded_path = os.path.expanduser(file_path)
-                if os.path.exists(expanded_path):
-                    with open(expanded_path, "r", encoding="utf-8") as f:
-                        plan_content = f.read()
-
-                    filename = os.path.basename(file_path)
-                    await post_text_snippet(
-                        client=client,
-                        channel_id=channel_id,
-                        content=plan_content,
-                        title=f":page_facing_up: Plan: {filename}",
-                        thread_ts=thread_ts,
-                        format_as_text=True,
-                    )
-                    logger.info(f"Posted plan file to channel: {file_path}")
-                else:
-                    logger.warning(f"Plan file not found when trying to post: {file_path}")
-            except Exception as e:
-                logger.error(f"Failed to post plan file: {e}")
-
         streaming_state = StreamingMessageState(
             channel_id=channel_id,
             message_ts=message_ts,
@@ -315,7 +292,6 @@ async def main():
             logger=logger,
             track_tools=True,
             smart_concat=True,
-            on_plan_file_written=on_plan_file_written,
         )
         # Start heartbeat to show progress during idle periods
         streaming_state.start_heartbeat()
@@ -447,7 +423,6 @@ async def main():
                         logger=logger,
                         track_tools=True,
                         smart_concat=True,
-                        on_plan_file_written=on_plan_file_written,
                     )
                     streaming_state.start_heartbeat()
 
@@ -574,7 +549,6 @@ async def main():
                         logger=logger,
                         track_tools=True,
                         smart_concat=True,
-                        on_plan_file_written=on_plan_file_written,
                     )
                     streaming_state.start_heartbeat()
                     on_chunk = create_on_chunk_callback(streaming_state)
