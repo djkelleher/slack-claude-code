@@ -522,13 +522,17 @@ async def main():
                     except Exception as e:
                         logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
 
-                # Fallback: use detailed output which includes tool results
-                # This captures plan content even when Claude doesn't write a plan file
+                # If no plan file was found, show error - don't use detailed_output
+                # as that contains conversation text, not the actual plan
                 if not plan_content:
+                    logger.warning(
+                        "No plan file found for approval. "
+                        f"Searched path: {plan_file_path}, working_dir: {session.working_directory}"
+                    )
                     plan_content = (
-                        result.detailed_output
-                        or result.output
-                        or "No plan content available"
+                        "⚠️ No plan file was found.\n\n"
+                        "Claude should have written a plan to a markdown file before requesting approval. "
+                        "Please check that the plan was written correctly."
                     )
 
                 # Request approval via Slack buttons and wait for response
