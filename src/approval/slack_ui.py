@@ -172,14 +172,15 @@ def build_approval_result_blocks(
 
 def build_plan_approval_blocks(
     approval_id: str,
-    plan_content: str,
     session_id: str,
 ) -> list[dict]:
     """Build Slack blocks for a plan approval request.
 
+    The plan content is attached as a file snippet separately, so these blocks
+    only contain the header, description, and approval buttons.
+
     Args:
         approval_id: Unique ID for this approval
-        plan_content: The plan text to show user
         session_id: Session ID for context
 
     Returns:
@@ -198,28 +199,9 @@ def build_plan_approval_blocks(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": "Claude has created an implementation plan. Please review and approve to continue with execution.",
+                "text": "Claude has created an implementation plan. Review the attached plan file and approve to continue with execution.",
             },
         },
-    ]
-
-    # Add plan content (truncated to 2000 chars to fit in Slack block)
-    display_plan = plan_content[:2000]
-    if len(plan_content) > 2000:
-        display_plan += "\n\n... _(truncated, full plan attached below)_"
-
-    blocks.append(
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"```{display_plan}```",
-            },
-        }
-    )
-
-    # Add context
-    blocks.append(
         {
             "type": "context",
             "elements": [
@@ -228,14 +210,8 @@ def build_plan_approval_blocks(
                     "text": f"Approval ID: `{approval_id}` | Session: `{session_id[:8]}`",
                 },
             ],
-        }
-    )
-
-    # Add divider
-    blocks.append({"type": "divider"})
-
-    # Add approval buttons
-    blocks.append(
+        },
+        {"type": "divider"},
         {
             "type": "actions",
             "elements": [
@@ -262,8 +238,8 @@ def build_plan_approval_blocks(
                     "action_id": "reject_plan",
                 },
             ],
-        }
-    )
+        },
+    ]
 
     return blocks
 

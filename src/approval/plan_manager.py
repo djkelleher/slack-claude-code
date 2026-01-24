@@ -94,9 +94,23 @@ class PlanApprovalManager:
         try:
             # Post approval message to Slack
             if slack_client:
+                # First upload the plan as a file snippet (collapsible, downloadable)
+                if plan_content:
+                    try:
+                        filename = os.path.basename(plan_file_path) if plan_file_path else "plan.md"
+                        await slack_client.files_upload_v2(
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            content=plan_content,
+                            filename=filename,
+                            title=f"Implementation Plan: {filename}",
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to upload plan file: {e}")
+
+                # Then post the approval buttons
                 blocks = build_plan_approval_blocks(
                     approval_id=approval_id,
-                    plan_content=plan_content,
                     session_id=session_id,
                 )
 
@@ -108,21 +122,6 @@ class PlanApprovalManager:
                 )
 
                 approval.message_ts = result.get("ts")
-
-                # Upload full plan file as attachment if available
-                if plan_file_path and plan_content:
-                    try:
-                        filename = os.path.basename(plan_file_path)
-                        await slack_client.files_upload_v2(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            content=plan_content,
-                            filename=filename,
-                            title=f"Full Plan: {filename}",
-                            initial_comment="Full plan content attached above.",
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to upload plan file: {e}")
 
             # Wait for response indefinitely
             approved = await approval.future
