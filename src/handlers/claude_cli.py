@@ -72,19 +72,32 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
             output = result.output or result.error or "Command completed (no output)"
 
+            # Format response with table support (may produce multiple messages)
+            message_blocks_list = SlackFormatter.command_response_with_tables(
+                prompt=claude_command,
+                output=output,
+                command_id=None,
+                duration_ms=result.duration_ms,
+                cost_usd=result.cost_usd,
+                is_error=not result.success,
+            )
+
+            # Update the first message
             await ctx.client.chat_update(
                 channel=ctx.channel_id,
                 ts=message_ts,
                 text=output[:100] + "..." if len(output) > 100 else output,
-                blocks=SlackFormatter.command_response(
-                    prompt=claude_command,
-                    output=output,
-                    command_id=None,
-                    duration_ms=result.duration_ms,
-                    cost_usd=result.cost_usd,
-                    is_error=not result.success,
-                ),
+                blocks=message_blocks_list[0],
             )
+
+            # Post additional messages for tables
+            for blocks in message_blocks_list[1:]:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Table",
+                    blocks=blocks,
+                )
 
         except Exception as e:
             ctx.logger.error(f"Claude CLI command failed: {e}")

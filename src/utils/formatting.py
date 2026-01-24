@@ -22,6 +22,7 @@ from .formatters.base import (
 from .formatters.command import (
     command_response,
     command_response_with_file,
+    command_response_with_tables,
     error_message,
     should_attach_file,
 )
@@ -146,3 +147,17 @@ class SlackFormatter:
     @classmethod
     def session_cleanup_result(cls, deleted_count: int, inactive_days: int) -> list[dict]:
         return session_cleanup_result(deleted_count, inactive_days)
+
+    @classmethod
+    def command_response_with_tables(
+        cls,
+        prompt: str,
+        output: str,
+        command_id: int,
+        duration_ms: Optional[int] = None,
+        cost_usd: Optional[float] = None,
+        is_error: bool = False,
+    ) -> list[list[dict]]:
+        return command_response_with_tables(
+            prompt, output, command_id, duration_ms, cost_usd, is_error
+        )

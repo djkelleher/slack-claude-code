@@ -659,19 +659,32 @@ async def main():
                         text=f"⚠️ Could not post detailed output: {str(post_error)[:100]}",
                     )
             else:
+                # Format response with table support (may produce multiple messages)
+                message_blocks_list = SlackFormatter.command_response_with_tables(
+                    prompt=prompt,
+                    output=output,
+                    command_id=cmd_history.id,
+                    duration_ms=result.duration_ms,
+                    cost_usd=result.cost_usd,
+                    is_error=not result.success,
+                )
+
+                # Update the first message (the original processing message)
                 await client.chat_update(
                     channel=channel_id,
                     ts=message_ts,
                     text=output[:100] + "..." if len(output) > 100 else output,
-                    blocks=SlackFormatter.command_response(
-                        prompt=prompt,
-                        output=output,
-                        command_id=cmd_history.id,
-                        duration_ms=result.duration_ms,
-                        cost_usd=result.cost_usd,
-                        is_error=not result.success,
-                    ),
+                    blocks=message_blocks_list[0],
                 )
+
+                # Post additional messages for tables (each table needs its own message)
+                for blocks in message_blocks_list[1:]:
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text="Table",
+                        blocks=blocks,
+                    )
 
         except Exception as e:
             logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")

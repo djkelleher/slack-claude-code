@@ -253,18 +253,32 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     new_cmd.id, "failed", result.output, result.error
                 )
 
+            # Format response with table support (may produce multiple messages)
+            output = result.output or result.error or "No output"
+            message_blocks_list = SlackFormatter.command_response_with_tables(
+                prompt=cmd.command,
+                output=output,
+                command_id=new_cmd.id,
+                duration_ms=result.duration_ms,
+                cost_usd=result.cost_usd,
+                is_error=not result.success,
+            )
+
+            # Update the first message
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
-                blocks=SlackFormatter.command_response(
-                    prompt=cmd.command,
-                    output=result.output or result.error or "No output",
-                    command_id=new_cmd.id,
-                    duration_ms=result.duration_ms,
-                    cost_usd=result.cost_usd,
-                    is_error=not result.success,
-                ),
+                blocks=message_blocks_list[0],
             )
+
+            # Post additional messages for tables
+            for blocks in message_blocks_list[1:]:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text="Table",
+                    blocks=blocks,
+                )
 
         except Exception as e:
             logger.error(f"Error rerunning command: {e}")

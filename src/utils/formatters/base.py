@@ -43,20 +43,20 @@ def flatten_text(text: str) -> str:
 
     text = re.sub(r"```[\s\S]*?```", save_code_block, text)
 
-    # Protect tables by wrapping them in code blocks for monospace display
+    # Tables are now handled separately by table.py - just preserve them as-is
     # A table is a sequence of lines containing | characters
     tables = []
 
     def save_table(match: re.Match) -> str:
-        # Wrap table in code block for proper display
-        table_content = match.group(0).strip()
-        tables.append(f"```\n{table_content}\n```")
+        # Keep table content as-is (will be converted to Slack table blocks later)
+        table_content = match.group(1).strip()
+        tables.append(table_content)
         return f"\x00TABLE{len(tables) - 1}\x00"
 
     # Match consecutive lines that look like table rows (contain |)
     # Table pattern: lines starting with | or containing | at least twice
     text = re.sub(
-        r"(?:^|\n)((?:\|[^\n]*\|[^\n]*\n?)+)",
+        r"(?:^|\n)((?:[ \t]*\|[^\n]*\|[^\n]*\n?)+)",
         lambda m: "\n" + save_table(m),
         text,
     )
