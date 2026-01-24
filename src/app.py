@@ -30,6 +30,8 @@ from src.utils.file_downloader import (
     FileDownloadError,
     FileTooLargeError,
     download_slack_file,
+    is_snippet,
+    save_snippet_content,
 )
 from src.utils.formatting import SlackFormatter
 from src.utils.slack_helpers import post_text_snippet
@@ -183,28 +185,51 @@ async def main():
 
             for file_info in files:
                 try:
-                    logger.info(f"Downloading file: {file_info.get('name')}")
+                    file_name = file_info.get("name", "unknown")
+                    file_id = file_info["id"]
 
-                    # Download file
-                    local_path, metadata = await download_slack_file(
-                        client=client,
-                        file_id=file_info["id"],
-                        slack_bot_token=config.SLACK_BOT_TOKEN,
-                        destination_dir=uploads_dir,
-                        max_size_bytes=config.MAX_FILE_SIZE_MB * 1024 * 1024,
-                    )
+                    # Check if this is a snippet (pasted code/text)
+                    if is_snippet(file_info):
+                        logger.info(f"Processing snippet: {file_name}")
+
+                        # Fetch full file info to get content
+                        full_info = await client.files_info(file=file_id)
+                        if not full_info["ok"]:
+                            raise FileDownloadError(
+                                f"Failed to get snippet info: {full_info.get('error')}"
+                            )
+
+                        # Save snippet content to file
+                        local_path, metadata = await save_snippet_content(
+                            client=client,
+                            file_id=file_id,
+                            file_info=full_info["file"],
+                            destination_dir=uploads_dir,
+                            max_size_bytes=config.MAX_FILE_SIZE_MB * 1024 * 1024,
+                        )
+                    else:
+                        logger.info(f"Downloading file: {file_name}")
+
+                        # Download regular file
+                        local_path, metadata = await download_slack_file(
+                            client=client,
+                            file_id=file_id,
+                            slack_bot_token=config.SLACK_BOT_TOKEN,
+                            destination_dir=uploads_dir,
+                            max_size_bytes=config.MAX_FILE_SIZE_MB * 1024 * 1024,
+                        )
 
                     # Track in database
                     uploaded_file = await deps.db.add_uploaded_file(
                         session_id=session.id,
-                        slack_file_id=file_info["id"],
-                        filename=file_info["name"],
+                        slack_file_id=file_id,
+                        filename=file_name,
                         local_path=local_path,
                         mimetype=file_info.get("mimetype", ""),
-                        size=file_info.get("size", 0),
+                        size=metadata.get("size", file_info.get("size", 0)),
                     )
                     uploaded_files.append(uploaded_file)
-                    logger.info(f"File downloaded and tracked: {local_path}")
+                    logger.info(f"File processed and tracked: {local_path}")
 
                     # For images, show thumbnail in thread
                     if file_info.get("mimetype", "").startswith("image/"):
