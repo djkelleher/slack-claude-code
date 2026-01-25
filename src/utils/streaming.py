@@ -57,8 +57,8 @@ class StreamingMessageState:
     def get_plan_file_path(self, working_directory: Optional[str] = None) -> Optional[str]:
         """Get the plan file path if one was written during plan mode.
 
-        Checks ~/.claude/plans/ for the most recently modified .md file.
-        Claude Code writes plan files to this directory when in plan mode.
+        First checks tracked Write tool activities for writes to ~/.claude/plans/.
+        Falls back to scanning the directory for recently modified .md files.
 
         Parameters
         ----------
@@ -71,11 +71,22 @@ class StreamingMessageState:
             Path to the plan file, or None if not found.
         """
         import os
-        import time
 
         plans_dir = os.path.expanduser("~/.claude/plans")
+
+        # First check tracked Write tool activities for exact match
+        for tool in self.tool_activities.values():
+            if tool.name == "Write" and not tool.is_error:
+                file_path = tool.input.get("file_path", "")
+                if file_path.endswith(".md") and file_path.startswith(plans_dir):
+                    return file_path
+
+        # Fallback: scan directory for recently modified plan files
+        # This handles cases where a Task subagent wrote the plan file
         if not os.path.isdir(plans_dir):
             return None
+
+        import time
 
         candidates = []
         now = time.time()
