@@ -149,10 +149,28 @@ async def main():
         logger.info(f"Message event received: {event.get('text', '')[:50]}...")
 
         # Ignore bot messages to avoid responding to ourselves
-        if event.get("bot_id") or event.get("subtype"):
-            logger.debug(
-                f"Ignoring bot/subtype message: bot_id={event.get('bot_id')}, subtype={event.get('subtype')}"
-            )
+        if event.get("bot_id"):
+            logger.debug(f"Ignoring bot message: bot_id={event.get('bot_id')}")
+            return
+
+        # Ignore system subtypes but allow user messages with subtypes (e.g., file_share from mobile)
+        ignored_subtypes = {
+            "bot_message",
+            "message_changed",
+            "message_deleted",
+            "channel_join",
+            "channel_leave",
+            "channel_topic",
+            "channel_purpose",
+            "channel_name",
+            "channel_archive",
+            "channel_unarchive",
+            "ekm_access_denied",
+            "me_message",
+        }
+        subtype = event.get("subtype")
+        if subtype and subtype in ignored_subtypes:
+            logger.debug(f"Ignoring system subtype message: subtype={subtype}")
             return
 
         channel_id = event.get("channel")
