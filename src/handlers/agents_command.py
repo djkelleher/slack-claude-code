@@ -366,7 +366,7 @@ async def _run_agent_with_streaming(
             db_session_id=session.id,
         )
 
-        streaming_state.stop_heartbeat()
+        await streaming_state.stop_heartbeat()
 
         # Format final output
         output = result.output or result.error or "No output"
@@ -415,7 +415,7 @@ async def _run_agent_with_streaming(
 
     except Exception as e:
         logger.error(f"Agent execution failed: {e}")
-        streaming_state.stop_heartbeat()
+        await streaming_state.stop_heartbeat()
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,

@@ -84,6 +84,8 @@ class DatabaseRepository:
                 (channel_id, thread_ts, thread_ts, thread_ts),
             )
             row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError(f"Failed to get/create session for channel {channel_id}")
             return Session.from_row(row)
 
     async def update_session_cwd(self, channel_id: str, thread_ts: Optional[str], cwd: str) -> None:

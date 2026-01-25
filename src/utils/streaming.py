@@ -144,10 +144,14 @@ class StreamingMessageState:
             self.last_activity_time = loop.time()
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-    def stop_heartbeat(self) -> None:
-        """Stop the heartbeat task."""
+    async def stop_heartbeat(self) -> None:
+        """Stop the heartbeat task and await its cancellation."""
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
         self._heartbeat_task = None
 
     async def _heartbeat_loop(self) -> None:
@@ -265,7 +269,7 @@ class StreamingMessageState:
     async def finalize(self) -> None:
         """Send final update to mark streaming as complete."""
         # Stop heartbeat task
-        self.stop_heartbeat()
+        await self.stop_heartbeat()
 
         try:
             text_preview = (

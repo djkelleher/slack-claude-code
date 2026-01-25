@@ -279,12 +279,13 @@ class QuestionManager:
             logger.warning(f"Question {question_id} not found")
             return None
 
-        if pending.future.done():
+        # Use try-except to handle race condition where another coroutine
+        # could resolve the future between our check and set_result
+        try:
+            pending.future.set_result(pending.answers)
+        except asyncio.InvalidStateError:
             logger.warning(f"Question {question_id} already resolved")
             return None
-
-        # Set the future result with the answers
-        pending.future.set_result(pending.answers)
         logger.info(f"Question {question_id} resolved with answers: {pending.answers}")
 
         return pending

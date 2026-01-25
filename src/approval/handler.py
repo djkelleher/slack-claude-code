@@ -214,11 +214,13 @@ class PermissionManager:
             logger.warning(f"Approval {approval_id} not found")
             return None
 
-        if approval.future.done():
+        # Use try-except to handle race condition where another coroutine
+        # could resolve the future between our check and set_result
+        try:
+            approval.future.set_result(approved)
+        except asyncio.InvalidStateError:
             logger.warning(f"Approval {approval_id} already resolved")
             return None
-
-        approval.future.set_result(approved)
         logger.info(
             f"Approval {approval_id} {'approved' if approved else 'denied'} "
             f"by {resolved_by or 'unknown'}"

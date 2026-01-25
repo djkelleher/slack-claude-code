@@ -190,6 +190,16 @@ async def main():
         )
         logger.info(f"Using session: {session.session_display_name()}")
 
+        # Validate working directory exists
+        if not os.path.isdir(session.working_directory):
+            logger.error(f"Working directory does not exist: {session.working_directory}")
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f"⚠️ Working directory does not exist: `{session.working_directory}`\n\nUse `/cd <path>` to set a valid working directory.",
+            )
+            return
+
         # Process file uploads
         uploaded_files = []
         if files:
@@ -421,7 +431,7 @@ async def main():
                     pending_question = None
 
                     # Stop the old heartbeat
-                    streaming_state.stop_heartbeat()
+                    await streaming_state.stop_heartbeat()
 
                     # Post a new message below the answered question for continued streaming
                     continue_response = await client.chat_postMessage(
@@ -512,6 +522,10 @@ async def main():
                     try:
                         with open(plan_file_path) as f:
                             plan_content = f.read()
+                    except FileNotFoundError:
+                        logger.warning(f"Plan file not found: {plan_file_path}")
+                    except PermissionError:
+                        logger.warning(f"Cannot read plan file (permission denied): {plan_file_path}")
                     except Exception as e:
                         logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
 
@@ -610,7 +624,7 @@ async def main():
                     )
 
             # Stop heartbeat before sending final response
-            streaming_state.stop_heartbeat()
+            await streaming_state.stop_heartbeat()
 
             # Send final response
             output = result.output or result.error or "No output"
@@ -706,7 +720,7 @@ async def main():
 
         except Exception as e:
             logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")
-            streaming_state.stop_heartbeat()  # Stop heartbeat on error
+            await streaming_state.stop_heartbeat()  # Stop heartbeat on error
             # Clean up pending question if one was created
             if pending_question:
                 QuestionManager.cancel(pending_question.question_id)

@@ -239,7 +239,12 @@ async def download_slack_file(
                         if bytes_downloaded > max_size_bytes:
                             # Clean up partial file
                             await f.close()
-                            os.remove(local_path)
+                            try:
+                                os.remove(local_path)
+                            except OSError as cleanup_error:
+                                logger.warning(
+                                    f"Failed to clean up partial file {local_path}: {cleanup_error}"
+                                )
                             raise FileTooLargeError(safe_filename, bytes_downloaded, max_size_bytes)
                         await f.write(chunk)
 
