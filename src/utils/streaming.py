@@ -57,8 +57,10 @@ class StreamingMessageState:
     def get_plan_file_path(self, working_directory: Optional[str] = None) -> Optional[str]:
         """Get the plan file path if one was written during plan mode.
 
-        First checks tracked Write tool activities for writes to ~/.claude/plans/.
-        Falls back to scanning the directory for recently modified .md files.
+        Checks in order:
+        1. Write tool activities for direct writes to ~/.claude/plans/
+        2. Task (Plan subagent) results for plan file paths mentioned in output
+        3. Fallback: scan ~/.claude/plans/ for recently modified .md files
 
         Parameters
         ----------
@@ -71,6 +73,7 @@ class StreamingMessageState:
             Path to the plan file, or None if not found.
         """
         import os
+        import re
 
         plans_dir = os.path.expanduser("~/.claude/plans")
 
@@ -81,8 +84,25 @@ class StreamingMessageState:
                 if file_path.endswith(".md") and file_path.startswith(plans_dir):
                     return file_path
 
+        # Check Task (Plan subagent) results for plan file paths
+        # The subagent result text often contains the file path it wrote to
+        for tool in self.tool_activities.values():
+            if tool.name == "Task" and tool.full_result and not tool.is_error:
+                # Look for paths like ~/.claude/plans/something.md or /home/user/.claude/plans/something.md
+                patterns = [
+                    r"~/.claude/plans/[\w\-]+\.md",
+                    rf"{re.escape(plans_dir)}/[\w\-]+\.md",
+                ]
+                for pattern in patterns:
+                    match = re.search(pattern, tool.full_result)
+                    if match:
+                        path = match.group(0)
+                        # Expand ~ if present
+                        expanded = os.path.expanduser(path)
+                        if os.path.isfile(expanded):
+                            return expanded
+
         # Fallback: scan directory for recently modified plan files
-        # This handles cases where a Task subagent wrote the plan file
         if not os.path.isdir(plans_dir):
             return None
 
