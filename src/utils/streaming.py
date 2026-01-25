@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from loguru import logger
+
 from src.config import config
 from src.utils.formatting import SlackFormatter
 
@@ -82,6 +84,7 @@ class StreamingMessageState:
             if tool.name == "Write" and not tool.is_error:
                 file_path = tool.input.get("file_path", "")
                 if file_path.endswith(".md") and file_path.startswith(plans_dir):
+                    logger.info(f"Plan file found via Write tool activity: {file_path}")
                     return file_path
 
         # Check Task (Plan subagent) results for plan file paths
@@ -100,10 +103,12 @@ class StreamingMessageState:
                         # Expand ~ if present
                         expanded = os.path.expanduser(path)
                         if os.path.isfile(expanded):
+                            logger.info(f"Plan file found via Task subagent result: {expanded}")
                             return expanded
 
         # Fallback: scan directory for recently modified plan files
         if not os.path.isdir(plans_dir):
+            logger.debug(f"Plans directory does not exist: {plans_dir}")
             return None
 
         import time
@@ -118,15 +123,19 @@ class StreamingMessageState:
                     mtime = entry.stat().st_mtime
                     if now - mtime < max_age_seconds:
                         candidates.append((entry.path, mtime))
-        except OSError:
+        except OSError as e:
+            logger.warning(f"Failed to scan plans directory {plans_dir}: {e}")
             return None
 
         if not candidates:
+            logger.debug(f"No recent plan files found in {plans_dir}")
             return None
 
         # Return the most recently modified plan file
         candidates.sort(key=lambda x: x[1], reverse=True)
-        return candidates[0][0]
+        result = candidates[0][0]
+        logger.info(f"Plan file found via directory scan fallback: {result}")
+        return result
 
     def start_heartbeat(self) -> None:
         """Start the heartbeat task to show progress during idle periods."""
