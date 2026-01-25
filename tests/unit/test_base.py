@@ -72,43 +72,6 @@ class TestHandlerDependencies:
         assert deps.db is db
         assert deps.executor is executor
 
-    def test_orchestrator_lazy_init(self):
-        """orchestrator property lazily initializes."""
-        db = MagicMock()
-        executor = MagicMock()
-        deps = HandlerDependencies(db=db, executor=executor)
-
-        # Initially None
-        assert deps._orchestrator is None
-
-        # Access triggers import and creation - patch the actual module
-        with patch("src.agents.MultiAgentOrchestrator") as MockOrch:
-            mock_orchestrator = MagicMock()
-            MockOrch.return_value = mock_orchestrator
-
-            result = deps.orchestrator
-
-            MockOrch.assert_called_once_with(executor)
-            assert result is mock_orchestrator
-
-    def test_orchestrator_cached(self):
-        """orchestrator property caches instance."""
-        db = MagicMock()
-        executor = MagicMock()
-        deps = HandlerDependencies(db=db, executor=executor)
-
-        with patch("src.agents.MultiAgentOrchestrator") as MockOrch:
-            mock_orchestrator = MagicMock()
-            MockOrch.return_value = mock_orchestrator
-
-            # First access
-            result1 = deps.orchestrator
-            # Second access
-            result2 = deps.orchestrator
-
-            # Only created once
-            MockOrch.assert_called_once()
-            assert result1 is result2
 
 class TestSlackCommandDecorator:
     """Tests for slack_command decorator."""

@@ -23,19 +23,19 @@ class TestExecutionTimeouts:
 
         assert timeouts.permission == 300
         assert timeouts.usage_check == 30
-        assert timeouts.plan_approval == 600
+        assert timeouts.max_questions_per_conversation == 10
 
     def test_custom_values(self):
         """ExecutionTimeouts accepts custom values."""
         timeouts = ExecutionTimeouts(
             permission=120,
             usage_check=15,
-            plan_approval=300,
+            max_questions_per_conversation=5,
         )
 
         assert timeouts.permission == 120
         assert timeouts.usage_check == 15
-        assert timeouts.plan_approval == 300
+        assert timeouts.max_questions_per_conversation == 5
 
 
 class TestSlackTimeouts:
@@ -155,13 +155,6 @@ class TestConfig:
 
         errors = test_config.validate_required()
         assert errors == []
-
-    def test_multi_agent_defaults(self):
-        """Multi-agent workflow settings have defaults."""
-        assert config.PLANNER_MAX_TURNS == 10
-        assert config.WORKER_MAX_TURNS == 30
-        assert config.EVALUATOR_MAX_TURNS == 10
-
 
 class TestAutoApproveToolsParsing:
     """Tests for AUTO_APPROVE_TOOLS parsing."""
