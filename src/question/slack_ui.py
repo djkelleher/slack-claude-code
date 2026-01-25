@@ -293,12 +293,13 @@ def build_question_result_blocks(
         selected = pending.answers.get(i, ["(no answer)"])
         answer_text = ", ".join(selected)
 
+        result_text = f"*{question.header}*\n_{question.question}_\n\n*Answer:* {answer_text}"
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*{question.header}*\n_{question.question}_\n\n*Answer:* {answer_text}",
+                    "text": _truncate_text(result_text),
                 },
             }
         )
