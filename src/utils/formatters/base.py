@@ -269,13 +269,6 @@ def sanitize_error(error: str) -> str:
     return sanitized[:2500]
 
 
-def truncate_output(output: str, max_length: int = MAX_TEXT_LENGTH) -> str:
-    """Truncate output to max length with indicator."""
-    if len(output) > max_length:
-        return output[: max_length - 50] + "\n\n... (output truncated)"
-    return output
-
-
 def truncate_from_start(output: str, max_length: int = MAX_TEXT_LENGTH) -> str:
     """Truncate output from start (for streaming where recent content matters)."""
     if len(output) > max_length:

@@ -8,7 +8,6 @@ from .base import (
     markdown_to_mrkdwn,
     sanitize_error,
     split_text_into_blocks,
-    truncate_output,
 )
 from .table import extract_tables_from_text, split_text_by_tables
 
@@ -185,8 +184,6 @@ def command_response_with_tables(
         List of block arrays, each representing a separate message.
         First message includes prompt context, last includes footer.
     """
-    output = truncate_output(output)
-
     # Extract tables from the output
     text_with_placeholders, table_blocks = extract_tables_from_text(output)
 
