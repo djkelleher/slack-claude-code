@@ -287,3 +287,61 @@ def truncate_from_start(output: str, max_length: int = MAX_TEXT_LENGTH) -> str:
             truncated = truncated[newline_pos + 1 :]
         return "_... (earlier output truncated)_\n\n" + truncated
     return output
+
+
+def split_text_into_blocks(
+    text: str, block_type: str = "section", max_length: int = MAX_TEXT_LENGTH
+) -> list[dict]:
+    """Split long text into multiple Slack blocks to preserve all content.
+
+    Parameters
+    ----------
+    text : str
+        Text to split.
+    block_type : str
+        Type of block to create ("section" or "context").
+    max_length : int
+        Maximum length per block.
+
+    Returns
+    -------
+    list[dict]
+        List of Slack blocks containing all the text.
+    """
+    if len(text) <= max_length:
+        if block_type == "context":
+            return [{"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}]
+        return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
+
+    blocks = []
+    remaining = text
+
+    while remaining:
+        if len(remaining) <= max_length:
+            chunk = remaining
+            remaining = ""
+        else:
+            # Find a good break point (newline or space) near the limit
+            break_at = max_length
+            # Try to break at a newline first
+            newline_pos = remaining.rfind("\n", 0, max_length)
+            if newline_pos > max_length // 2:
+                break_at = newline_pos + 1
+            else:
+                # Fall back to breaking at a space
+                space_pos = remaining.rfind(" ", 0, max_length)
+                if space_pos > max_length // 2:
+                    break_at = space_pos + 1
+
+            chunk = remaining[:break_at].rstrip()
+            remaining = remaining[break_at:].lstrip()
+
+        if chunk:
+            if block_type == "context":
+                blocks.append(
+                    {"type": "context", "elements": [{"type": "mrkdwn", "text": chunk}]}
+                )
+            else:
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
+
+    return blocks

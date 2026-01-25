@@ -7,54 +7,10 @@ from .base import (
     escape_markdown,
     markdown_to_mrkdwn,
     sanitize_error,
+    split_text_into_blocks,
     truncate_output,
 )
 from .table import extract_tables_from_text, split_text_by_tables
-
-# Slack Block Kit limits
-SLACK_TEXT_MAX_LENGTH = 3000
-
-
-def _split_text_into_blocks(text: str, max_length: int = SLACK_TEXT_MAX_LENGTH) -> list[dict]:
-    """Split long text into multiple Slack section blocks to preserve all content.
-
-    Args:
-        text: Text to split
-        max_length: Maximum length per block (default: 3000 for Slack)
-
-    Returns:
-        List of Slack section blocks containing all the text
-    """
-    if len(text) <= max_length:
-        return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
-
-    blocks = []
-    remaining = text
-
-    while remaining:
-        if len(remaining) <= max_length:
-            chunk = remaining
-            remaining = ""
-        else:
-            # Find a good break point (newline or space) near the limit
-            break_at = max_length
-            # Try to break at a newline first
-            newline_pos = remaining.rfind("\n", 0, max_length)
-            if newline_pos > max_length // 2:
-                break_at = newline_pos + 1
-            else:
-                # Fall back to breaking at a space
-                space_pos = remaining.rfind(" ", 0, max_length)
-                if space_pos > max_length // 2:
-                    break_at = space_pos + 1
-
-            chunk = remaining[:break_at].rstrip()
-            remaining = remaining[break_at:].lstrip()
-
-        if chunk:
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
-
-    return blocks
 
 
 def command_response(
@@ -83,7 +39,7 @@ def command_response(
     ]
 
     # Split output into multiple blocks if needed
-    output_blocks = _split_text_into_blocks(formatted_output)
+    output_blocks = split_text_into_blocks(formatted_output)
     blocks.extend(output_blocks)
 
     # Add footer with metadata

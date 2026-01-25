@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from .base import escape_markdown, truncate_output
+from .base import escape_markdown, split_text_into_blocks
 
 
 def plan_processing_message(prompt: str) -> list[dict]:
@@ -86,8 +86,6 @@ def plan_execution_update(
     Returns:
         List of Slack blocks
     """
-    output = truncate_output(current_output)
-
     blocks = [
         {
             "type": "context",
@@ -106,11 +104,16 @@ def plan_execution_update(
                 "text": ":gear: *Executing plan...*",
             },
         },
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": output or "_Starting execution..._"},
-        },
     ]
+
+    # Split output into multiple blocks if needed
+    if current_output:
+        output_blocks = split_text_into_blocks(current_output)
+        blocks.extend(output_blocks)
+    else:
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": "_Starting execution..._"}}
+        )
 
     # Add footer with duration if available
     if duration_ms:
@@ -144,8 +147,6 @@ def plan_execution_complete(
     Returns:
         List of Slack blocks
     """
-    output = truncate_output(output)
-
     blocks = [
         {
             "type": "context",
@@ -157,11 +158,14 @@ def plan_execution_complete(
             ],
         },
         {"type": "divider"},
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": output or "_No output_"},
-        },
     ]
+
+    # Split output into multiple blocks if needed
+    if output:
+        output_blocks = split_text_into_blocks(output)
+        blocks.extend(output_blocks)
+    else:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}})
 
     # Add footer with metadata
     footer_parts = [":heavy_check_mark: Plan execution complete"]

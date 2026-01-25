@@ -7,30 +7,10 @@ and capturing user responses.
 import json
 from typing import TYPE_CHECKING
 
-# Slack Block Kit limits
-SLACK_TEXT_MAX_LENGTH = 3000
-SLACK_TRUNCATION_SUFFIX = "\n\n_(truncated)_"
+from src.utils.formatters.base import split_text_into_blocks
 
 if TYPE_CHECKING:
     from .manager import PendingQuestion, Question
-
-
-def _truncate_text(text: str, max_length: int = SLACK_TEXT_MAX_LENGTH) -> str:
-    """Truncate text to fit within Slack's character limits.
-
-    Args:
-        text: Text to truncate
-        max_length: Maximum length (default: 3000 for Slack section blocks)
-
-    Returns:
-        Truncated text with suffix if truncation occurred
-    """
-    if len(text) <= max_length:
-        return text
-
-    # Reserve space for the truncation suffix
-    truncate_at = max_length - len(SLACK_TRUNCATION_SUFFIX)
-    return text[:truncate_at] + SLACK_TRUNCATION_SUFFIX
 
 
 def build_question_blocks(pending: "PendingQuestion", context_text: str = "") -> list[dict]:
@@ -59,33 +39,18 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
 
     blocks.append({"type": "divider"})
 
-    # Add context text if provided
+    # Add context text if provided (split into multiple blocks if needed)
     if context_text and context_text.strip():
-        truncated_context = _truncate_text(context_text.strip())
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": truncated_context,
-                },
-            }
-        )
+        context_blocks = split_text_into_blocks(context_text.strip(), "section")
+        blocks.extend(context_blocks)
         blocks.append({"type": "divider"})
 
     # Build blocks for each question
     for i, question in enumerate(pending.questions):
-        # Question text (truncated to fit Slack limits)
+        # Question text (split into multiple blocks if needed)
         question_text = f"*{question.header}*\n{question.question}"
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": _truncate_text(question_text),
-                },
-            }
-        )
+        question_blocks = split_text_into_blocks(question_text, "section")
+        blocks.extend(question_blocks)
 
         # Build action buttons for options
         if question.multi_select:
@@ -102,18 +67,9 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
                 descriptions.append(f"• *{opt.label}*: {opt.description}")
 
         if descriptions:
-            descriptions_text = _truncate_text("\n".join(descriptions))
-            blocks.append(
-                {
-                    "type": "context",
-                    "elements": [
-                        {
-                            "type": "mrkdwn",
-                            "text": descriptions_text,
-                        }
-                    ],
-                }
-            )
+            descriptions_text = "\n".join(descriptions)
+            description_blocks = split_text_into_blocks(descriptions_text, "context")
+            blocks.extend(description_blocks)
 
         # Add spacing between questions
         if i < len(pending.questions) - 1:
@@ -288,21 +244,14 @@ def build_question_result_blocks(
 
     blocks.append({"type": "divider"})
 
-    # Show each question and answer
+    # Show each question and answer (split into multiple blocks if needed)
     for i, question in enumerate(pending.questions):
         selected = pending.answers.get(i, ["(no answer)"])
         answer_text = ", ".join(selected)
 
         result_text = f"*{question.header}*\n_{question.question}_\n\n*Answer:* {answer_text}"
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": _truncate_text(result_text),
-                },
-            }
-        )
+        result_blocks = split_text_into_blocks(result_text, "section")
+        blocks.extend(result_blocks)
 
     return blocks
 

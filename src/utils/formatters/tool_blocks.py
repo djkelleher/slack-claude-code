@@ -7,10 +7,63 @@ in Slack messages during streaming updates.
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from .base import truncate_output
+from .base import MAX_TEXT_LENGTH
 
 if TYPE_CHECKING:
     from src.claude.streaming import ToolActivity
+
+
+def _split_code_into_blocks(
+    text: str, prefix: str = "", max_length: int = MAX_TEXT_LENGTH
+) -> list[dict]:
+    """Split long code text into multiple Slack blocks to preserve all content.
+
+    Args:
+        text: Text to split (will be wrapped in code blocks)
+        prefix: Optional prefix like "*Input:*" for the first block
+        max_length: Maximum length per block (default: 3000 for Slack)
+
+    Returns:
+        List of Slack section blocks containing all the code
+    """
+    # Account for code block markers and prefix
+    code_overhead = 6  # ``` at start and end
+    prefix_overhead = len(prefix) + 1 if prefix else 0  # +1 for newline
+    effective_max = max_length - code_overhead - prefix_overhead
+
+    if len(text) <= effective_max:
+        block_text = f"{prefix}\n```{text}```" if prefix else f"```{text}```"
+        return [{"type": "section", "text": {"type": "mrkdwn", "text": block_text}}]
+
+    blocks = []
+    remaining = text
+    is_first = True
+
+    while remaining:
+        # First block has less space due to prefix
+        current_max = effective_max if is_first else (max_length - code_overhead)
+
+        if len(remaining) <= current_max:
+            chunk = remaining
+            remaining = ""
+        else:
+            # Find a good break point at a newline
+            break_at = current_max
+            newline_pos = remaining.rfind("\n", 0, current_max)
+            if newline_pos > current_max // 2:
+                break_at = newline_pos + 1
+            chunk = remaining[:break_at].rstrip()
+            remaining = remaining[break_at:].lstrip()
+
+        if chunk:
+            if is_first and prefix:
+                block_text = f"{prefix}\n```{chunk}```"
+            else:
+                block_text = f"```{chunk}```"
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": block_text}})
+            is_first = False
+
+    return blocks
 
 
 # Tool icons for Slack display (disabled - emojis removed)
@@ -212,41 +265,21 @@ def format_tool_detail_blocks(tool: "ToolActivity") -> list[dict]:
         }
     )
 
-    # Input section
+    # Input section (split into multiple blocks if needed)
     input_text = _format_tool_input_detail(tool.name, tool.input)
     if input_text:
-        # Truncate input for display
-        input_display = truncate_output(input_text, 1500)
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    # Don't escape content inside code blocks - Slack renders them literally
-                    "text": f"*Input:*\n```{input_display}```",
-                },
-            }
-        )
+        input_blocks = _split_code_into_blocks(input_text, prefix="*Input:*")
+        blocks.extend(input_blocks)
 
-    # Result section (if available)
+    # Result section (if available, split into multiple blocks if needed)
     if tool.result is not None or tool.is_error:
         blocks.append({"type": "divider"})
 
         result_text = tool.full_result if tool.full_result else tool.result
         if result_text:
-            # Truncate result for display
-            result_display = truncate_output(result_text, 2000)
             result_label = "*Error:*" if tool.is_error else "*Result:*"
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        # Don't escape content inside code blocks - Slack renders them literally
-                        "text": f"{result_label}\n```{result_display}```",
-                    },
-                }
-            )
+            result_blocks = _split_code_into_blocks(result_text, prefix=result_label)
+            blocks.extend(result_blocks)
 
     return blocks
 

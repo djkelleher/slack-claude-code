@@ -2,6 +2,8 @@
 
 from typing import Optional
 
+from src.utils.formatters.base import MAX_TEXT_LENGTH, split_text_into_blocks
+
 
 def build_approval_blocks(
     approval_id: str,
@@ -38,22 +40,48 @@ def build_approval_blocks(
         },
     ]
 
-    # Add tool input if provided
+    # Add tool input if provided (split into multiple blocks if needed)
     if tool_input:
-        # Truncate long inputs
-        display_input = tool_input[:500]
-        if len(tool_input) > 500:
-            display_input += "..."
+        # Wrap in code block - account for ``` markers in length calculation
+        code_block_overhead = 6  # ``` at start and end
+        max_code_length = MAX_TEXT_LENGTH - code_block_overhead
 
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"```{display_input}```",
-                },
-            }
-        )
+        if len(tool_input) <= max_code_length:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"```{tool_input}```",
+                    },
+                }
+            )
+        else:
+            # Split long input across multiple code blocks
+            remaining = tool_input
+            while remaining:
+                if len(remaining) <= max_code_length:
+                    chunk = remaining
+                    remaining = ""
+                else:
+                    # Find a good break point at a newline
+                    break_at = max_code_length
+                    newline_pos = remaining.rfind("\n", 0, max_code_length)
+                    if newline_pos > max_code_length // 2:
+                        break_at = newline_pos + 1
+                    chunk = remaining[:break_at].rstrip()
+                    remaining = remaining[break_at:].lstrip()
+
+                if chunk:
+                    blocks.append(
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"```{chunk}```",
+                            },
+                        }
+                    )
 
     # Add context
     context_elements = [
