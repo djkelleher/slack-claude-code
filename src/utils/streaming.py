@@ -57,85 +57,38 @@ class StreamingMessageState:
     def get_plan_file_path(self, working_directory: Optional[str] = None) -> Optional[str]:
         """Get the plan file path if one was written during plan mode.
 
-        First looks for Write tool calls that created markdown files, prioritizing
-        files with 'plan' in the name. If no Write tools are found (e.g., when
-        a subagent wrote the plan), falls back to searching the working directory
-        for recently modified plan files.
+        Checks ~/.claude/plans/ for the most recently modified .md file.
+        Claude Code writes plan files to this directory when in plan mode.
 
         Parameters
         ----------
         working_directory : str, optional
-            Working directory to search for plan files as a fallback.
+            Unused, kept for API compatibility.
 
         Returns
         -------
         str or None
             Path to the plan file, or None if not found.
         """
-        # First try to find plan file from tracked Write tool activities
-        # Only consider .md files with "plan" in the name to avoid attaching
-        # unrelated markdown files (notes, documentation, etc.)
-        for tool in self.tool_activities.values():
-            if tool.name == "Write" and not tool.is_error:
-                file_path = tool.input.get("file_path", "")
-                if file_path.endswith(".md") and "plan" in file_path.lower():
-                    return file_path
-
-        # Fallback: search working directory for recently modified plan files
-        # This handles cases where a Task subagent wrote the plan file
-        if working_directory:
-            return self._find_plan_file_in_directory(working_directory)
-
-        return None
-
-    def _find_plan_file_in_directory(self, directory: str) -> Optional[str]:
-        """Search directory for recently modified plan files.
-
-        Parameters
-        ----------
-        directory : str
-            Directory to search for plan files.
-
-        Returns
-        -------
-        str or None
-            Path to the most recently modified plan file, or None if not found.
-        """
         import os
         import time
+
+        plans_dir = os.path.expanduser("~/.claude/plans")
+        if not os.path.isdir(plans_dir):
+            return None
 
         candidates = []
         now = time.time()
         max_age_seconds = 300  # Only consider files modified in last 5 minutes
 
-        # Common plan file patterns
-        plan_patterns = ["plan.md", "implementation-plan.md", "implementation_plan.md"]
-
-        # Check common locations
-        for pattern in plan_patterns:
-            # Check in working directory root
-            path = os.path.join(directory, pattern)
-            if os.path.isfile(path):
-                mtime = os.path.getmtime(path)
-                if now - mtime < max_age_seconds:
-                    candidates.append((path, mtime))
-
-            # Check in .claude directory
-            claude_path = os.path.join(directory, ".claude", pattern)
-            if os.path.isfile(claude_path):
-                mtime = os.path.getmtime(claude_path)
-                if now - mtime < max_age_seconds:
-                    candidates.append((claude_path, mtime))
-
-        # Also search for any .md file with "plan" in the name
         try:
-            for entry in os.scandir(directory):
-                if entry.is_file() and entry.name.endswith(".md") and "plan" in entry.name.lower():
+            for entry in os.scandir(plans_dir):
+                if entry.is_file() and entry.name.endswith(".md"):
                     mtime = entry.stat().st_mtime
                     if now - mtime < max_age_seconds:
                         candidates.append((entry.path, mtime))
         except OSError:
-            pass
+            return None
 
         if not candidates:
             return None
