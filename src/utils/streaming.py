@@ -73,20 +73,13 @@ class StreamingMessageState:
             Path to the plan file, or None if not found.
         """
         # First try to find plan file from tracked Write tool activities
-        plan_files = []
+        # Only consider .md files with "plan" in the name to avoid attaching
+        # unrelated markdown files (notes, documentation, etc.)
         for tool in self.tool_activities.values():
             if tool.name == "Write" and not tool.is_error:
                 file_path = tool.input.get("file_path", "")
-                if file_path.endswith(".md"):
-                    plan_files.append(file_path)
-
-        if plan_files:
-            # Prioritize files with 'plan' in the name
-            for path in plan_files:
-                if "plan" in path.lower():
-                    return path
-            # Otherwise return the last markdown file written
-            return plan_files[-1]
+                if file_path.endswith(".md") and "plan" in file_path.lower():
+                    return file_path
 
         # Fallback: search working directory for recently modified plan files
         # This handles cases where a Task subagent wrote the plan file
