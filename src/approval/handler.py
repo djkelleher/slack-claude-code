@@ -47,8 +47,12 @@ async def _post_permission_notification(
         )
         logger.debug(f"Posted permission notification to channel {channel_id}")
 
+    except asyncio.CancelledError:
+        # Don't log cancellation as an error
+        pass
     except Exception as e:
-        logger.warning(f"Failed to post permission notification: {e}")
+        # Log with type for debugging unexpected errors
+        logger.warning(f"Failed to post permission notification: {type(e).__name__}: {e}")
 
 
 @dataclass
@@ -63,13 +67,21 @@ class PendingApproval:
     user_id: Optional[str] = None
     thread_ts: Optional[str] = None
     message_ts: Optional[str] = None
-    future: Optional[asyncio.Future] = field(default=None, repr=False)
+    _future: Optional[asyncio.Future] = field(default=None, repr=False)
     created_at: datetime = field(default_factory=datetime.now)
 
-    def __post_init__(self):
-        if self.future is None:
-            loop = asyncio.get_running_loop()
-            self.future = loop.create_future()
+    @property
+    def future(self) -> asyncio.Future:
+        """Lazily create the Future when first accessed in async context."""
+        if self._future is None:
+            try:
+                loop = asyncio.get_running_loop()
+                self._future = loop.create_future()
+            except RuntimeError:
+                # Not in async context - create a new event loop's future
+                loop = asyncio.new_event_loop()
+                self._future = loop.create_future()
+        return self._future
 
 
 class PermissionManager:

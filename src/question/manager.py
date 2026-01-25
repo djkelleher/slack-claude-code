@@ -49,15 +49,24 @@ class PendingQuestion:
     tool_use_id: str  # The tool_use_id from Claude
     questions: list[Question]  # Can have multiple questions
     message_ts: Optional[str] = None
-    future: Optional[asyncio.Future] = field(default=None, repr=False)
+    _future: Optional[asyncio.Future] = field(default=None, repr=False)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     # Collected answers: question_index -> list of selected labels
     answers: dict[int, list[str]] = field(default_factory=dict)
 
-    def __post_init__(self):
-        if self.future is None:
-            loop = asyncio.get_running_loop()
-            self.future = loop.create_future()
+    @property
+    def future(self) -> asyncio.Future:
+        """Lazily create the Future when first accessed in async context."""
+        if self._future is None:
+            try:
+                loop = asyncio.get_running_loop()
+                self._future = loop.create_future()
+            except RuntimeError:
+                # Not in async context - create a new event loop's future
+                # This shouldn't happen in normal usage but provides a fallback
+                loop = asyncio.new_event_loop()
+                self._future = loop.create_future()
+        return self._future
 
 
 class QuestionManager:
@@ -294,24 +303,38 @@ class QuestionManager:
     async def wait_for_answer(
         cls,
         question_id: str,
-    ) -> Optional[dict[int, list[str]]]:
+        timeout: int | None = None,
+    ) -> dict[int, list[str]] | None:
         """Wait for user to answer the question.
-
-        Waits indefinitely - questions are cleaned up by cleanup_expired() if abandoned.
 
         Args:
             question_id: The question ID
+            timeout: Timeout in seconds. If None, uses config default.
+                    If 0, waits indefinitely.
 
         Returns:
-            Dict of answers (question_index -> selected labels), or None if cancelled
+            Dict of answers (question_index -> selected labels), or None if cancelled/timed out
         """
+        from ..config import config
+
         pending = cls._pending.get(question_id)
         if not pending:
             return None
 
+        # Default timeout from config, 0 means wait indefinitely
+        if timeout is None:
+            timeout = config.timeouts.execution.permission
+
         try:
-            answers = await pending.future
+            if timeout > 0:
+                answers = await asyncio.wait_for(pending.future, timeout=timeout)
+            else:
+                answers = await pending.future
             return answers
+
+        except asyncio.TimeoutError:
+            logger.info(f"Question {question_id} timed out after {timeout}s")
+            return None
 
         except asyncio.CancelledError:
             logger.info(f"Question {question_id} was cancelled")

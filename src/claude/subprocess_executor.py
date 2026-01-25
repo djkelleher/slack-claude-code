@@ -35,6 +35,31 @@ class ExecutionResult:
     has_pending_plan_approval: bool = False  # True if terminated due to ExitPlanMode
 
 
+async def _terminate_process_safely(
+    process: asyncio.subprocess.Process,
+    timeout: float = 5.0,
+) -> None:
+    """Terminate a process safely, falling back to kill if needed.
+
+    Args:
+        process: The process to terminate
+        timeout: Seconds to wait for graceful termination before kill
+    """
+    if process.returncode is not None:
+        return  # Already terminated
+
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        # Process didn't terminate gracefully, force kill
+        process.kill()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning("Process did not respond to kill signal")
+
+
 class SubprocessExecutor:
     """Execute Claude Code via subprocess with stream-json output.
 
@@ -347,44 +372,28 @@ class SubprocessExecutor:
                 # If ExitPlanMode error detected, terminate early and retry
                 if self._exit_plan_mode_error_detected:
                     logger.info(f"{log_prefix}Terminating execution to retry without plan mode")
-                    process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        process.kill()
+                    await _terminate_process_safely(process)
                     break  # Exit the message processing loop
 
                 # If AskUserQuestion detected, terminate early to handle in Slack
                 # This must happen before Claude CLI returns the error to Claude
                 if self._ask_user_question_detected:
                     logger.info(f"{log_prefix}Terminating execution to handle AskUserQuestion in Slack")
-                    process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        process.kill()
+                    await _terminate_process_safely(process)
                     break  # Exit the message processing loop
 
                 # If ExitPlanMode detected in plan mode, terminate early to show approval UI
                 # The CLI would otherwise block waiting for interactive approval
                 if self._exit_plan_mode_detected:
                     logger.info(f"{log_prefix}Terminating execution to handle plan approval in Slack")
-                    process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        process.kill()
+                    await _terminate_process_safely(process)
                     break  # Exit the message processing loop
 
                 # If Plan subagent completed in plan mode, terminate early to show approval UI
                 # This handles the case where Claude uses Task(subagent_type=Plan) instead of ExitPlanMode
                 if self._plan_subagent_completed:
                     logger.info(f"{log_prefix}Terminating execution to handle Plan subagent approval in Slack")
-                    process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        process.kill()
+                    await _terminate_process_safely(process)
                     break  # Exit the message processing loop
 
                 if msg.is_final:
@@ -474,8 +483,7 @@ class SubprocessExecutor:
             )
 
         except asyncio.CancelledError:
-            process.terminate()
-            await process.wait()  # Prevent zombie process
+            await _terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
@@ -486,8 +494,7 @@ class SubprocessExecutor:
             )
         except Exception as e:
             logger.error(f"{log_prefix}Error during execution: {e}")
-            process.terminate()
-            await process.wait()  # Prevent zombie process
+            await _terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,

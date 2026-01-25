@@ -8,6 +8,7 @@ with each channel representing a separate session.
 
 import asyncio
 import os
+import random
 import signal
 import sys
 import traceback
@@ -16,6 +17,7 @@ import uuid
 from loguru import logger
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
+from slack_sdk.errors import SlackApiError
 
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.subprocess_executor import SubprocessExecutor
@@ -83,7 +85,8 @@ async def post_channel_notification(
             else:
                 message = "⚠️ Claude needs permission"
 
-        # Post to channel with retry logic for transient failures
+        # Post to channel with exponential backoff retry for transient failures
+        base_delay = 1.0
         for attempt in range(max_retries):
             try:
                 await client.chat_postMessage(
@@ -93,15 +96,20 @@ async def post_channel_notification(
                 logger.debug(f"Posted {notification_type} notification to channel {channel_id}")
                 return  # Success, exit
 
-            except Exception as e:
+            except SlackApiError as e:
                 if attempt < max_retries - 1:
+                    # Exponential backoff with jitter: 1s, 2s, 4s + random 0-1s
+                    delay = base_delay * (2**attempt) + random.uniform(0, 1)
                     logger.warning(
-                        f"Failed to post channel notification (attempt {attempt + 1}/{max_retries}): {e}"
+                        f"Slack API error (attempt {attempt + 1}/{max_retries}): {e}, retrying in {delay:.1f}s"
                     )
-                    await asyncio.sleep(1.0)  # Brief delay before retry
+                    await asyncio.sleep(delay)
                 else:
-                    # Final attempt failed
                     raise
+            except Exception as e:
+                # For non-Slack errors, don't retry
+                logger.error(f"Unexpected error posting notification: {type(e).__name__}: {e}")
+                raise
 
     except Exception as e:
         # Don't fail the main operation if all notification attempts fail
@@ -177,7 +185,9 @@ async def main():
         user_id = event.get("user")  # Extract user ID for plan approval
         thread_ts = event.get("thread_ts")  # Extract thread timestamp
         prompt = event.get("text", "").strip()
-        files = event.get("files", [])  # Extract uploaded files
+        # Extract uploaded files - ensure it's always a list
+        files_data = event.get("files")
+        files: list = files_data if isinstance(files_data, list) else []
 
         # Allow messages with files but no text
         if not prompt and not files:
@@ -718,10 +728,41 @@ async def main():
                         blocks=blocks,
                     )
 
+        except asyncio.CancelledError:
+            logger.info("Command execution was cancelled")
+            await streaming_state.stop_heartbeat()
+            if pending_question:
+                QuestionManager.cancel(pending_question.question_id)
+            await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text="Command cancelled",
+                blocks=SlackFormatter.error_message("Command was cancelled"),
+            )
+        except SlackApiError as e:
+            logger.error(f"Slack API error executing command: {e}\n{traceback.format_exc()}")
+            await streaming_state.stop_heartbeat()
+            if pending_question:
+                QuestionManager.cancel(pending_question.question_id)
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
+            # Don't try to update Slack message if Slack API is failing
+        except (OSError, IOError) as e:
+            logger.error(f"I/O error executing command: {e}\n{traceback.format_exc()}")
+            await streaming_state.stop_heartbeat()
+            if pending_question:
+                QuestionManager.cancel(pending_question.question_id)
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=f"I/O Error: {str(e)}",
+                blocks=SlackFormatter.error_message(f"I/O Error: {str(e)}"),
+            )
         except Exception as e:
-            logger.error(f"Error executing command: {e}\n{traceback.format_exc()}")
-            await streaming_state.stop_heartbeat()  # Stop heartbeat on error
-            # Clean up pending question if one was created
+            # Catch remaining unexpected errors to prevent crash, but log details
+            logger.error(f"Unexpected error executing command: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+            await streaming_state.stop_heartbeat()
             if pending_question:
                 QuestionManager.cancel(pending_question.question_id)
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))

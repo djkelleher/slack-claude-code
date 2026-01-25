@@ -24,9 +24,17 @@ class DatabaseRepository:
     def __init__(self, db_path: str, timeout: float = DB_TIMEOUT):
         self.db_path = db_path
         self.timeout = timeout
+        self._initialized = False
 
     def _get_connection(self) -> aiosqlite.Connection:
-        return aiosqlite.connect(self.db_path)
+        return aiosqlite.connect(self.db_path, timeout=self.timeout)
+
+    async def _ensure_wal_mode(self, db: aiosqlite.Connection) -> None:
+        """Enable WAL mode for better concurrent access."""
+        if not self._initialized:
+            await db.execute("PRAGMA journal_mode=WAL")
+            await db.execute("PRAGMA busy_timeout=30000")  # 30 second timeout for busy
+            self._initialized = True
 
     @asynccontextmanager
     async def _transact(self):
@@ -38,6 +46,7 @@ class DatabaseRepository:
                 # commit happens automatically on exit
         """
         async with self._get_connection() as db:
+            await self._ensure_wal_mode(db)
             try:
                 yield db
                 await db.commit()

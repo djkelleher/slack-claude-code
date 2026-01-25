@@ -14,7 +14,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 
 def _get_username() -> str:
@@ -77,9 +77,16 @@ class ConfigStorage:
             self._cache = {}
             return self._cache
 
-        encrypted_data = self.config_file.read_bytes()
-        decrypted_data = self._fernet.decrypt(encrypted_data)
-        self._cache = json.loads(decrypted_data.decode())
+        try:
+            encrypted_data = self.config_file.read_bytes()
+            decrypted_data = self._fernet.decrypt(encrypted_data)
+            self._cache = json.loads(decrypted_data.decode())
+        except InvalidToken:
+            # Machine key changed or file corrupted - start fresh
+            self._cache = {}
+        except json.JSONDecodeError:
+            # Decrypted data is not valid JSON - start fresh
+            self._cache = {}
         return self._cache
 
     def _save(self, data: dict[str, Any]) -> None:

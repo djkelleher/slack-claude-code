@@ -1,5 +1,6 @@
 """File downloader for Slack uploaded files."""
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
@@ -85,16 +86,19 @@ async def save_snippet_content(
                 timeout = aiohttp.ClientTimeout(total=30, connect=10)
                 async with aiohttp.ClientSession(timeout=timeout) as http_session:
                     # For snippets, url_private points to the raw content
-                    headers = {"Authorization": f"Bearer {client.token}"}
-                    async with http_session.get(url_private, headers=headers) as response:
+                    # Use token in header but don't include in any error messages
+                    auth_headers = {"Authorization": f"Bearer {client.token}"}
+                    async with http_session.get(url_private, headers=auth_headers) as response:
                         if response.status == 200:
                             content = await response.text()
                         else:
                             logger.warning(
                                 f"Failed to fetch snippet content via url_private: HTTP {response.status}"
                             )
-            except Exception as e:
-                logger.warning(f"Error fetching snippet content: {e}")
+            except aiohttp.ClientError as e:
+                logger.warning(f"HTTP error fetching snippet content: {e}")
+            except asyncio.TimeoutError:
+                logger.warning("Timeout fetching snippet content")
 
     if not content:
         # Fall back to preview if available
@@ -265,6 +269,16 @@ async def download_slack_file(
         raise
     except FileDownloadError:
         raise
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP error downloading file {file_id}: {e}")
+        raise FileDownloadError(f"HTTP error downloading file: {e}")
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout downloading file {file_id}")
+        raise FileDownloadError("Download timed out")
+    except OSError as e:
+        logger.error(f"I/O error downloading file {file_id}: {e}")
+        raise FileDownloadError(f"I/O error downloading file: {e}")
     except Exception as e:
-        logger.error(f"Error downloading file {file_id}: {e}")
+        # Catch unexpected errors but log with type for debugging
+        logger.error(f"Unexpected error downloading file {file_id}: {type(e).__name__}: {e}")
         raise FileDownloadError(f"Failed to download file: {e}")

@@ -72,11 +72,12 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     str(target_path), entry_tuples, is_cwd=is_cwd
                 ),
             )
-        except PermissionError:
+        except OSError as e:
+            # OSError is parent of PermissionError, FileNotFoundError, etc.
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
-                text=f"Error: Permission denied: {target_path}",
-                blocks=SlackFormatter.error_message(f"Permission denied: {target_path}"),
+                text=f"Error: {e}",
+                blocks=SlackFormatter.error_message(f"Cannot access directory: {e}"),
             )
 
     @app.command("/cd")

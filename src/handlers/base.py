@@ -4,10 +4,11 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from src.utils.formatting import SlackFormatter
+from loguru import logger as LoguruLogger
+from slack_sdk.web.async_client import AsyncWebClient
 
-# Maximum length for command input to prevent resource exhaustion
-MAX_PROMPT_LENGTH = 50000
+from src.config import config
+from src.utils.formatting import SlackFormatter
 
 
 @dataclass
@@ -22,12 +23,12 @@ class CommandContext:
     user_id: str
     text: str
     command_name: str
-    client: Any
-    logger: Any
+    client: AsyncWebClient
+    logger: LoguruLogger
     thread_ts: str | None = None  # Thread timestamp for thread-based sessions
 
     @classmethod
-    def from_command(cls, command: dict, client: Any, logger: Any) -> "CommandContext":
+    def from_command(cls, command: dict, client: AsyncWebClient, logger: LoguruLogger) -> "CommandContext":
         """Create context from Slack command dict.
 
         Parameters
@@ -74,7 +75,7 @@ class HandlerDependencies:
 def slack_command(
     require_text: bool = False,
     usage_hint: str = "",
-    max_length: int = MAX_PROMPT_LENGTH,
+    max_length: int | None = None,
 ) -> Callable:
     """Decorator for Slack command handlers.
 
@@ -124,12 +125,13 @@ def slack_command(
                 return
 
             # Validate input length to prevent resource exhaustion
-            if len(ctx.text) > max_length:
+            effective_max_length = max_length if max_length is not None else config.timeouts.limits.max_prompt_length
+            if len(ctx.text) > effective_max_length:
                 await client.chat_postMessage(
                     channel=ctx.channel_id,
                     blocks=SlackFormatter.error_message(
                         f"Input too long ({len(ctx.text):,} chars). "
-                        f"Maximum is {max_length:,} characters."
+                        f"Maximum is {effective_max_length:,} characters."
                     ),
                 )
                 return

@@ -141,9 +141,14 @@ async def _handle_approval_action(
     approval_type : str
         Type for logging/error messages (e.g., "Tool", "Plan").
     """
-    channel_id = body["channel"]["id"]
-    message_ts = body["message"]["ts"]
-    user_id = body["user"]["id"]
+    try:
+        channel_id = body["channel"]["id"]
+        message_ts = body["message"]["ts"]
+        user_id = body["user"]["id"]
+    except KeyError as e:
+        logger.error(f"Missing required field in action body: {e}")
+        return
+
     approval_id = action["value"]
 
     resolved = await resolver(approval_id, user_id)
@@ -280,8 +285,25 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     blocks=blocks,
                 )
 
+        except asyncio.CancelledError:
+            logger.info("Rerun command was cancelled")
+            await deps.db.update_command_status(new_cmd.id, "cancelled", error_message="Cancelled")
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                blocks=SlackFormatter.error_message("Command was cancelled"),
+            )
+        except (OSError, IOError) as e:
+            logger.error(f"I/O error rerunning command: {e}")
+            await deps.db.update_command_status(new_cmd.id, "failed", error_message=str(e))
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                blocks=SlackFormatter.error_message(f"I/O Error: {str(e)}"),
+            )
         except Exception as e:
-            logger.error(f"Error rerunning command: {e}")
+            # Catch unexpected errors to prevent handler crash
+            logger.error(f"Unexpected error rerunning command: {type(e).__name__}: {e}")
             await deps.db.update_command_status(new_cmd.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
@@ -587,8 +609,14 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ack()
 
         try:
-            tool_data = json.loads(action["value"])
-        except (json.JSONDecodeError, KeyError) as e:
+            action_value = action["value"]
+            # Validate size before parsing to prevent resource exhaustion
+            max_size = config.timeouts.limits.max_action_value_size
+            if len(action_value) > max_size:
+                logger.error(f"Action value too large: {len(action_value)} bytes")
+                raise ValueError(f"Payload too large: {len(action_value)} bytes")
+            tool_data = json.loads(action_value)
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.error(f"Invalid tool data: {e}")
             await client.views_open(
                 trigger_id=body["trigger_id"],

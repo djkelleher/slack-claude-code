@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.config_storage import get_storage
@@ -14,6 +14,14 @@ class ExecutionTimeouts(BaseModel):
     usage_check: int = 30
     max_questions_per_conversation: int = 10
 
+    @field_validator("permission", "usage_check", "max_questions_per_conversation")
+    @classmethod
+    def validate_positive(cls, v: int, info) -> int:
+        """Ensure timeout values are positive integers."""
+        if v <= 0:
+            raise ValueError(f"{info.field_name} must be a positive integer, got {v}")
+        return v
+
 
 class SlackTimeouts(BaseModel):
     """Timeout configuration for Slack message updates."""
@@ -22,11 +30,27 @@ class SlackTimeouts(BaseModel):
     heartbeat_interval: float = 15.0
     heartbeat_threshold: float = 20.0
 
+    @field_validator("message_update_throttle", "heartbeat_interval", "heartbeat_threshold")
+    @classmethod
+    def validate_positive_float(cls, v: float, info) -> float:
+        """Ensure timeout values are positive."""
+        if v <= 0:
+            raise ValueError(f"{info.field_name} must be positive, got {v}")
+        return v
+
 
 class CacheTimeouts(BaseModel):
     """Cache duration configuration."""
 
     usage: int = 60
+
+    @field_validator("usage")
+    @classmethod
+    def validate_positive(cls, v: int, info) -> int:
+        """Ensure cache duration is positive."""
+        if v <= 0:
+            raise ValueError(f"{info.field_name} must be a positive integer, got {v}")
+        return v
 
 
 class StreamingConfig(BaseModel):
@@ -35,6 +59,14 @@ class StreamingConfig(BaseModel):
     max_accumulated_size: int = 500000
     max_tools_display: int = 10
     tool_thread_threshold: int = 500
+
+
+class LimitsConfig(BaseModel):
+    """Configuration for input/output limits."""
+
+    max_prompt_length: int = 50000  # Maximum command input length
+    max_action_value_size: int = 1024 * 1024  # Max JSON payload in actions (1MB)
+    plan_file_max_age_seconds: int = 300  # Time window for plan file discovery
 
 
 class DisplayConfig(BaseModel):
@@ -55,6 +87,7 @@ class TimeoutConfig(BaseModel):
     cache: CacheTimeouts = Field(default_factory=CacheTimeouts)
     streaming: StreamingConfig = Field(default_factory=StreamingConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
 
 
 class EncryptedSettingsSource:

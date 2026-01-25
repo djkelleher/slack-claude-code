@@ -115,7 +115,7 @@ class StreamingMessageState:
 
         candidates = []
         now = time.time()
-        max_age_seconds = 300  # Only consider files modified in last 5 minutes
+        max_age_seconds = config.timeouts.limits.plan_file_max_age_seconds
 
         try:
             for entry in os.scandir(plans_dir):
