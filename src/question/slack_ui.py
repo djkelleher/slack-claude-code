@@ -7,8 +7,30 @@ and capturing user responses.
 import json
 from typing import TYPE_CHECKING
 
+# Slack Block Kit limits
+SLACK_TEXT_MAX_LENGTH = 3000
+SLACK_TRUNCATION_SUFFIX = "\n\n_(truncated)_"
+
 if TYPE_CHECKING:
     from .manager import PendingQuestion, Question
+
+
+def _truncate_text(text: str, max_length: int = SLACK_TEXT_MAX_LENGTH) -> str:
+    """Truncate text to fit within Slack's character limits.
+
+    Args:
+        text: Text to truncate
+        max_length: Maximum length (default: 3000 for Slack section blocks)
+
+    Returns:
+        Truncated text with suffix if truncation occurred
+    """
+    if len(text) <= max_length:
+        return text
+
+    # Reserve space for the truncation suffix
+    truncate_at = max_length - len(SLACK_TRUNCATION_SUFFIX)
+    return text[:truncate_at] + SLACK_TRUNCATION_SUFFIX
 
 
 def build_question_blocks(pending: "PendingQuestion", context_text: str = "") -> list[dict]:
@@ -39,12 +61,13 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
 
     # Add context text if provided
     if context_text and context_text.strip():
+        truncated_context = _truncate_text(context_text.strip())
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": context_text.strip(),
+                    "text": truncated_context,
                 },
             }
         )
@@ -52,13 +75,14 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
 
     # Build blocks for each question
     for i, question in enumerate(pending.questions):
-        # Question text
+        # Question text (truncated to fit Slack limits)
+        question_text = f"*{question.header}*\n{question.question}"
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*{question.header}*\n{question.question}",
+                    "text": _truncate_text(question_text),
                 },
             }
         )
@@ -78,13 +102,14 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
                 descriptions.append(f"• *{opt.label}*: {opt.description}")
 
         if descriptions:
+            descriptions_text = _truncate_text("\n".join(descriptions))
             blocks.append(
                 {
                     "type": "context",
                     "elements": [
                         {
                             "type": "mrkdwn",
-                            "text": "\n".join(descriptions),
+                            "text": descriptions_text,
                         }
                     ],
                 }
