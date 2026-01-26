@@ -10,6 +10,10 @@ from loguru import logger
 from ..config import config
 from .streaming import StreamMessage, StreamParser
 
+# Timeout for reading a single line from Claude process stdout
+# If no output is received for this duration, assume the process is hung
+READLINE_TIMEOUT_SECONDS = 120
+
 if TYPE_CHECKING:
     from ..database.repository import DatabaseRepository
 
@@ -241,9 +245,29 @@ class SubprocessExecutor:
         error_msg = None
 
         try:
-            # Read stdout line by line
+            # Read stdout line by line with timeout protection
             while True:
-                line = await process.stdout.readline()
+                try:
+                    line = await asyncio.wait_for(
+                        process.stdout.readline(),
+                        timeout=READLINE_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"{log_prefix}Readline timeout after {READLINE_TIMEOUT_SECONDS}s - "
+                        "Claude process may be hung or lost connection"
+                    )
+                    await _terminate_process_safely(process)
+                    return ExecutionResult(
+                        success=False,
+                        output=accumulated_output,
+                        detailed_output=accumulated_detailed,
+                        session_id=result_session_id,
+                        error=(
+                            f"Claude process timed out (no output for {READLINE_TIMEOUT_SECONDS}s). "
+                            "The process may have hung or lost connection to the API."
+                        ),
+                    )
 
                 if not line:
                     break

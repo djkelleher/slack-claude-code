@@ -12,7 +12,6 @@ from typing import Optional
 from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
-from ..config import config
 from ..database.repository import DatabaseRepository
 from ..hooks.registry import HookRegistry, create_context
 from ..hooks.types import HookEvent, HookEventType
@@ -88,9 +87,11 @@ class PermissionManager:
     """Manages pending permission requests with Slack integration.
 
     Uses async futures to block until user responds via Slack buttons.
+    Thread-safe via asyncio.Lock for all _pending dictionary access.
     """
 
     _pending: dict[str, PendingApproval] = {}
+    _lock: asyncio.Lock = asyncio.Lock()
 
     @classmethod
     async def request_approval(
@@ -102,10 +103,12 @@ class PermissionManager:
         user_id: Optional[str] = None,
         thread_ts: Optional[str] = None,
         slack_client: Optional[AsyncWebClient] = None,
-        timeout: int = None,
         db: Optional[DatabaseRepository] = None,
+        auto_approve_tools: list[str] = None,
     ) -> bool:
         """Request approval via Slack and wait for response.
+
+        Waits indefinitely until the user responds via Slack buttons.
 
         Args:
             session_id: The session requesting approval
@@ -115,17 +118,14 @@ class PermissionManager:
             user_id: Optional user who initiated the request
             thread_ts: Optional thread to post in
             slack_client: Slack client for posting message
-            timeout: Timeout in seconds (defaults to config)
             db: Optional database repository for notification settings
+            auto_approve_tools: List of tool names to auto-approve
 
         Returns:
-            True if approved, False if denied or timed out
+            True if approved, False if denied or cancelled
         """
-        if timeout is None:
-            timeout = config.timeouts.execution.permission
-
         # Check if tool is in auto-approve list
-        if tool_name in config.AUTO_APPROVE_TOOLS:
+        if auto_approve_tools and tool_name in auto_approve_tools:
             logger.info(f"Auto-approving tool: {tool_name}")
             return True
 
@@ -141,7 +141,8 @@ class PermissionManager:
             thread_ts=thread_ts,
         )
 
-        cls._pending[approval_id] = approval
+        async with cls._lock:
+            cls._pending[approval_id] = approval
 
         # Emit APPROVAL_NEEDED hook
         await HookRegistry.emit(
@@ -183,24 +184,17 @@ class PermissionManager:
                 # Post channel notification (triggers sound + unread badge)
                 await _post_permission_notification(slack_client, channel_id, thread_ts, db)
 
-            # Wait for response with timeout
-            approved = await asyncio.wait_for(
-                approval.future,
-                timeout=timeout,
-            )
-
+            # Wait for response indefinitely (no timeout)
+            approved = await approval.future
             return approved
-
-        except asyncio.TimeoutError:
-            logger.info(f"Approval {approval_id} timed out after {timeout}s")
-            return False
 
         except asyncio.CancelledError:
             logger.info(f"Approval {approval_id} was cancelled")
             return False
 
         finally:
-            cls._pending.pop(approval_id, None)
+            async with cls._lock:
+                cls._pending.pop(approval_id, None)
 
     @classmethod
     async def resolve(
@@ -221,18 +215,22 @@ class PermissionManager:
         Returns:
             The PendingApproval if found and resolved, None otherwise
         """
-        approval = cls._pending.get(approval_id)
-        if not approval:
-            logger.warning(f"Approval {approval_id} not found")
-            return None
+        async with cls._lock:
+            approval = cls._pending.get(approval_id)
+            if not approval:
+                logger.warning(f"Approval {approval_id} not found")
+                return None
 
-        # Use try-except to handle race condition where another coroutine
-        # could resolve the future between our check and set_result
-        try:
-            approval.future.set_result(approved)
-        except asyncio.InvalidStateError:
-            logger.warning(f"Approval {approval_id} already resolved")
-            return None
+            # Use try-except to handle race condition where another coroutine
+            # could resolve the future between our check and set_result
+            try:
+                approval.future.set_result(approved)
+            except asyncio.InvalidStateError:
+                logger.warning(f"Approval {approval_id} already resolved")
+                # Remove from _pending to prevent memory leak
+                cls._pending.pop(approval_id, None)
+                return None
+
         logger.info(
             f"Approval {approval_id} {'approved' if approved else 'denied'} "
             f"by {resolved_by or 'unknown'}"
@@ -259,7 +257,7 @@ class PermissionManager:
         return approval
 
     @classmethod
-    def cancel(cls, approval_id: str) -> bool:
+    async def cancel(cls, approval_id: str) -> bool:
         """Cancel a pending approval request.
 
         Args:
@@ -268,18 +266,19 @@ class PermissionManager:
         Returns:
             True if approval was found and cancelled
         """
-        approval = cls._pending.get(approval_id)
-        if not approval:
-            return False
+        async with cls._lock:
+            approval = cls._pending.get(approval_id)
+            if not approval:
+                return False
 
-        if not approval.future.done():
-            approval.future.cancel()
+            if not approval.future.done():
+                approval.future.cancel()
 
-        cls._pending.pop(approval_id, None)
+            cls._pending.pop(approval_id, None)
         return True
 
     @classmethod
-    def cancel_for_session(cls, session_id: str) -> int:
+    async def cancel_for_session(cls, session_id: str) -> int:
         """Cancel all pending approvals for a session.
 
         Args:
@@ -288,15 +287,20 @@ class PermissionManager:
         Returns:
             Number of approvals cancelled
         """
-        to_cancel = [aid for aid, a in cls._pending.items() if a.session_id == session_id]
+        async with cls._lock:
+            to_cancel = [aid for aid, a in cls._pending.items() if a.session_id == session_id]
 
-        for approval_id in to_cancel:
-            cls.cancel(approval_id)
+            for approval_id in to_cancel:
+                approval = cls._pending.get(approval_id)
+                if approval:
+                    if not approval.future.done():
+                        approval.future.cancel()
+                    cls._pending.pop(approval_id, None)
 
         return len(to_cancel)
 
     @classmethod
-    def get_pending(cls, session_id: Optional[str] = None) -> list[PendingApproval]:
+    async def get_pending(cls, session_id: Optional[str] = None) -> list[PendingApproval]:
         """Get pending approvals.
 
         Args:
@@ -305,12 +309,14 @@ class PermissionManager:
         Returns:
             List of pending approvals
         """
-        approvals = list(cls._pending.values())
-        if session_id:
-            approvals = [a for a in approvals if a.session_id == session_id]
+        async with cls._lock:
+            approvals = list(cls._pending.values())
+            if session_id:
+                approvals = [a for a in approvals if a.session_id == session_id]
         return approvals
 
     @classmethod
-    def count_pending(cls) -> int:
+    async def count_pending(cls) -> int:
         """Get count of pending approvals."""
-        return len(cls._pending)
+        async with cls._lock:
+            return len(cls._pending)

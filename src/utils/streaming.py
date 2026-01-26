@@ -2,7 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from loguru import logger
 
@@ -11,6 +11,9 @@ from src.utils.formatting import SlackFormatter
 
 if TYPE_CHECKING:
     from src.claude.streaming import ToolActivity
+
+# Number of consecutive failures before triggering error callback
+MAX_CONSECUTIVE_UPDATE_FAILURES = 3
 
 
 @dataclass
@@ -52,6 +55,9 @@ class StreamingMessageState:
     _heartbeat_task: Optional["asyncio.Task[None]"] = field(default=None, repr=False)
     _is_idle: bool = field(default=False)
     db_session_id: Optional[int] = None
+    on_error: Optional[Callable[[str], Awaitable[None]]] = None
+    _consecutive_failures: int = field(default=0)
+    _error_callback_triggered: bool = field(default=False)
 
     def get_tool_list(self) -> list["ToolActivity"]:
         """Get list of tracked tool activities."""
@@ -346,8 +352,27 @@ class StreamingMessageState:
                     tool_activities=tool_list,
                 ),
             )
+            # Reset failure counter on success
+            self._consecutive_failures = 0
         except Exception as e:
-            self.logger.warning(f"Failed to update message: {e}")
+            self._consecutive_failures += 1
+            self.logger.warning(
+                f"Failed to update message (attempt {self._consecutive_failures}): {e}"
+            )
+            # Trigger error callback after repeated failures (only once)
+            if (
+                self._consecutive_failures >= MAX_CONSECUTIVE_UPDATE_FAILURES
+                and self.on_error
+                and not self._error_callback_triggered
+            ):
+                self._error_callback_triggered = True
+                try:
+                    await self.on_error(
+                        f"Failed to update Slack message after {self._consecutive_failures} "
+                        f"consecutive attempts. Last error: {e}"
+                    )
+                except Exception as callback_error:
+                    self.logger.error(f"Error callback failed: {callback_error}")
 
     async def finalize(self) -> None:
         """Send final update to mark streaming as complete."""
@@ -374,6 +399,16 @@ class StreamingMessageState:
             )
         except Exception as e:
             self.logger.warning(f"Failed to finalize message: {e}")
+            # Try to notify user of finalization failure (if callback available and not already triggered)
+            if self.on_error and not self._error_callback_triggered:
+                self._error_callback_triggered = True
+                try:
+                    await self.on_error(
+                        f"Failed to finalize Slack message: {e}. "
+                        "The response may not be fully visible."
+                    )
+                except Exception as callback_error:
+                    self.logger.error(f"Error callback failed: {callback_error}")
 
 
 def create_streaming_callback(state: StreamingMessageState) -> Callable:

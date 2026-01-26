@@ -10,11 +10,10 @@ from src.config_storage import get_storage
 class ExecutionTimeouts(BaseModel):
     """Timeout configuration for command execution."""
 
-    permission: int = 300
     usage_check: int = 30
     max_questions_per_conversation: int = 10
 
-    @field_validator("permission", "usage_check", "max_questions_per_conversation")
+    @field_validator("usage_check", "max_questions_per_conversation")
     @classmethod
     def validate_positive(cls, v: int, info) -> int:
         """Ensure timeout values are positive integers."""
@@ -182,7 +181,6 @@ class Config(BaseSettings):
     GITHUB_REPO: str = ""
 
     # Execution timeout overrides from environment
-    PERMISSION_TIMEOUT: int = 300
     USAGE_CHECK_TIMEOUT: int = 30
     MAX_QUESTIONS_PER_CONVERSATION: int = 10
 
@@ -216,7 +214,6 @@ class Config(BaseSettings):
         """Build TimeoutConfig from environment variables."""
         return TimeoutConfig(
             execution=ExecutionTimeouts(
-                permission=self.PERMISSION_TIMEOUT,
                 usage_check=self.USAGE_CHECK_TIMEOUT,
                 max_questions_per_conversation=self.MAX_QUESTIONS_PER_CONVERSATION,
             ),

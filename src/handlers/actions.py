@@ -699,7 +699,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         question_id = action["value"]
 
         # Check if question still exists
-        pending = QuestionManager.get_pending(question_id)
+        pending = await QuestionManager.get_pending(question_id)
         if not pending:
             await client.chat_postEphemeral(
                 channel=body["channel"]["id"],
@@ -725,15 +725,21 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         from src.question.slack_ui import build_question_result_blocks
 
         try:
-            data = json.loads(action["value"])
+            # Validate size before parsing to prevent resource exhaustion
+            action_value = action["value"]
+            max_size = config.timeouts.limits.max_action_value_size
+            if len(action_value) > max_size:
+                logger.error(f"Action value too large: {len(action_value)} bytes")
+                return
+            data = json.loads(action_value)
             question_id = data["q"]
             question_index = data["i"]
             selected_label = data["l"]
-        except (json.JSONDecodeError, KeyError) as e:
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.error(f"Invalid question action data: {e}")
             return
 
-        pending = QuestionManager.get_pending(question_id)
+        pending = await QuestionManager.get_pending(question_id)
         if not pending:
             await client.chat_postEphemeral(
                 channel=body["channel"]["id"],
@@ -743,10 +749,10 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         # Set the answer for this question
-        QuestionManager.set_answer(question_id, question_index, [selected_label])
+        await QuestionManager.set_answer(question_id, question_index, [selected_label])
 
         # Check if all questions are answered
-        if QuestionManager.is_complete(question_id):
+        if await QuestionManager.is_complete(question_id):
             # Resolve the question
             resolved = await QuestionManager.resolve(question_id)
             if resolved:
@@ -789,7 +795,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         selected_options = action.get("selected_options", [])
         selected_labels = [opt.get("value", "") for opt in selected_options]
 
-        pending = QuestionManager.get_pending(question_id)
+        pending = await QuestionManager.get_pending(question_id)
         if not pending:
             await client.chat_postEphemeral(
                 channel=body["channel"]["id"],
@@ -799,7 +805,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         # Set the answer for this question
-        QuestionManager.set_answer(question_id, question_index, selected_labels)
+        await QuestionManager.set_answer(question_id, question_index, selected_labels)
 
         # For multi-select, the user needs to click "Submit Selections" button
         # to complete the question (see question_multiselect_submit handler below)
@@ -814,7 +820,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         question_id = action["value"]
 
-        pending = QuestionManager.get_pending(question_id)
+        pending = await QuestionManager.get_pending(question_id)
         if not pending:
             await client.chat_postEphemeral(
                 channel=body["channel"]["id"],
@@ -826,10 +832,10 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         # For multi-select questions without any selections, set empty list
         for i, question in enumerate(pending.questions):
             if question.multi_select and i not in pending.answers:
-                QuestionManager.set_answer(question_id, i, [])
+                await QuestionManager.set_answer(question_id, i, [])
 
         # Check if all questions have been answered
-        if not QuestionManager.is_complete(question_id):
+        if not await QuestionManager.is_complete(question_id):
             # Some single-select questions haven't been answered yet
             await client.chat_postEphemeral(
                 channel=body["channel"]["id"],
@@ -871,7 +877,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             "value"
         ]
 
-        pending = QuestionManager.get_pending(question_id)
+        pending = await QuestionManager.get_pending(question_id)
         if not pending:
             # Question already resolved or timed out
             return
@@ -882,7 +888,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         else:
             prefixed_answer = custom_answer
         for i in range(len(pending.questions)):
-            QuestionManager.set_answer(question_id, i, [prefixed_answer])
+            await QuestionManager.set_answer(question_id, i, [prefixed_answer])
 
         # Resolve the question
         resolved = await QuestionManager.resolve(question_id)

@@ -322,6 +322,18 @@ async def main():
         # Setup streaming state with tool tracking
         execution_id = str(uuid.uuid4())
 
+        # Error callback for streaming failures - posts error to channel
+        async def on_streaming_error(error_msg: str) -> None:
+            """Handle streaming errors by posting to Slack channel."""
+            try:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=f":warning: {error_msg}",
+                )
+            except Exception as e:
+                logger.error(f"Failed to post streaming error notification: {e}")
+
         streaming_state = StreamingMessageState(
             channel_id=channel_id,
             message_ts=message_ts,
@@ -331,6 +343,7 @@ async def main():
             track_tools=True,
             smart_concat=True,
             db_session_id=session.id,
+            on_error=on_streaming_error,
         )
         # Start heartbeat to show progress during idle periods
         streaming_state.start_heartbeat()
@@ -477,6 +490,7 @@ async def main():
                         track_tools=True,
                         smart_concat=True,
                         db_session_id=session.id,
+                        on_error=on_streaming_error,
                     )
                     streaming_state.start_heartbeat()
 
@@ -507,11 +521,11 @@ async def main():
                         )
                     # Loop continues - will check if pending_question was set by on_chunk
                 else:
-                    # Timeout or cancelled - update message and break
-                    logger.info("Question timed out or cancelled")
+                    # Question was cancelled - update message and break
+                    logger.info("Question was cancelled")
                     result.output = (
                         streaming_state.accumulated_output
-                        + "\n\n_Question timed out - no response received._"
+                        + "\n\n_Question was cancelled._"
                     )
                     result.success = False
                     break
@@ -608,6 +622,7 @@ async def main():
                         track_tools=True,
                         smart_concat=True,
                         db_session_id=session.id,
+                        on_error=on_streaming_error,
                     )
                     streaming_state.start_heartbeat()
                     on_chunk = create_on_chunk_callback(streaming_state)
@@ -763,7 +778,16 @@ async def main():
             if pending_question:
                 await QuestionManager.cancel(pending_question.question_id)
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
-            # Don't try to update Slack message if Slack API is failing
+            # Try to post a new error message instead of updating (in case update is failing)
+            try:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=f":x: Slack API Error: {str(e)[:200]}",
+                    blocks=SlackFormatter.error_message(f"Slack API Error: {str(e)}"),
+                )
+            except Exception as notify_error:
+                logger.error(f"Failed to post Slack API error notification: {notify_error}")
         except (OSError, IOError) as e:
             logger.error(f"I/O error executing command: {e}\n{traceback.format_exc()}")
             await streaming_state.stop_heartbeat()
