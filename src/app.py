@@ -330,6 +330,7 @@ async def main():
             logger=logger,
             track_tools=True,
             smart_concat=True,
+            db_session_id=session.id,
         )
         # Start heartbeat to show progress during idle periods
         streaming_state.start_heartbeat()
@@ -374,9 +375,23 @@ async def main():
 
         on_chunk = create_on_chunk_callback(streaming_state)
 
+        # In plan mode, inject the session-specific plan file path into the prompt
+        # This ensures each session writes to a unique file, avoiding race conditions
+        execution_prompt = prompt
+        if session.permission_mode == "plan":
+            plan_file_path = streaming_state.get_session_plan_path()
+            # Ensure the plans directory exists
+            plans_dir = os.path.dirname(plan_file_path)
+            os.makedirs(plans_dir, exist_ok=True)
+            execution_prompt = (
+                f"{prompt}\n\n"
+                f"[Plan mode: Write your plan to {plan_file_path}]"
+            )
+            logger.info(f"Plan mode: session {session.id} plan file path: {plan_file_path}")
+
         try:
             result = await executor.execute(
-                prompt=prompt,
+                prompt=execution_prompt,
                 working_directory=session.working_directory,
                 session_id=channel_id,
                 resume_session_id=session.claude_session_id,  # Resume previous session if exists
@@ -461,6 +476,7 @@ async def main():
                         logger=logger,
                         track_tools=True,
                         smart_concat=True,
+                        db_session_id=session.id,
                     )
                     streaming_state.start_heartbeat()
 
@@ -591,6 +607,7 @@ async def main():
                         logger=logger,
                         track_tools=True,
                         smart_concat=True,
+                        db_session_id=session.id,
                     )
                     streaming_state.start_heartbeat()
                     on_chunk = create_on_chunk_callback(streaming_state)
@@ -732,7 +749,7 @@ async def main():
             logger.info("Command execution was cancelled")
             await streaming_state.stop_heartbeat()
             if pending_question:
-                QuestionManager.cancel(pending_question.question_id)
+                await QuestionManager.cancel(pending_question.question_id)
             await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
             await client.chat_update(
                 channel=channel_id,
@@ -744,14 +761,14 @@ async def main():
             logger.error(f"Slack API error executing command: {e}\n{traceback.format_exc()}")
             await streaming_state.stop_heartbeat()
             if pending_question:
-                QuestionManager.cancel(pending_question.question_id)
+                await QuestionManager.cancel(pending_question.question_id)
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             # Don't try to update Slack message if Slack API is failing
         except (OSError, IOError) as e:
             logger.error(f"I/O error executing command: {e}\n{traceback.format_exc()}")
             await streaming_state.stop_heartbeat()
             if pending_question:
-                QuestionManager.cancel(pending_question.question_id)
+                await QuestionManager.cancel(pending_question.question_id)
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
@@ -764,7 +781,7 @@ async def main():
             logger.error(f"Unexpected error executing command: {type(e).__name__}: {e}\n{traceback.format_exc()}")
             await streaming_state.stop_heartbeat()
             if pending_question:
-                QuestionManager.cancel(pending_question.question_id)
+                await QuestionManager.cancel(pending_question.question_id)
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,

@@ -51,18 +51,45 @@ class StreamingMessageState:
     _last_chunk_was_newline: bool = field(default=False)
     _heartbeat_task: Optional["asyncio.Task[None]"] = field(default=None, repr=False)
     _is_idle: bool = field(default=False)
+    db_session_id: Optional[int] = None
 
     def get_tool_list(self) -> list["ToolActivity"]:
         """Get list of tracked tool activities."""
         return list(self.tool_activities.values())
 
+    def get_session_plan_filename(self) -> str:
+        """Generate session-specific plan filename.
+
+        Returns
+        -------
+        str
+            Filename like 'plan-session-123.md' for the current session.
+        """
+        if self.db_session_id:
+            return f"plan-session-{self.db_session_id}.md"
+        return "plan.md"
+
+    def get_session_plan_path(self) -> str:
+        """Get the expected session-specific plan file path.
+
+        Returns
+        -------
+        str
+            Full path to the session-specific plan file.
+        """
+        import os
+
+        plans_dir = os.path.expanduser("~/.claude/plans")
+        return os.path.join(plans_dir, self.get_session_plan_filename())
+
     def get_plan_file_path(self, working_directory: Optional[str] = None) -> Optional[str]:
         """Get the plan file path if one was written during plan mode.
 
         Checks in order:
-        1. Write tool activities for direct writes to ~/.claude/plans/
-        2. Task (Plan subagent) results for plan file paths mentioned in output
-        3. Fallback: scan ~/.claude/plans/ for recently modified .md files
+        1. Session-specific plan file (plan-session-{id}.md) - highest priority
+        2. Write tool activities for direct writes to ~/.claude/plans/
+        3. Task (Plan subagent) results for plan file paths mentioned in output
+        4. Fallback: scan ~/.claude/plans/ for recently modified .md files
 
         Parameters
         ----------
@@ -79,22 +106,60 @@ class StreamingMessageState:
 
         plans_dir = os.path.expanduser("~/.claude/plans")
 
-        # First check tracked Write tool activities for exact match
+        # Log available tool activities for debugging
+        tool_names = [f"{t.name}({t.id[:8]})" for t in self.tool_activities.values()]
+        logger.debug(f"Looking for plan file. Available tools: {tool_names}")
+
+        # HIGHEST PRIORITY: Check for session-specific plan file
+        # This prevents race conditions when multiple sessions run in parallel
+        if self.db_session_id:
+            session_plan_path = self.get_session_plan_path()
+            if os.path.isfile(session_plan_path):
+                logger.info(
+                    f"Plan file found via session-specific path: {session_plan_path}"
+                )
+                return session_plan_path
+            logger.debug(
+                f"Session-specific plan file not found at {session_plan_path}, "
+                "checking other sources"
+            )
+
+        # Check tracked Write tool activities for plan files
+        plan_write_candidates = []
         for tool in self.tool_activities.values():
             if tool.name == "Write" and not tool.is_error:
                 file_path = tool.input.get("file_path", "")
-                if file_path.endswith(".md") and file_path.startswith(plans_dir):
-                    logger.info(f"Plan file found via Write tool activity: {file_path}")
-                    return file_path
+                # Expand ~ in the file path before comparing
+                expanded_file_path = os.path.expanduser(file_path)
+                if expanded_file_path.endswith(".md"):
+                    # Prioritize files in ~/.claude/plans/
+                    if expanded_file_path.startswith(plans_dir):
+                        logger.info(f"Plan file found via Write tool activity: {expanded_file_path}")
+                        return expanded_file_path
+                    # Track other .md files as potential plan files
+                    elif "plan" in expanded_file_path.lower():
+                        plan_write_candidates.append(expanded_file_path)
+                        logger.debug(f"Potential plan file via Write activity: {expanded_file_path}")
+
+        # If we found a Write to a plan-named file outside ~/.claude/plans/, use that
+        if plan_write_candidates:
+            # Prefer most recently tracked
+            result = plan_write_candidates[-1]
+            if os.path.isfile(result):
+                logger.info(f"Plan file found via Write tool activity (fallback): {result}")
+                return result
 
         # Check Task (Plan subagent) results for plan file paths
         # The subagent result text often contains the file path it wrote to
         for tool in self.tool_activities.values():
             if tool.name == "Task" and tool.full_result and not tool.is_error:
+                logger.debug(f"Checking Task tool result for plan file: {tool.full_result[:500]}...")
                 # Look for paths like ~/.claude/plans/something.md or /home/user/.claude/plans/something.md
+                # Use broader pattern to catch various filename formats (words, hyphens, underscores, dots)
                 patterns = [
-                    r"~/.claude/plans/[\w\-]+\.md",
-                    rf"{re.escape(plans_dir)}/[\w\-]+\.md",
+                    r"~/.claude/plans/[^\s\"']+\.md",
+                    rf"{re.escape(plans_dir)}/[^\s\"']+\.md",
+                    r"/home/[^/]+/.claude/plans/[^\s\"']+\.md",
                 ]
                 for pattern in patterns:
                     match = re.search(pattern, tool.full_result)
@@ -105,30 +170,48 @@ class StreamingMessageState:
                         if os.path.isfile(expanded):
                             logger.info(f"Plan file found via Task subagent result: {expanded}")
                             return expanded
+                        else:
+                            logger.debug(f"Path from Task result not a file: {expanded}")
 
         # Fallback: scan directory for recently modified plan files
-        if not os.path.isdir(plans_dir):
-            logger.debug(f"Plans directory does not exist: {plans_dir}")
-            return None
-
+        # Note: This fallback can cause race conditions with parallel sessions
+        # Session-specific naming (above) should be preferred
         import time
 
         candidates = []
         now = time.time()
         max_age_seconds = config.timeouts.limits.plan_file_max_age_seconds
 
-        try:
-            for entry in os.scandir(plans_dir):
-                if entry.is_file() and entry.name.endswith(".md"):
-                    mtime = entry.stat().st_mtime
-                    if now - mtime < max_age_seconds:
-                        candidates.append((entry.path, mtime))
-        except OSError as e:
-            logger.warning(f"Failed to scan plans directory {plans_dir}: {e}")
-            return None
+        # Scan ~/.claude/plans/ directory
+        if os.path.isdir(plans_dir):
+            try:
+                for entry in os.scandir(plans_dir):
+                    if entry.is_file() and entry.name.endswith(".md"):
+                        mtime = entry.stat().st_mtime
+                        if now - mtime < max_age_seconds:
+                            candidates.append((entry.path, mtime))
+                            logger.debug(f"Found candidate plan file: {entry.path} (age: {now - mtime:.0f}s)")
+            except OSError as e:
+                logger.warning(f"Failed to scan plans directory {plans_dir}: {e}")
+        else:
+            logger.debug(f"Plans directory does not exist: {plans_dir}")
+
+        # Also check working directory for plan files (in case Claude wrote there)
+        if working_directory:
+            try:
+                wd = os.path.expanduser(working_directory)
+                if os.path.isdir(wd):
+                    for entry in os.scandir(wd):
+                        if entry.is_file() and entry.name.lower() == "plan.md":
+                            mtime = entry.stat().st_mtime
+                            if now - mtime < max_age_seconds:
+                                candidates.append((entry.path, mtime))
+                                logger.debug(f"Found candidate plan file in working dir: {entry.path}")
+            except OSError as e:
+                logger.debug(f"Failed to scan working directory {working_directory}: {e}")
 
         if not candidates:
-            logger.debug(f"No recent plan files found in {plans_dir}")
+            logger.debug(f"No recent plan files found in {plans_dir} or working directory")
             return None
 
         # Return the most recently modified plan file
