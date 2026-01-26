@@ -209,6 +209,16 @@ class DatabaseRepository:
             rows = await cursor.fetchall()
             return [Session.from_row(row) for row in rows]
 
+    async def get_session_by_id(self, session_id: int) -> Optional[Session]:
+        """Get a session by its database ID."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "SELECT * FROM sessions WHERE id = ?",
+                (session_id,),
+            )
+            row = await cursor.fetchone()
+            return Session.from_row(row) if row else None
+
     async def delete_session(self, channel_id: str, thread_ts: Optional[str] = None) -> bool:
         """Delete a specific session."""
         async with self._get_connection() as db:

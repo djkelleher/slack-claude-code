@@ -72,17 +72,41 @@ class SubprocessExecutor:
         db: Optional["DatabaseRepository"] = None,
     ) -> None:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self._lock: asyncio.Lock = asyncio.Lock()
         self.db = db
         # Track ExitPlanMode for retry logic and early termination
         self._exit_plan_mode_tool_id: Optional[str] = None
         self._exit_plan_mode_error_detected: bool = False
         self._exit_plan_mode_detected: bool = False  # For early termination to show approval UI
-        self._is_retry_after_exit_plan_error: bool = False
         # Track AskUserQuestion for early termination
         self._ask_user_question_detected: bool = False
         # Track Plan subagent (Task tool with subagent_type=Plan) for plan approval
         self._plan_subagent_tool_id: Optional[str] = None
         self._plan_subagent_completed: bool = False
+
+    async def _get_current_permission_mode(
+        self, db_session_id: Optional[int], fallback_mode: Optional[str]
+    ) -> str:
+        """Get the current permission mode from the database.
+
+        This allows detecting mode changes made via /mode command during execution.
+        For example, if user switches to plan mode mid-execution, we can pick it up.
+
+        Args:
+            db_session_id: Database session ID to check
+            fallback_mode: Mode to return if DB lookup fails
+
+        Returns:
+            Current permission mode from DB, or fallback_mode if not available
+        """
+        if not self.db or not db_session_id:
+            return fallback_mode or config.CLAUDE_PERMISSION_MODE
+
+        session = await self.db.get_session_by_id(db_session_id)
+        if session and session.permission_mode:
+            return session.permission_mode
+
+        return fallback_mode or config.CLAUDE_PERMISSION_MODE
 
     async def execute(
         self,
@@ -96,6 +120,7 @@ class SubprocessExecutor:
         db_session_id: Optional[int] = None,
         model: Optional[str] = None,
         _recursion_depth: int = 0,
+        _is_retry_after_exit_plan_error: bool = False,
     ) -> ExecutionResult:
         """Execute a prompt via Claude Code subprocess.
 
@@ -134,7 +159,6 @@ class SubprocessExecutor:
         self._exit_plan_mode_tool_id = None
         self._exit_plan_mode_error_detected = False
         self._exit_plan_mode_detected = False
-        # Note: _is_retry_after_exit_plan_error is preserved during retry to prevent infinite loops
         # Reset AskUserQuestion detection
         self._ask_user_question_detected = False
         # Reset Plan subagent detection
@@ -205,7 +229,8 @@ class SubprocessExecutor:
 
         # Track process for cancellation
         track_id = execution_id or session_id or "default"
-        self._active_processes[track_id] = process
+        async with self._lock:
+            self._active_processes[track_id] = process
 
         parser = StreamParser()
         accumulated_output = ""
@@ -268,22 +293,35 @@ class SubprocessExecutor:
                                     logger.info(f"{log_prefix}AskUserQuestion detected - will terminate for Slack handling")
                                 elif tool_name == "ExitPlanMode":
                                     self._exit_plan_mode_tool_id = block.get("id")
+                                    # Check current mode from DB - user may have switched to plan mode
+                                    # during execution via /mode command
+                                    current_mode = await self._get_current_permission_mode(
+                                        db_session_id, permission_mode
+                                    )
                                     # Mark for early termination to handle approval in Slack
-                                    if permission_mode == "plan":
+                                    if current_mode == "plan":
                                         self._exit_plan_mode_detected = True
                                         logger.info(
-                                            f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval"
+                                            f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval (mode={current_mode})"
                                         )
                                     else:
-                                        logger.info(f"{log_prefix}Tool: ExitPlanMode")
+                                        logger.info(f"{log_prefix}Tool: ExitPlanMode (mode={current_mode}, no approval needed)")
                                 elif tool_name == "Task":
                                     # Track Task tool with Plan subagent for plan approval
                                     subagent_type = tool_input.get("subagent_type", "")
-                                    if subagent_type == "Plan" and permission_mode == "plan":
-                                        self._plan_subagent_tool_id = block.get("id")
-                                        logger.info(
-                                            f"{log_prefix}Tool: Task (Plan subagent) - will trigger approval on completion"
+                                    if subagent_type == "Plan":
+                                        # Check current mode from DB - user may have switched to plan mode
+                                        current_mode = await self._get_current_permission_mode(
+                                            db_session_id, permission_mode
                                         )
+                                        if current_mode == "plan":
+                                            self._plan_subagent_tool_id = block.get("id")
+                                            logger.info(
+                                                f"{log_prefix}Tool: Task (Plan subagent) - will trigger approval on completion (mode={current_mode})"
+                                            )
+                                        else:
+                                            desc = tool_input.get("description", "")[:50]
+                                            logger.info(f"{log_prefix}Tool: Task (Plan subagent) '{desc}...' (mode={current_mode}, no approval)")
                                     else:
                                         desc = tool_input.get("description", "")[:50]
                                         logger.info(f"{log_prefix}Tool: Task '{desc}...'")
@@ -300,12 +338,15 @@ class SubprocessExecutor:
                             logger.info(f"{log_prefix}Tool result [{tool_use_id}]: {status}")
 
                             # Detect ExitPlanMode ERROR for immediate retry
+                            # Note: _exit_plan_mode_detected is only set when mode was "plan" at
+                            # tool detection time (checked via DB), so we check that flag here
+                            # instead of permission_mode to support dynamic mode switching
                             if (
                                 is_error
                                 and self._exit_plan_mode_tool_id
                                 and tool_use_id.startswith(self._exit_plan_mode_tool_id[:8])
-                                and permission_mode == "plan"
-                                and not self._is_retry_after_exit_plan_error
+                                and self._exit_plan_mode_detected
+                                and not _is_retry_after_exit_plan_error
                             ):
                                 logger.warning(
                                     f"{log_prefix}ExitPlanMode failed - will retry with bypass mode"
@@ -313,11 +354,12 @@ class SubprocessExecutor:
                                 self._exit_plan_mode_error_detected = True
 
                             # Detect Plan subagent completion - trigger plan approval
+                            # Note: _plan_subagent_tool_id is only set when mode was "plan" at
+                            # tool detection time (checked via DB), so no additional mode check needed
                             if (
                                 not is_error
                                 and self._plan_subagent_tool_id
                                 and tool_use_id.startswith(self._plan_subagent_tool_id[:8])
-                                and permission_mode == "plan"
                             ):
                                 logger.info(
                                     f"{log_prefix}Plan subagent completed - will trigger Slack approval"
@@ -437,35 +479,26 @@ class SubprocessExecutor:
                 )
 
             # Check if ExitPlanMode error detected - retry without plan mode
-            if (
-                self._exit_plan_mode_error_detected
-                and permission_mode == "plan"
-                and not self._is_retry_after_exit_plan_error
-            ):
+            # Note: _exit_plan_mode_error_detected is only set when mode was "plan" at tool
+            # detection time, so no need to re-check permission_mode here
+            if self._exit_plan_mode_error_detected and not _is_retry_after_exit_plan_error:
                 logger.info(
                     f"{log_prefix}Retrying execution with bypass mode after ExitPlanMode error (depth={_recursion_depth + 1})"
                 )
 
-                # Prevent infinite retry loop
-                self._is_retry_after_exit_plan_error = True
-
-                try:
-                    result = await self.execute(
-                        prompt=prompt,
-                        working_directory=working_directory,
-                        session_id=session_id,
-                        resume_session_id=resume_session_id,  # Keep the session
-                        execution_id=execution_id,
-                        on_chunk=on_chunk,
-                        permission_mode=config.DEFAULT_BYPASS_MODE,  # Switch to bypass mode
-                        db_session_id=db_session_id,
-                        model=model,
-                        _recursion_depth=_recursion_depth + 1,
-                    )
-                    return result
-                finally:
-                    # Reset retry flag after completion so future executions work normally
-                    self._is_retry_after_exit_plan_error = False
+                return await self.execute(
+                    prompt=prompt,
+                    working_directory=working_directory,
+                    session_id=session_id,
+                    resume_session_id=resume_session_id,  # Keep the session
+                    execution_id=execution_id,
+                    on_chunk=on_chunk,
+                    permission_mode=config.DEFAULT_BYPASS_MODE,  # Switch to bypass mode
+                    db_session_id=db_session_id,
+                    model=model,
+                    _recursion_depth=_recursion_depth + 1,
+                    _is_retry_after_exit_plan_error=True,  # Prevent infinite retry
+                )
 
             # Plan approval is triggered by either ExitPlanMode or Plan subagent completion
             has_plan_approval = self._exit_plan_mode_detected or self._plan_subagent_completed
@@ -503,11 +536,13 @@ class SubprocessExecutor:
                 error=str(e),
             )
         finally:
-            self._active_processes.pop(track_id, None)
+            async with self._lock:
+                self._active_processes.pop(track_id, None)
 
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""
-        process = self._active_processes.get(execution_id)
+        async with self._lock:
+            process = self._active_processes.get(execution_id)
         if process:
             process.terminate()
             return True
@@ -515,12 +550,12 @@ class SubprocessExecutor:
 
     async def cancel_all(self) -> int:
         """Cancel all active executions."""
-        count = 0
-        for process in list(self._active_processes.values()):
+        async with self._lock:
+            processes = list(self._active_processes.values())
+            self._active_processes.clear()
+        for process in processes:
             process.terminate()
-            count += 1
-        self._active_processes.clear()
-        return count
+        return len(processes)
 
     async def shutdown(self) -> None:
         """Shutdown and cancel all active executions."""
