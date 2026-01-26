@@ -559,8 +559,8 @@ async def main():
                 # when we terminate the subprocess immediately after detecting ExitPlanMode
                 plan_file_path = None
                 plan_content = ""
-                max_retries = 5
-                retry_delay = 0.5  # seconds
+                max_retries = 20
+                retry_delay = 0.5  # seconds (20 * 0.5 = 10 seconds max)
 
                 for attempt in range(max_retries):
                     plan_file_path = streaming_state.get_plan_file_path(
