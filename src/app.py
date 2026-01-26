@@ -595,8 +595,27 @@ async def main():
                         )
                         await asyncio.sleep(retry_delay)
 
-                # If no plan file was found, show error - don't use detailed_output
-                # as that contains conversation text, not the actual plan
+                # If no plan file was found, try using plan_subagent_result as fallback
+                # This handles the case where Plan subagent returns content without writing to file
+                if not plan_content and result.plan_subagent_result:
+                    logger.info(
+                        f"No plan file found, using Plan subagent result as fallback "
+                        f"({len(result.plan_subagent_result)} chars)"
+                    )
+                    plan_content = result.plan_subagent_result
+                    # Save to session-specific plan file so it can be referenced later
+                    try:
+                        plan_file_path = streaming_state.get_session_plan_path()
+                        plans_dir = os.path.dirname(plan_file_path)
+                        os.makedirs(plans_dir, exist_ok=True)
+                        with open(plan_file_path, "w") as f:
+                            f.write(plan_content)
+                        logger.info(f"Saved Plan subagent result to {plan_file_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to save Plan subagent result to file: {e}")
+                        plan_file_path = None
+
+                # If still no plan content, show error
                 if not plan_content:
                     logger.warning(
                         "No plan file found for approval. "
