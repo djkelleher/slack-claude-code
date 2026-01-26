@@ -115,6 +115,7 @@ class PlanApprovalManager:
                             content=plan_content,
                             filename=filename,
                             filetype="markdown",
+                            snippet_type="markdown",
                             title=f"Implementation Plan: {filename}",
                         )
                     except Exception as e:
