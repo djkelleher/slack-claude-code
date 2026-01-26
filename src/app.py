@@ -555,19 +555,45 @@ async def main():
                 logger.info("ExitPlanMode detected, requesting user approval")
 
                 # Get plan content from plan file if available
-                # Pass working directory for fallback search (handles subagent-written plans)
-                plan_file_path = streaming_state.get_plan_file_path(session.working_directory)
+                # Retry with small delays because the file may not be flushed to disk yet
+                # when we terminate the subprocess immediately after detecting ExitPlanMode
+                plan_file_path = None
                 plan_content = ""
-                if plan_file_path:
-                    try:
-                        with open(plan_file_path) as f:
-                            plan_content = f.read()
-                    except FileNotFoundError:
-                        logger.warning(f"Plan file not found: {plan_file_path}")
-                    except PermissionError:
-                        logger.warning(f"Cannot read plan file (permission denied): {plan_file_path}")
-                    except Exception as e:
-                        logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
+                max_retries = 5
+                retry_delay = 0.5  # seconds
+
+                for attempt in range(max_retries):
+                    plan_file_path = streaming_state.get_plan_file_path(
+                        session.working_directory
+                    )
+                    if plan_file_path:
+                        try:
+                            with open(plan_file_path) as f:
+                                plan_content = f.read()
+                            if plan_content:
+                                logger.info(
+                                    f"Plan file read successfully on attempt {attempt + 1}"
+                                )
+                                break
+                        except FileNotFoundError:
+                            logger.debug(
+                                f"Plan file not found on attempt {attempt + 1}: {plan_file_path}"
+                            )
+                        except PermissionError:
+                            logger.warning(
+                                f"Cannot read plan file (permission denied): {plan_file_path}"
+                            )
+                            break  # Don't retry permission errors
+                        except Exception as e:
+                            logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
+
+                    # Wait before retrying (except on last attempt)
+                    if attempt < max_retries - 1:
+                        logger.debug(
+                            f"Plan file not ready, waiting {retry_delay}s before retry "
+                            f"({attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(retry_delay)
 
                 # If no plan file was found, show error - don't use detailed_output
                 # as that contains conversation text, not the actual plan
