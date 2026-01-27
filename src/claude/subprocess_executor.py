@@ -12,7 +12,8 @@ from .streaming import StreamMessage, StreamParser
 
 # Timeout for reading a single line from Claude process stdout
 # If no output is received for this duration, assume the process is hung
-READLINE_TIMEOUT_SECONDS = 120
+# Set to 30 minutes to allow for long-running operations like writing large files
+READLINE_TIMEOUT_SECONDS = 1800
 
 if TYPE_CHECKING:
     from ..database.repository import DatabaseRepository
