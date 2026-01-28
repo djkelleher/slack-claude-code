@@ -76,10 +76,13 @@ class ExecutionState:
     exit_plan_mode_detected: bool = False  # For early termination to show approval UI
     # Track AskUserQuestion for early termination
     ask_user_question_detected: bool = False
-    # Track Plan subagent (Task tool with subagent_type=Plan) for plan approval
+    # Track Task tools in plan mode for plan approval
+    # When in plan mode, we track any Task tool (not just Plan subagents) to capture
+    # the plan content and prevent race conditions with ExitPlanMode
     plan_subagent_tool_id: Optional[str] = None
+    plan_subagent_is_plan_type: bool = False  # True if subagent_type="Plan"
     plan_subagent_completed: bool = False
-    plan_subagent_result: Optional[str] = None  # Store Plan subagent output for plan content
+    plan_subagent_result: Optional[str] = None  # Store Task output for plan content
 
 
 class SubprocessExecutor:
@@ -338,24 +341,36 @@ class SubprocessExecutor:
                                     else:
                                         logger.info(f"{log_prefix}Tool: ExitPlanMode (mode={current_mode}, no approval needed)")
                                 elif tool_name == "Task":
-                                    # Track Task tool with Plan subagent for plan approval
+                                    # Track Task tools for plan approval when in plan mode
+                                    # This includes both Plan subagents and general-purpose agents
+                                    # that might be used to create plans
                                     subagent_type = tool_input.get("subagent_type", "")
-                                    if subagent_type == "Plan":
-                                        # Check current mode from DB - user may have switched to plan mode
-                                        current_mode = await self._get_current_permission_mode(
-                                            db_session_id, permission_mode
-                                        )
-                                        if current_mode == "plan":
-                                            state.plan_subagent_tool_id = block.get("id")
+                                    desc = tool_input.get("description", "")[:50]
+                                    # Check current mode from DB - user may have switched to plan mode
+                                    current_mode = await self._get_current_permission_mode(
+                                        db_session_id, permission_mode
+                                    )
+                                    if current_mode == "plan":
+                                        # Track ANY Task tool in plan mode to capture its result
+                                        # This prevents race conditions where ExitPlanMode terminates
+                                        # before we can capture the plan content from the Task result
+                                        state.plan_subagent_tool_id = block.get("id")
+                                        state.plan_subagent_is_plan_type = subagent_type == "Plan"
+                                        # Reset completed flag for new Task to ensure we wait for it
+                                        state.plan_subagent_completed = False
+                                        if subagent_type == "Plan":
                                             logger.info(
                                                 f"{log_prefix}Tool: Task (Plan subagent) - will trigger approval on completion (mode={current_mode})"
                                             )
                                         else:
-                                            desc = tool_input.get("description", "")[:50]
-                                            logger.info(f"{log_prefix}Tool: Task (Plan subagent) '{desc}...' (mode={current_mode}, no approval)")
+                                            logger.info(
+                                                f"{log_prefix}Tool: Task '{desc}...' - tracking for plan approval (mode={current_mode})"
+                                            )
                                     else:
-                                        desc = tool_input.get("description", "")[:50]
-                                        logger.info(f"{log_prefix}Tool: Task '{desc}...'")
+                                        if subagent_type == "Plan":
+                                            logger.info(f"{log_prefix}Tool: Task (Plan subagent) '{desc}...' (mode={current_mode}, no approval)")
+                                        else:
+                                            logger.info(f"{log_prefix}Tool: Task '{desc}...'")
                                 else:
                                     logger.info(f"{log_prefix}Tool: {tool_name}")
                 elif msg.type == "user" and msg.raw:
@@ -384,7 +399,7 @@ class SubprocessExecutor:
                                 )
                                 state.exit_plan_mode_error_detected = True
 
-                            # Detect Plan subagent completion - trigger plan approval
+                            # Detect Task tool completion in plan mode
                             # Note: plan_subagent_tool_id is only set when mode was "plan" at
                             # tool detection time (checked via DB), so no additional mode check needed
                             if (
@@ -393,7 +408,7 @@ class SubprocessExecutor:
                                 and tool_use_id.startswith(state.plan_subagent_tool_id[:8])
                             ):
                                 logger.info(
-                                    f"{log_prefix}Plan subagent completed - will trigger Slack approval"
+                                    f"{log_prefix}Task tool completed in plan mode - capturing result"
                                 )
                                 state.plan_subagent_completed = True
                                 # Extract plan content from the tool result
@@ -487,9 +502,12 @@ class SubprocessExecutor:
                         await _terminate_process_safely(process)
                         break  # Exit the message processing loop
 
-                # If Plan subagent completed in plan mode, terminate early to show approval UI
-                # This handles the case where Claude uses Task(subagent_type=Plan) instead of ExitPlanMode
-                if state.plan_subagent_completed:
+                # If Plan subagent (specifically subagent_type=Plan) completed in plan mode,
+                # terminate early to show approval UI. This handles the case where Claude
+                # uses Task(subagent_type=Plan) instead of ExitPlanMode.
+                # Note: We only auto-terminate for Plan subagents, not general Task tools.
+                # General Task tools might be followed by more work before ExitPlanMode.
+                if state.plan_subagent_completed and state.plan_subagent_is_plan_type:
                     logger.info(f"{log_prefix}Terminating execution to handle Plan subagent approval in Slack")
                     await _terminate_process_safely(process)
                     break  # Exit the message processing loop
