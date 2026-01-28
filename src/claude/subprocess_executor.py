@@ -469,10 +469,23 @@ class SubprocessExecutor:
 
                 # If ExitPlanMode detected in plan mode, terminate early to show approval UI
                 # The CLI would otherwise block waiting for interactive approval
+                # BUT: If we have a pending Plan subagent, wait for it to complete first
+                # so we can capture its result (the plan content)
                 if state.exit_plan_mode_detected:
-                    logger.info(f"{log_prefix}Terminating execution to handle plan approval in Slack")
-                    await _terminate_process_safely(process)
-                    break  # Exit the message processing loop
+                    # Check if Plan subagent is still running (started but not completed)
+                    plan_subagent_pending = (
+                        state.plan_subagent_tool_id and not state.plan_subagent_completed
+                    )
+                    if plan_subagent_pending:
+                        logger.info(
+                            f"{log_prefix}ExitPlanMode detected but Plan subagent still running - "
+                            "waiting for subagent to complete"
+                        )
+                        # Don't terminate yet - continue processing to get subagent result
+                    else:
+                        logger.info(f"{log_prefix}Terminating execution to handle plan approval in Slack")
+                        await _terminate_process_safely(process)
+                        break  # Exit the message processing loop
 
                 # If Plan subagent completed in plan mode, terminate early to show approval UI
                 # This handles the case where Claude uses Task(subagent_type=Plan) instead of ExitPlanMode
