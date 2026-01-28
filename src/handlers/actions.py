@@ -688,15 +688,27 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
     # Question handlers (AskUserQuestion tool)
     # -------------------------------------------------------------------------
 
-    @app.action("question_custom_answer")
+    @app.action(re.compile(r"^question_custom_\d+$"))
     async def handle_question_custom_answer(ack, action, body, client, logger):
-        """Handle custom answer button - open modal for text input."""
+        """Handle per-question custom answer button - open modal for text input."""
         await ack()
 
         from src.question.manager import QuestionManager
         from src.question.slack_ui import build_custom_answer_modal
 
-        question_id = action["value"]
+        try:
+            # Parse question_id and question_index from action value
+            action_value = action["value"]
+            max_size = config.timeouts.limits.max_action_value_size
+            if len(action_value) > max_size:
+                logger.error(f"Action value too large: {len(action_value)} bytes")
+                return
+            data = json.loads(action_value)
+            question_id = data["q"]
+            question_index = data["i"]
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.error(f"Invalid custom answer action data: {e}")
+            return
 
         # Check if question still exists
         pending = await QuestionManager.get_pending(question_id)
@@ -708,10 +720,15 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             )
             return
 
+        # Get the question header for the modal label
+        question_header = "Your Answer"
+        if question_index < len(pending.questions):
+            question_header = pending.questions[question_index].header or "Your Answer"
+
         # Open modal for custom answer
         await client.views_open(
             trigger_id=body["trigger_id"],
-            view=build_custom_answer_modal(question_id),
+            view=build_custom_answer_modal(question_id, question_index, question_header),
         )
 
     # Register handlers for question option buttons (question_select_*)
@@ -872,7 +889,15 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         from src.question.manager import QuestionManager
         from src.question.slack_ui import build_question_result_blocks
 
-        question_id = view["private_metadata"]
+        # Parse question_id and question_index from private_metadata
+        try:
+            metadata = json.loads(view["private_metadata"])
+            question_id = metadata["q"]
+            question_index = metadata["i"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.error(f"Invalid custom answer modal metadata: {e}")
+            return
+
         custom_answer = view["state"]["values"]["custom_answer_block"]["custom_answer_input"][
             "value"
         ]
@@ -882,33 +907,46 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             # Question already resolved or timed out
             return
 
-        # Set custom answer - for multi-question prompts, prefix to indicate it's combined
-        if len(pending.questions) > 1:
-            prefixed_answer = f"[Custom answer for all questions] {custom_answer}"
+        # Set custom answer for the specific question
+        await QuestionManager.set_answer(question_id, question_index, [custom_answer])
+
+        # Check if all questions are answered
+        if await QuestionManager.is_complete(question_id):
+            # Resolve the question
+            resolved = await QuestionManager.resolve(question_id)
+            if resolved and resolved.message_ts:
+                user_id = body["user"]["id"]
+
+                # Update the original message
+                try:
+                    await client.chat_update(
+                        channel=resolved.channel_id,
+                        ts=resolved.message_ts,
+                        blocks=build_question_result_blocks(resolved, user_id),
+                        text="Question answered",
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update question message: {e}")
+
+                logger.info(
+                    f"Question {question_id} custom answered by {user_id}: {custom_answer[:50]}..."
+                )
         else:
-            prefixed_answer = custom_answer
-        for i in range(len(pending.questions)):
-            await QuestionManager.set_answer(question_id, i, [prefixed_answer])
-
-        # Resolve the question
-        resolved = await QuestionManager.resolve(question_id)
-        if resolved and resolved.message_ts:
-            user_id = body["user"]["id"]
-
-            # Update the original message
+            # Not all questions answered yet - post ephemeral feedback
             try:
-                await client.chat_update(
-                    channel=resolved.channel_id,
-                    ts=resolved.message_ts,
-                    blocks=build_question_result_blocks(resolved, user_id),
-                    text="Question answered",
+                # Get channel from the original message context
+                # We need to find the channel - it's stored in the pending question
+                msg = (
+                    f"Answer recorded for question {question_index + 1}. "
+                    "Please answer the remaining questions."
+                )
+                await client.chat_postEphemeral(
+                    channel=pending.channel_id,
+                    user=body["user"]["id"],
+                    text=msg,
                 )
             except Exception as e:
-                logger.warning(f"Failed to update question message: {e}")
-
-            logger.info(
-                f"Question {question_id} custom answered by {user_id}: {custom_answer[:50]}..."
-            )
+                logger.debug(f"Could not post ephemeral feedback: {e}")
 
     # -------------------------------------------------------------------------
     # Detailed output viewer

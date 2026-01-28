@@ -54,10 +54,11 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
 
         # Build action buttons for options
         if question.multi_select:
-            # For multi-select, use checkboxes
-            blocks.append(_build_checkbox_block(pending.question_id, i, question))
+            # For multi-select, use checkboxes (returns list of blocks)
+            checkbox_blocks = _build_checkbox_block(pending.question_id, i, question)
+            blocks.extend(checkbox_blocks)
         else:
-            # For single-select, use buttons
+            # For single-select, use buttons (includes "Other" button)
             blocks.append(_build_button_block(pending.question_id, i, question))
 
         # Add option descriptions if any
@@ -97,28 +98,6 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
                 ],
             }
         )
-
-    # Add "Other" text input option
-    blocks.append({"type": "divider"})
-    blocks.append(
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": "_Or provide a custom answer:_",
-            },
-            "accessory": {
-                "type": "button",
-                "text": {
-                    "type": "plain_text",
-                    "text": "Custom Answer",
-                    "emoji": True,
-                },
-                "action_id": "question_custom_answer",
-                "value": pending.question_id,
-            },
-        }
-    )
 
     return blocks
 
@@ -162,6 +141,23 @@ def _build_button_block(
             }
         )
 
+    # Add "Other" button for custom answer (Slack limit: 5 buttons per block)
+    # If we have 4+ options, need a second actions block for the Other button
+    if len(buttons) < 5:
+        other_value = json.dumps({"q": question_id, "i": question_index})
+        buttons.append(
+            {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Other...",
+                    "emoji": True,
+                },
+                "action_id": f"question_custom_{question_index}",
+                "value": other_value,
+            }
+        )
+
     return {
         "type": "actions",
         "block_id": f"question_actions_{question_id}_{question_index}",
@@ -173,8 +169,8 @@ def _build_checkbox_block(
     question_id: str,
     question_index: int,
     question: "Question",
-) -> dict:
-    """Build a checkbox block for multi-select question.
+) -> list[dict]:
+    """Build checkbox blocks for multi-select question.
 
     Args:
         question_id: The question ID
@@ -182,7 +178,7 @@ def _build_checkbox_block(
         question: The question object
 
     Returns:
-        Slack section block with checkboxes accessory
+        List of Slack blocks: section with checkboxes, plus "Other" button
     """
     options = []
     for opt in question.options:
@@ -201,19 +197,40 @@ def _build_checkbox_block(
             }
         options.append(option_dict)
 
-    return {
-        "type": "section",
-        "block_id": f"question_checkbox_{question_id}_{question_index}",
-        "text": {
-            "type": "mrkdwn",
-            "text": "_Select all that apply:_",
+    blocks = [
+        {
+            "type": "section",
+            "block_id": f"question_checkbox_{question_id}_{question_index}",
+            "text": {
+                "type": "mrkdwn",
+                "text": "_Select all that apply:_",
+            },
+            "accessory": {
+                "type": "checkboxes",
+                "action_id": f"question_multiselect_{question_index}",
+                "options": options[:10],  # Slack limit: 10 options
+            },
         },
-        "accessory": {
-            "type": "checkboxes",
-            "action_id": f"question_multiselect_{question_index}",
-            "options": options[:10],  # Slack limit: 10 options
+        # Add "Other" button for custom answer
+        {
+            "type": "actions",
+            "block_id": f"question_other_{question_id}_{question_index}",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "Other...",
+                        "emoji": True,
+                    },
+                    "action_id": f"question_custom_{question_index}",
+                    "value": json.dumps({"q": question_id, "i": question_index}),
+                }
+            ],
         },
-    }
+    ]
+
+    return blocks
 
 
 def build_question_result_blocks(
@@ -256,19 +273,28 @@ def build_question_result_blocks(
     return blocks
 
 
-def build_custom_answer_modal(question_id: str) -> dict:
+def build_custom_answer_modal(
+    question_id: str,
+    question_index: int,
+    question_header: str = "Your Answer",
+) -> dict:
     """Build a modal for custom answer input.
 
     Args:
         question_id: The question ID
+        question_index: Index of the specific question being answered
+        question_header: Header/label for the question (for display)
 
     Returns:
         Slack modal view
     """
+    # Store both question_id and question_index in private_metadata
+    private_metadata = json.dumps({"q": question_id, "i": question_index})
+
     return {
         "type": "modal",
         "callback_id": "question_custom_submit",
-        "private_metadata": question_id,
+        "private_metadata": private_metadata,
         "title": {
             "type": "plain_text",
             "text": "Custom Answer",
@@ -296,7 +322,7 @@ def build_custom_answer_modal(question_id: str) -> dict:
                 },
                 "label": {
                     "type": "plain_text",
-                    "text": "Your Answer",
+                    "text": question_header[:24],  # Slack label limit
                 },
             },
         ],
