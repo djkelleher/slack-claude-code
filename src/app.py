@@ -554,52 +554,17 @@ async def main():
             if result.has_pending_plan_approval:
                 logger.info("ExitPlanMode detected, requesting user approval")
 
-                # Get plan content from plan file if available
-                # Retry with small delays because the file may not be flushed to disk yet
-                # when we terminate the subprocess immediately after detecting ExitPlanMode
+                # Get plan content - prefer plan_subagent_result if available (captured from
+                # Task tool output), otherwise try reading from plan file with retries
                 plan_file_path = None
                 plan_content = ""
-                max_retries = 20
-                retry_delay = 0.5  # seconds (20 * 0.5 = 10 seconds max)
 
-                for attempt in range(max_retries):
-                    plan_file_path = streaming_state.get_plan_file_path(
-                        session.working_directory
-                    )
-                    if plan_file_path:
-                        try:
-                            with open(plan_file_path) as f:
-                                plan_content = f.read()
-                            if plan_content:
-                                logger.info(
-                                    f"Plan file read successfully on attempt {attempt + 1}"
-                                )
-                                break
-                        except FileNotFoundError:
-                            logger.debug(
-                                f"Plan file not found on attempt {attempt + 1}: {plan_file_path}"
-                            )
-                        except PermissionError:
-                            logger.warning(
-                                f"Cannot read plan file (permission denied): {plan_file_path}"
-                            )
-                            break  # Don't retry permission errors
-                        except Exception as e:
-                            logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
-
-                    # Wait before retrying (except on last attempt)
-                    if attempt < max_retries - 1:
-                        logger.debug(
-                            f"Plan file not ready, waiting {retry_delay}s before retry "
-                            f"({attempt + 1}/{max_retries})"
-                        )
-                        await asyncio.sleep(retry_delay)
-
-                # If no plan file was found, try using plan_subagent_result as fallback
-                # This handles the case where Plan subagent returns content without writing to file
-                if not plan_content and result.plan_subagent_result:
+                # FIRST: Check if we captured plan content from Plan subagent result
+                # This is faster and more reliable than reading from file since we capture
+                # the output directly from the Task tool result
+                if result.plan_subagent_result:
                     logger.info(
-                        f"No plan file found, using Plan subagent result as fallback "
+                        f"Using Plan subagent result as plan content "
                         f"({len(result.plan_subagent_result)} chars)"
                     )
                     plan_content = result.plan_subagent_result
@@ -614,6 +579,46 @@ async def main():
                     except Exception as e:
                         logger.warning(f"Failed to save Plan subagent result to file: {e}")
                         plan_file_path = None
+
+                # FALLBACK: Try reading from plan file if no subagent result
+                # Retry with small delays because the file may not be flushed to disk yet
+                # when we terminate the subprocess immediately after detecting ExitPlanMode
+                if not plan_content:
+                    max_retries = 20
+                    retry_delay = 0.5  # seconds (20 * 0.5 = 10 seconds max)
+
+                    for attempt in range(max_retries):
+                        plan_file_path = streaming_state.get_plan_file_path(
+                            session.working_directory
+                        )
+                        if plan_file_path:
+                            try:
+                                with open(plan_file_path) as f:
+                                    plan_content = f.read()
+                                if plan_content:
+                                    logger.info(
+                                        f"Plan file read successfully on attempt {attempt + 1}"
+                                    )
+                                    break
+                            except FileNotFoundError:
+                                logger.debug(
+                                    f"Plan file not found on attempt {attempt + 1}: {plan_file_path}"
+                                )
+                            except PermissionError:
+                                logger.warning(
+                                    f"Cannot read plan file (permission denied): {plan_file_path}"
+                                )
+                                break  # Don't retry permission errors
+                            except Exception as e:
+                                logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
+
+                        # Wait before retrying (except on last attempt)
+                        if attempt < max_retries - 1:
+                            logger.debug(
+                                f"Plan file not ready, waiting {retry_delay}s before retry "
+                                f"({attempt + 1}/{max_retries})"
+                            )
+                            await asyncio.sleep(retry_delay)
 
                 # If still no plan content, show error
                 if not plan_content:
