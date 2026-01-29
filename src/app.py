@@ -38,6 +38,49 @@ from src.utils.slack_helpers import post_text_snippet
 from src.utils.streaming import StreamingMessageState
 
 
+async def slack_api_with_retry(
+    api_call,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> any:
+    """
+    Execute a Slack API call with retry logic for transient failures.
+
+    Handles both SlackApiError and network errors (TimeoutError, CancelledError).
+
+    Args:
+        api_call: Async callable that performs the Slack API call
+        max_retries: Maximum number of retry attempts
+        base_delay: Base delay in seconds for exponential backoff
+
+    Returns:
+        The result of the API call
+
+    Raises:
+        The last exception if all retries fail
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return await api_call()
+        except (SlackApiError, TimeoutError, asyncio.CancelledError, OSError) as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                delay = base_delay * (2**attempt) + random.uniform(0, 1)
+                logger.warning(
+                    f"Slack API error (attempt {attempt + 1}/{max_retries}): "
+                    f"{type(e).__name__}: {e}, retrying in {delay:.1f}s"
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    f"Slack API call failed after {max_retries} attempts: "
+                    f"{type(e).__name__}: {e}"
+                )
+                raise
+    raise last_error
+
+
 async def shutdown(executor: SubprocessExecutor) -> None:
     """Graceful shutdown: cleanup active processes."""
     logger.info("Shutting down - cleaning up active processes...")
@@ -96,20 +139,17 @@ async def post_channel_notification(
                 logger.debug(f"Posted {notification_type} notification to channel {channel_id}")
                 return  # Success, exit
 
-            except SlackApiError as e:
+            except (SlackApiError, TimeoutError, OSError) as e:
                 if attempt < max_retries - 1:
                     # Exponential backoff with jitter: 1s, 2s, 4s + random 0-1s
                     delay = base_delay * (2**attempt) + random.uniform(0, 1)
                     logger.warning(
-                        f"Slack API error (attempt {attempt + 1}/{max_retries}): {e}, retrying in {delay:.1f}s"
+                        f"Slack API error (attempt {attempt + 1}/{max_retries}): "
+                        f"{type(e).__name__}: {e}, retrying in {delay:.1f}s"
                     )
                     await asyncio.sleep(delay)
                 else:
                     raise
-            except Exception as e:
-                # For non-Slack errors, don't retry
-                logger.error(f"Unexpected error posting notification: {type(e).__name__}: {e}")
-                raise
 
     except Exception as e:
         # Don't fail the main operation if all notification attempts fail
@@ -731,11 +771,13 @@ async def main():
                     cost_usd=result.cost_usd,
                     is_error=not result.success,
                 )
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    text=output[:100] + "..." if len(output) > 100 else output,
-                    blocks=blocks,
+                await slack_api_with_retry(
+                    lambda: client.chat_update(
+                        channel=channel_id,
+                        ts=message_ts,
+                        text=output[:100] + "..." if len(output) > 100 else output,
+                        blocks=blocks,
+                    )
                 )
                 # Post response content
                 try:
@@ -794,11 +836,13 @@ async def main():
                 )
 
                 # Update the first message (the original processing message)
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    text=output[:100] + "..." if len(output) > 100 else output,
-                    blocks=message_blocks_list[0],
+                await slack_api_with_retry(
+                    lambda: client.chat_update(
+                        channel=channel_id,
+                        ts=message_ts,
+                        text=output[:100] + "..." if len(output) > 100 else output,
+                        blocks=message_blocks_list[0],
+                    )
                 )
 
                 # Post additional messages for tables (each table needs its own message)
