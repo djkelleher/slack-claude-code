@@ -4,7 +4,29 @@ from typing import Any, Optional
 
 from src.config import config
 from src.utils.formatting import SlackFormatter
+from src.utils.formatters.base import MAX_TEXT_LENGTH, split_text_into_blocks
 from src.utils.formatters.markdown import markdown_to_slack_mrkdwn
+from src.utils.formatters.table import extract_tables_from_text, split_text_by_tables
+
+
+def sanitize_snippet_content(content: str) -> str:
+    """Remove control characters that can cause Slack to treat content as binary."""
+
+    def is_safe_char(char: str) -> bool:
+        code = ord(char)
+        # Allow: tab, newline, carriage return
+        if char in "\n\r\t":
+            return True
+        # Allow: printable ASCII (space through tilde)
+        if 32 <= code <= 126:
+            return True
+        # Allow: Unicode characters (Latin-1 Supplement and beyond)
+        if code >= 160:
+            return True
+        # Block: null bytes, control chars (0-31 except above), DEL (127), C1 controls (128-159)
+        return False
+
+    return "".join(char if is_safe_char(char) else " " for char in content)
 
 
 async def post_error(
@@ -115,7 +137,7 @@ async def upload_text_file(
 ) -> dict:
     """Upload a text file to Slack as a proper text snippet.
 
-    Uses filetype="text" to ensure the file is displayed as text, not binary.
+    Uses snippet_type="text" to ensure the file is displayed as text, not binary.
     File attachments appear collapsed by default in Slack.
 
     Parameters
@@ -143,28 +165,13 @@ async def upload_text_file(
 
     # Sanitize content to remove control characters that might cause
     # Slack to treat the file as binary (keep printable ASCII + Unicode + whitespace)
-    def is_safe_char(char: str) -> bool:
-        code = ord(char)
-        # Allow: tab, newline, carriage return
-        if char in "\n\r\t":
-            return True
-        # Allow: printable ASCII (space through tilde)
-        if 32 <= code <= 126:
-            return True
-        # Allow: Unicode characters (Latin-1 Supplement and beyond)
-        if code >= 160:
-            return True
-        # Block: null bytes, control chars (0-31 except above), DEL (127), C1 controls (128-159)
-        return False
-
-    sanitized_content = "".join(char if is_safe_char(char) else " " for char in content)
+    sanitized_content = sanitize_snippet_content(content)
 
     kwargs = {
         "channel": channel_id,
         "content": sanitized_content,
         "filename": filename,
         "title": title,
-        "filetype": "text",
         "snippet_type": "text",
     }
     if initial_comment:
@@ -182,6 +189,7 @@ async def post_text_snippet(
     title: str,
     thread_ts: Optional[str] = None,
     format_as_text: bool = False,
+    render_tables: bool = True,
 ) -> dict:
     """Post text content as an inline snippet message (no file download needed).
 
@@ -203,12 +211,70 @@ async def post_text_snippet(
     format_as_text : bool, optional
         If True, formats markdown as Slack mrkdwn instead of code blocks.
         Converts headers, bold, bullets, etc. Default is False (code block).
+    render_tables : bool, optional
+        If True and format_as_text is True, converts Markdown tables into Slack table blocks.
+        Defaults to True to render tables wherever they appear.
 
     Returns
     -------
     dict
         The Slack API response from the last message posted.
     """
+    if render_tables and format_as_text:
+        text_without_tables, table_blocks = extract_tables_from_text(content)
+        segments = split_text_by_tables(text_without_tables)
+
+        messages = []
+        for segment in segments:
+            if segment["type"] == "text":
+                formatted_text = markdown_to_slack_mrkdwn(segment["content"])
+                if not formatted_text:
+                    continue
+                blocks = split_text_into_blocks(formatted_text, max_length=MAX_TEXT_LENGTH)
+                max_content_blocks = 49  # Slack limit is 50 blocks per message
+                for start in range(0, len(blocks), max_content_blocks):
+                    messages.append(blocks[start : start + max_content_blocks])
+            else:
+                table_block = table_blocks[segment["index"]]
+                messages.append([table_block])
+
+        if not messages:
+            messages = [[{"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}}]]
+
+        total_messages = len(messages)
+        result = None
+        for i, blocks in enumerate(messages):
+            header_blocks = []
+            if i == 0:
+                title_text = (
+                    f"*{title}* (part {i + 1}/{total_messages})"
+                    if total_messages > 1
+                    else f"*{title}*"
+                )
+                header_blocks.append(
+                    {"type": "section", "text": {"type": "mrkdwn", "text": title_text}}
+                )
+            else:
+                header_blocks.append(
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"_continued ({i + 1}/{total_messages})_",
+                            }
+                        ],
+                    }
+                )
+
+            payload_blocks = header_blocks + blocks
+            kwargs = {"channel": channel_id, "text": title, "blocks": payload_blocks}
+            if thread_ts:
+                kwargs["thread_ts"] = thread_ts
+            result = await client.chat_postMessage(**kwargs)
+
+        return result
+
     # Convert markdown to Slack mrkdwn if format_as_text is True
     if format_as_text:
         content = markdown_to_slack_mrkdwn(content)

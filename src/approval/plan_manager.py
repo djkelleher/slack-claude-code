@@ -15,6 +15,7 @@ from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
 from .slack_ui import build_plan_approval_blocks
+from src.utils.slack_helpers import sanitize_snippet_content
 
 
 @dataclass
@@ -109,12 +110,12 @@ class PlanApprovalManager:
                 if plan_content:
                     try:
                         filename = os.path.basename(plan_file_path) if plan_file_path else "plan.md"
+                        sanitized_plan = sanitize_snippet_content(plan_content)
                         await slack_client.files_upload_v2(
                             channel=channel_id,
                             thread_ts=thread_ts,
-                            content=plan_content,
+                            content=sanitized_plan,
                             filename=filename,
-                            filetype="markdown",
                             snippet_type="markdown",
                             title=f"Implementation Plan: {filename}",
                         )
