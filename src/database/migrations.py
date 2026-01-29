@@ -11,9 +11,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     working_directory TEXT DEFAULT '~',
     claude_session_id TEXT,
     permission_mode TEXT DEFAULT NULL,
-    model TEXT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    model TEXT DEFAULT NULL
 );
 
 -- Command history table
