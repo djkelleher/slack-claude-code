@@ -411,18 +411,28 @@ class SubprocessExecutor:
                                     f"{log_prefix}Task tool completed in plan mode - capturing result"
                                 )
                                 state.plan_subagent_completed = True
-                                # Extract plan content from the tool result
-                                result_content = block.get("content", [])
-                                if isinstance(result_content, list):
-                                    for content_block in result_content:
-                                        if content_block.get("type") == "text":
-                                            state.plan_subagent_result = content_block.get("text", "")
-                                            logger.debug(
-                                                f"{log_prefix}Captured Plan subagent result: {len(state.plan_subagent_result)} chars"
-                                            )
-                                            break
-                                elif isinstance(result_content, str):
-                                    state.plan_subagent_result = result_content
+                                # Only capture result content if this is a Plan subagent
+                                # Non-Plan subagents (Explore, general-purpose) may return
+                                # file listings or other data that shouldn't be used as plan content
+                                if state.plan_subagent_is_plan_type:
+                                    result_content = block.get("content", [])
+                                    if isinstance(result_content, list):
+                                        for content_block in result_content:
+                                            if content_block.get("type") == "text":
+                                                state.plan_subagent_result = content_block.get(
+                                                    "text", ""
+                                                )
+                                                logger.debug(
+                                                    f"{log_prefix}Captured Plan subagent result: "
+                                                    f"{len(state.plan_subagent_result)} chars"
+                                                )
+                                                break
+                                    elif isinstance(result_content, str):
+                                        state.plan_subagent_result = result_content
+                                else:
+                                    logger.debug(
+                                        f"{log_prefix}Non-Plan Task completed, not capturing as plan content"
+                                    )
                 elif msg.type == "init":
                     logger.info(f"{log_prefix}Session initialized: {msg.session_id}")
                 elif msg.type == "error":
@@ -574,8 +584,12 @@ class SubprocessExecutor:
                     _is_retry_after_exit_plan_error=True,  # Prevent infinite retry
                 )
 
-            # Plan approval is triggered by either ExitPlanMode or Plan subagent completion
-            has_plan_approval = state.exit_plan_mode_detected or state.plan_subagent_completed
+            # Plan approval is triggered by ExitPlanMode or Plan subagent completion
+            # Note: plan_subagent_completed alone is not enough - we also check plan_subagent_is_plan_type
+            # to avoid triggering approval for non-Plan Task tools (Explore, general-purpose, etc.)
+            has_plan_approval = state.exit_plan_mode_detected or (
+                state.plan_subagent_completed and state.plan_subagent_is_plan_type
+            )
 
             return ExecutionResult(
                 success=success,
