@@ -311,9 +311,19 @@ class StreamParser:
             # Final result message
             # Clear pending tools to prevent memory accumulation across sessions
             self.pending_tools.clear()
+
+            # Some commands (like /doctor, /cost, etc.) return output directly in the
+            # "result" field without producing assistant messages. Capture this output.
+            result_text = data.get("result", "")
+            if result_text and not self.accumulated_content:
+                # Only use result field if no assistant content was accumulated
+                final_content = result_text
+            else:
+                final_content = self.accumulated_content
+
             return StreamMessage(
                 type="result",
-                content=self.accumulated_content,
+                content=final_content,
                 detailed_content=self.accumulated_detailed,
                 session_id=data.get("session_id", self.session_id),
                 is_final=True,
