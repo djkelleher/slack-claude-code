@@ -134,15 +134,27 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         await deps.db.clear_session_claude_id(ctx.channel_id, ctx.thread_ts)
         ctx.logger.info("Cleared Claude session ID")
 
-        # Step 3: Send /clear command to Claude CLI (existing flow)
-        await _send_claude_command(ctx, "/clear", deps)
+        # Note: We don't send /clear to Claude CLI because it only works in
+        # interactive mode, not with -p flag. Clearing the session ID above
+        # is sufficient - the next message will start a new conversation.
 
-        # Step 4: Notify user if processes were cancelled
+        # Step 3: Notify user
         if cancelled_count > 0:
-            await ctx.client.chat_postMessage(
-                channel=ctx.channel_id,
-                text=f"Cancelled {cancelled_count} active process(es) and cleared Claude session.",
-            )
+            message = f"Cancelled {cancelled_count} active process(es) and cleared conversation."
+        else:
+            message = "Conversation cleared. Your next message will start a fresh session."
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text=message,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f":white_check_mark: {message}"},
+                }
+            ],
+        )
 
     @app.command("/esc")
     @slack_command()
