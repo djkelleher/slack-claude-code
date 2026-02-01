@@ -87,7 +87,7 @@ Direct access to Claude Code CLI functionality.
 | `/memory` | View/edit Claude's memory | `/memory` |
 | `/review` | Review code changes | `/review` |
 | `/doctor` | Diagnose installation | `/doctor` |
-| `/stats` | Show session statistics | `/stats` |
+| `/stats` | Usage stats info (use `/cost` for session costs) | `/stats` |
 | `/context` | Display context info | `/context` |
 | `/todos` | List and manage todos | `/todos` |
 | `/mcp` | Show MCP server configuration | `/mcp` |
