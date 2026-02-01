@@ -365,7 +365,36 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @slack_command()
     async def handle_permissions(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /permissions command - view or update permissions."""
-        await _send_claude_command(ctx, "/permissions", deps)
+        # Note: /permissions only works in Claude CLI interactive mode, not with -p flag.
+        # In print mode, slash commands get interpreted as skill invocations.
+        # Show info about how to manage permissions in Slack mode.
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
+        )
+        current_mode = session.permission_mode or "default"
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text="Permission settings",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            ":lock: *Permissions*\n\n"
+                            f"*Current mode:* `{current_mode}`\n\n"
+                            "Use `/mode` to change permission modes:\n"
+                            "• `/mode default` - Ask for approval on sensitive operations\n"
+                            "• `/mode plan` - Plan-only mode (no execution)\n"
+                            "• `/mode acceptEdits` - Auto-approve file edits\n"
+                            "• `/mode bypassPermissions` - Skip all permission checks"
+                        ),
+                    },
+                }
+            ],
+        )
 
     @app.command("/stats")
     @slack_command()

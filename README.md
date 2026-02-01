@@ -56,7 +56,7 @@ Customize Claude's behavior for your workflow.
 |---------|-------------|---------|
 | `/model` | Show or change AI model | `/model sonnet` |
 | `/mode` | View or set permission mode | `/mode`, `/mode plan` |
-| `/permissions` | View/update permissions | `/permissions` |
+| `/permissions` | View current permission mode (use `/mode` to change) | `/permissions` |
 | `/notifications` | Configure notifications | `/notifications` |
 
 #### Session Management
