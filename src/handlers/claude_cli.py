@@ -371,7 +371,30 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @slack_command()
     async def handle_stats(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /stats command - show usage stats and history."""
-        await _send_claude_command(ctx, "/stats", deps)
+        # Note: /stats only works in Claude CLI interactive mode, not with -p flag.
+        # In print mode, slash commands get interpreted as skill invocations.
+        # For now, show a message explaining this limitation.
+        # Cost per request is shown in each response footer.
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text="Stats are not available in Slack mode.",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            ":bar_chart: *Usage Stats*\n\n"
+                            "The `/stats` command is not available in Slack mode. "
+                            "Claude CLI's `/stats` only works in interactive terminal mode.\n\n"
+                            "*Tip:* Cost and duration are shown in each response footer. "
+                            "Use `/cost` to see session cost details."
+                        ),
+                    },
+                }
+            ],
+        )
 
     @app.command("/todos")
     @slack_command()
