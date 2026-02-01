@@ -53,6 +53,9 @@ IMPORTANT: Write the plan to the EXACT path specified in your system context as 
 If no path is specified, write to `~/.claude/plans/<descriptive-name>.md`.
 
 Do NOT implement - only plan. The plan will be reviewed before execution.
+
+After writing the plan, output a single line with the file path in this exact format:
+Plan file: /absolute/path/to/plan.md
 """,
     tools=["Read", "Glob", "Grep", "Write", "Bash"],
     disallowed_tools=["Edit"],

@@ -1,7 +1,7 @@
 """Base formatting utilities and constants."""
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.config import config
 
@@ -229,10 +229,17 @@ def markdown_to_mrkdwn(text: str) -> str:
     return text
 
 
+def _to_utc(dt: datetime) -> datetime:
+    """Normalize datetime to UTC, assuming naive datetimes are UTC."""
+    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def time_ago(dt: datetime) -> str:
     """Format a datetime as 'X time ago'."""
-    now = datetime.now()
-    diff = now - dt
+    now = datetime.now(timezone.utc)
+    diff = now - _to_utc(dt)
 
     seconds = diff.total_seconds()
     if seconds < 60:

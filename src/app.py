@@ -9,8 +9,10 @@ with each channel representing a separate session.
 import asyncio
 import os
 import random
+import re
 import signal
 import sys
+import time
 import traceback
 import uuid
 
@@ -428,19 +430,25 @@ async def main():
 
         on_chunk = create_on_chunk_callback(streaming_state)
 
-        # In plan mode, inject the session-specific plan file path into the prompt
-        # This ensures each session writes to a unique file, avoiding race conditions
+        # In plan mode, ask Claude to report where it wrote the plan file
+        # The Claude CLI has a designated plan file path that only it can write to
+        # We can't specify a custom path - Claude must use its designated file
         execution_prompt = prompt
         if session.permission_mode == "plan":
-            plan_file_path = streaming_state.get_session_plan_path()
-            # Ensure the plans directory exists
-            plans_dir = os.path.dirname(plan_file_path)
+            # Ensure the plans directory exists (Claude's designated file will be here)
+            plans_dir = os.path.expanduser("~/.claude/plans")
             os.makedirs(plans_dir, exist_ok=True)
             execution_prompt = (
                 f"{prompt}\n\n"
-                f"[Plan mode: Write your plan to {plan_file_path}]"
+                f"[Plan mode: After writing your plan to the designated plan file, "
+                f"include a single line in your response exactly:\n"
+                f"Created Plan: <full path to plan file>]"
             )
-            logger.info(f"Plan mode: session {session.id} plan file path: {plan_file_path}")
+            logger.info(
+                "Plan mode: session %s execution %s, using Claude's designated plan file",
+                session.id,
+                execution_id,
+            )
 
         try:
             result = await executor.execute(
@@ -594,71 +602,121 @@ async def main():
             if result.has_pending_plan_approval:
                 logger.info("ExitPlanMode detected, requesting user approval")
 
-                # Get plan content - prefer plan_subagent_result if available (captured from
-                # Task tool output), otherwise try reading from plan file with retries
+                # Get plan content - prefer the plan file on disk, then fall back to
+                # Plan subagent output if needed. This avoids attaching unrelated text.
                 plan_file_path = None
                 plan_content = ""
-
-                # FIRST: Check if we captured plan content from Plan subagent result
-                # This is faster and more reliable than reading from file since we capture
-                # the output directly from the Task tool result
-                if result.plan_subagent_result:
-                    logger.info(
-                        f"Using Plan subagent result as plan content "
-                        f"({len(result.plan_subagent_result)} chars)"
-                    )
-                    plan_content = result.plan_subagent_result
-                    # Save to session-specific plan file so it can be referenced later
-                    try:
-                        plan_file_path = streaming_state.get_session_plan_path()
-                        plans_dir = os.path.dirname(plan_file_path)
-                        os.makedirs(plans_dir, exist_ok=True)
-                        with open(plan_file_path, "w") as f:
-                            f.write(plan_content)
-                        logger.info(f"Saved Plan subagent result to {plan_file_path}")
-                    except Exception as e:
-                        logger.warning(f"Failed to save Plan subagent result to file: {e}")
-                        plan_file_path = None
-
-                # FALLBACK: Try reading from plan file if no subagent result
+                # Prefer plan files written during this session.
                 # Retry with small delays because the file may not be flushed to disk yet
-                # when we terminate the subprocess immediately after detecting ExitPlanMode
-                if not plan_content:
-                    max_retries = 20
-                    retry_delay = 0.5  # seconds (20 * 0.5 = 10 seconds max)
+                # when we terminate the subprocess immediately after detecting ExitPlanMode.
+                plan_start_time = streaming_state.started_at
+                plan_override_path = None
+                plan_override_source = None
+                plan_override_regex = re.compile(r"(?im)^(?:Plan file|Created Plan):\s*(.+)$")
+                for source_label, source_text in (
+                    ("Plan agent output", result.plan_subagent_result),
+                    ("assistant output", result.output),
+                ):
+                    if not source_text:
+                        continue
+                    matches = plan_override_regex.findall(source_text)
+                    if matches:
+                        raw_path = matches[-1].strip().strip("`\"'")
+                        if raw_path:
+                            plan_override_path = os.path.expanduser(raw_path)
+                            plan_override_source = source_label
+                            logger.info(
+                                f"Plan override path declared by {source_label}: {plan_override_path}"
+                            )
+                            break
+                logger.info(
+                    "Plan discovery order: "
+                    f"override_path={plan_override_path or 'none'}"
+                    f"{f' ({plan_override_source})' if plan_override_source else ''} -> "
+                    "write_or_edit_activity(any .md; prefer ~/.claude/plans) -> "
+                    "plan_subagent_result(fallback)"
+                )
+                logger.info(
+                    "Plan discovery timing: "
+                    f"start_time={plan_start_time:.0f}, "
+                    "grace_seconds=10.0"
+                )
+                max_retries = 20
+                retry_delay = 0.5  # seconds (20 * 0.5 = 10 seconds max)
 
-                    for attempt in range(max_retries):
-                        plan_file_path = streaming_state.get_plan_file_path(
-                            session.working_directory
-                        )
-                        if plan_file_path:
-                            try:
-                                with open(plan_file_path) as f:
+                for attempt in range(max_retries):
+                    # Explicit override from Plan agent output (if provided)
+                    if plan_override_path and os.path.isfile(plan_override_path):
+                        try:
+                            mtime = os.path.getmtime(plan_override_path)
+                            if mtime >= plan_start_time:
+                                with open(plan_override_path) as f:
                                     plan_content = f.read()
                                 if plan_content:
+                                    plan_file_path = plan_override_path
                                     logger.info(
-                                        f"Plan file read successfully on attempt {attempt + 1}"
+                                        f"Plan file read successfully from override path on attempt {attempt + 1}: "
+                                        f"{plan_override_path} (mtime={mtime:.0f})"
                                     )
                                     break
-                            except FileNotFoundError:
-                                logger.debug(
-                                    f"Plan file not found on attempt {attempt + 1}: {plan_file_path}"
-                                )
-                            except PermissionError:
-                                logger.warning(
-                                    f"Cannot read plan file (permission denied): {plan_file_path}"
-                                )
-                                break  # Don't retry permission errors
-                            except Exception as e:
-                                logger.warning(f"Failed to read plan file {plan_file_path}: {e}")
-
-                        # Wait before retrying (except on last attempt)
-                        if attempt < max_retries - 1:
-                            logger.debug(
-                                f"Plan file not ready, waiting {retry_delay}s before retry "
-                                f"({attempt + 1}/{max_retries})"
+                        except PermissionError:
+                            logger.warning(
+                                f"Cannot read plan file (permission denied): {plan_override_path}"
                             )
-                            await asyncio.sleep(retry_delay)
+                            break  # Don't retry permission errors
+                        except Exception as e:
+                            logger.warning(f"Failed to read plan file {plan_override_path}: {e}")
+
+                    # Prefer any plan file written during this session via Write tools
+                    candidate_path = streaming_state.get_recent_plan_write_path(
+                        plan_start_time - 5.0
+                    )
+                    if candidate_path:
+                        try:
+                            mtime = os.path.getmtime(candidate_path)
+                            with open(candidate_path) as f:
+                                plan_content = f.read()
+                            if plan_content:
+                                plan_file_path = candidate_path
+                                logger.info(
+                                    f"Plan file read successfully from Write activity on attempt {attempt + 1}: "
+                                    f"{candidate_path} (mtime={mtime:.0f})"
+                                )
+                                break
+                        except PermissionError:
+                            logger.warning(
+                                f"Cannot read plan file (permission denied): {candidate_path}"
+                            )
+                            break  # Don't retry permission errors
+                        except Exception as e:
+                            logger.warning(f"Failed to read plan file {candidate_path}: {e}")
+
+                    # Wait before retrying (except on last attempt)
+                    if attempt < max_retries - 1:
+                        logger.debug(
+                            f"Plan file not ready, waiting {retry_delay}s before retry "
+                            f"({attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(retry_delay)
+
+                # FALLBACK: If no plan file was written but we have Plan subagent output,
+                # persist it to a new plan file to avoid attaching stale content.
+                if not plan_content and result.plan_subagent_result:
+                    logger.warning(
+                        "No plan file written by tools; persisting Plan subagent output as fallback"
+                    )
+                    fallback_dir = os.path.expanduser("~/.claude/plans")
+                    os.makedirs(fallback_dir, exist_ok=True)
+                    fallback_name = f"plan-session-{session.id}-fallback-{int(time.time())}.md"
+                    fallback_path = os.path.join(fallback_dir, fallback_name)
+                    try:
+                        with open(fallback_path, "w") as f:
+                            f.write(result.plan_subagent_result)
+                        plan_file_path = fallback_path
+                        plan_content = result.plan_subagent_result
+                        logger.info(f"Saved Plan subagent output to fallback file {fallback_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to save Plan subagent output to file: {e}")
 
                 # If still no plan content, show error
                 if not plan_content:
@@ -666,11 +724,29 @@ async def main():
                         "No plan file found for approval. "
                         f"Searched path: {plan_file_path}, working_dir: {session.working_directory}"
                     )
-                    plan_content = (
-                        "⚠️ No plan file was found.\n\n"
-                        "Claude should have written a plan to a markdown file before requesting approval. "
-                        "Please check that the plan was written correctly."
-                    )
+                    if result.plan_write_timeout:
+                        plan_content = (
+                            "⚠️ Plan not ready yet — timed out waiting for Claude to write the plan file.\n\n"
+                            "Claude should have written a plan to a markdown file before requesting approval. "
+                            "Please check that the plan was written correctly."
+                        )
+                    else:
+                        plan_content = (
+                            "⚠️ No plan file was found.\n\n"
+                            "Claude should have written a plan to a markdown file before requesting approval. "
+                            "Please check that the plan was written correctly."
+                        )
+
+                if plan_file_path and os.path.isfile(plan_file_path):
+                    try:
+                        mtime = os.path.getmtime(plan_file_path)
+                        age = time.time() - mtime
+                        logger.info(
+                            f"Selected plan file for approval: {plan_file_path} "
+                            f"(mtime={mtime:.0f}, age={age:.1f}s)"
+                        )
+                    except OSError as e:
+                        logger.warning(f"Failed to stat selected plan file {plan_file_path}: {e}")
 
                 # Request approval via Slack buttons and wait for response
                 approved = await PlanApprovalManager.request_approval(
@@ -789,6 +865,7 @@ async def main():
                         title="📄 Response summary",
                         thread_ts=thread_ts,
                         format_as_text=True,
+                        render_tables=True,
                     )
                     # Store detailed output in cache and post button to view it
                     if result.detailed_output and result.detailed_output != output:
@@ -953,4 +1030,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-

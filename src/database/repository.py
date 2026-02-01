@@ -199,16 +199,6 @@ class DatabaseRepository:
                 ),
             )
 
-    async def get_sessions_by_channel(self, channel_id: str) -> list[Session]:
-        """Get all sessions for a channel (channel + all threads)."""
-        async with self._get_connection() as db:
-            cursor = await db.execute(
-                "SELECT * FROM sessions WHERE channel_id = ? ORDER BY created_at DESC",
-                (channel_id,),
-            )
-            rows = await cursor.fetchall()
-            return [Session.from_row(row) for row in rows]
-
     async def get_session_by_id(self, session_id: int) -> Optional[Session]:
         """Get a session by its database ID."""
         async with self._get_connection() as db:
@@ -232,18 +222,6 @@ class DatabaseRepository:
             )
             await db.commit()
             return cursor.rowcount > 0
-
-    async def delete_inactive_sessions(self, inactive_days: int = 30) -> int:
-        """Delete sessions inactive for N days."""
-        async with self._get_connection() as db:
-            cutoff = datetime.now(timezone.utc).timestamp() - (inactive_days * 24 * 3600)
-            cursor = await db.execute(
-                """DELETE FROM sessions
-                   WHERE last_active < datetime(?, 'unixepoch')""",
-                (cutoff,),
-            )
-            await db.commit()
-            return cursor.rowcount
 
     # Command history operations
     async def add_command(self, session_id: int, command: str) -> CommandHistory:

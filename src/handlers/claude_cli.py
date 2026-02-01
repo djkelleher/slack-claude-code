@@ -70,7 +70,11 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     ctx.channel_id, ctx.thread_ts, result.session_id
                 )
 
-            output = result.output or result.error or "Command completed (no output)"
+            output = result.output or result.error or ""
+            if not output and result.detailed_output:
+                output = result.detailed_output
+            if not output:
+                output = "Command completed (no output)"
 
             # Format response with table support (may produce multiple messages)
             message_blocks_list = SlackFormatter.command_response_with_tables(
@@ -326,15 +330,6 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 text=f"Current model: {current_model}",
                 blocks=blocks,
             )
-
-    @app.command("/resume")
-    @slack_command()
-    async def handle_resume(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /resume [session] command - resume a previous session."""
-        if ctx.text:
-            await _send_claude_command(ctx, f"/resume {ctx.text}", deps)
-        else:
-            await _send_claude_command(ctx, "/resume", deps)
 
     @app.command("/init")
     @slack_command()

@@ -1,8 +1,5 @@
 """Unit tests for database repository."""
 
-import asyncio
-from datetime import datetime, timezone
-
 import pytest
 import pytest_asyncio
 
@@ -96,27 +93,13 @@ class TestSessionOperations:
         assert session.model == "opus"
 
     @pytest.mark.asyncio
-    async def test_get_sessions_by_channel(self, db_repo):
-        """get_sessions_by_channel returns all sessions for a channel."""
-        await db_repo.get_or_create_session("C123ABC", None)
-        await db_repo.get_or_create_session("C123ABC", "thread1")
-        await db_repo.get_or_create_session("C123ABC", "thread2")
-        await db_repo.get_or_create_session("C999OTHER", None)  # Different channel
-
-        sessions = await db_repo.get_sessions_by_channel("C123ABC")
-
-        assert len(sessions) == 3
-
-    @pytest.mark.asyncio
     async def test_delete_session(self, db_repo):
         """delete_session removes a session."""
-        await db_repo.get_or_create_session("C123ABC", None)
+        session = await db_repo.get_or_create_session("C123ABC", None)
         result = await db_repo.delete_session("C123ABC", None)
 
         assert result is True
-
-        sessions = await db_repo.get_sessions_by_channel("C123ABC")
-        assert len(sessions) == 0
+        assert await db_repo.get_session_by_id(session.id) is None
 
     @pytest.mark.asyncio
     async def test_delete_session_nonexistent(self, db_repo):

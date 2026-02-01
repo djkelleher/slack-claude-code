@@ -67,9 +67,6 @@ Each Slack thread maintains an isolated Claude session with its own context.
 | `/clear` | Reset conversation | `/clear` |
 | `/compact` | Compact context | `/compact` |
 | `/cost` | Show session cost | `/cost` |
-| `/resume` | Resume previous session | `/resume` |
-| `/sessions` | List active sessions | `/sessions` |
-| `/session-cleanup` | Clean up inactive sessions | `/session-cleanup` |
 
 #### Navigation
 Control the working directory for Claude's file operations.

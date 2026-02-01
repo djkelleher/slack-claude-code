@@ -1,6 +1,7 @@
 """Streaming message update utilities for Slack."""
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
@@ -58,6 +59,7 @@ class StreamingMessageState:
     on_error: Optional[Callable[[str], Awaitable[None]]] = None
     _consecutive_failures: int = field(default=0)
     _error_callback_triggered: bool = field(default=False)
+    started_at: float = field(default_factory=time.time)
 
     def get_tool_list(self) -> list["ToolActivity"]:
         """Get list of tracked tool activities."""
@@ -75,6 +77,24 @@ class StreamingMessageState:
             return f"plan-session-{self.db_session_id}.md"
         return "plan.md"
 
+    def get_execution_plan_filename(self, execution_id: Optional[str] = None) -> str:
+        """Generate execution-specific plan filename.
+
+        Parameters
+        ----------
+        execution_id : str, optional
+            Unique execution identifier to disambiguate plan files.
+
+        Returns
+        -------
+        str
+            Filename like 'plan-session-123-<execution_id>.md' when available.
+        """
+        base = f"plan-session-{self.db_session_id}" if self.db_session_id else "plan"
+        if execution_id:
+            return f"{base}-{execution_id}.md"
+        return f"{base}.md"
+
     def get_session_plan_path(self) -> str:
         """Get the expected session-specific plan file path.
 
@@ -88,7 +108,29 @@ class StreamingMessageState:
         plans_dir = os.path.expanduser("~/.claude/plans")
         return os.path.join(plans_dir, self.get_session_plan_filename())
 
-    def get_plan_file_path(self, working_directory: Optional[str] = None) -> Optional[str]:
+    def get_execution_plan_path(self, execution_id: Optional[str] = None) -> str:
+        """Get the execution-specific plan file path.
+
+        Parameters
+        ----------
+        execution_id : str, optional
+            Unique execution identifier to disambiguate plan files.
+
+        Returns
+        -------
+        str
+            Full path to the execution-specific plan file.
+        """
+        import os
+
+        plans_dir = os.path.expanduser("~/.claude/plans")
+        return os.path.join(plans_dir, self.get_execution_plan_filename(execution_id))
+
+    def get_plan_file_path(
+        self,
+        working_directory: Optional[str] = None,
+        allow_fallback_scan: bool = True,
+    ) -> Optional[str]:
         """Get the plan file path if one was written during plan mode.
 
         Checks in order:
@@ -101,6 +143,8 @@ class StreamingMessageState:
         ----------
         working_directory : str, optional
             Unused, kept for API compatibility.
+        allow_fallback_scan : bool, optional
+            If False, skip the directory scan fallback to avoid cross-session leakage.
 
         Returns
         -------
@@ -179,6 +223,10 @@ class StreamingMessageState:
                         else:
                             logger.debug(f"Path from Task result not a file: {expanded}")
 
+        if not allow_fallback_scan:
+            logger.debug("Plan file fallback scan disabled")
+            return None
+
         # Fallback: scan directory for recently modified plan files
         # Note: This fallback can cause race conditions with parallel sessions
         # Session-specific naming (above) should be preferred
@@ -225,6 +273,95 @@ class StreamingMessageState:
         result = candidates[0][0]
         logger.info(f"Plan file found via directory scan fallback: {result}")
         return result
+
+    def get_recent_plan_write_path(self, min_mtime: float) -> Optional[str]:
+        """Get most recent plan file written during this session.
+
+        Parameters
+        ----------
+        min_mtime : float
+            Minimum file modification time (epoch seconds) to consider.
+
+        Returns
+        -------
+        str or None
+            Path to the most recent plan file written, or None if not found.
+        """
+        import os
+
+        plans_dir = os.path.expanduser("~/.claude/plans")
+        in_plans_dir: list[tuple[str, float]] = []
+        elsewhere: list[tuple[str, float]] = []
+
+        for tool in self.tool_activities.values():
+            if tool.name not in ("Write", "Edit") or tool.is_error:
+                continue
+            file_path = tool.input.get("file_path", "")
+            if not file_path:
+                continue
+            expanded = os.path.expanduser(file_path)
+            if not expanded.endswith(".md"):
+                continue
+            if os.path.isfile(expanded):
+                mtime = os.path.getmtime(expanded)
+                if mtime >= min_mtime:
+                    if expanded.startswith(plans_dir):
+                        in_plans_dir.append((expanded, mtime))
+                    else:
+                        elsewhere.append((expanded, mtime))
+
+        if not in_plans_dir and not elsewhere:
+            return None
+        if in_plans_dir:
+            in_plans_dir.sort(key=lambda x: x[1], reverse=True)
+            return in_plans_dir[0][0]
+        elsewhere.sort(key=lambda x: x[1], reverse=True)
+        return elsewhere[0][0]
+
+    def get_recent_plan_file_path(
+        self,
+        min_mtime: float,
+        max_mtime: Optional[float] = None,
+    ) -> Optional[str]:
+        """Find a plan file in ~/.claude/plans modified within a time window.
+
+        Parameters
+        ----------
+        min_mtime : float
+            Minimum file modification time (epoch seconds) to consider.
+        max_mtime : float, optional
+            Maximum file modification time (epoch seconds) to consider.
+
+        Returns
+        -------
+        str or None
+            Path to the most recent plan file in the window, or None if not found.
+        """
+        import os
+
+        plans_dir = os.path.expanduser("~/.claude/plans")
+        if not os.path.isdir(plans_dir):
+            return None
+
+        candidates: list[tuple[str, float]] = []
+        try:
+            for entry in os.scandir(plans_dir):
+                if not entry.is_file() or not entry.name.endswith(".md"):
+                    continue
+                mtime = entry.stat().st_mtime
+                if mtime < min_mtime:
+                    continue
+                if max_mtime is not None and mtime > max_mtime:
+                    continue
+                candidates.append((entry.path, mtime))
+        except OSError as e:
+            logger.debug(f"Failed to scan plans directory {plans_dir}: {e}")
+            return None
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return candidates[0][0]
 
     def start_heartbeat(self) -> None:
         """Start the heartbeat task to show progress during idle periods."""

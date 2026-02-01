@@ -2,7 +2,8 @@
 
 import asyncio
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from loguru import logger
@@ -14,6 +15,9 @@ from .streaming import StreamMessage, StreamParser
 # If no output is received for this duration, assume the process is hung
 # Set to 30 minutes to allow for long-running operations like writing large files
 READLINE_TIMEOUT_SECONDS = 1800
+# Grace period to wait for plan writes after plan completion before terminating.
+# High value to accommodate longer plan-generation workflows.
+PLAN_WRITE_GRACE_SECONDS = 600.0
 
 if TYPE_CHECKING:
     from ..database.repository import DatabaseRepository
@@ -39,6 +43,7 @@ class ExecutionResult:
     has_pending_question: bool = False  # True if terminated due to AskUserQuestion
     has_pending_plan_approval: bool = False  # True if terminated due to ExitPlanMode
     plan_subagent_result: Optional[str] = None  # Plan content from Plan subagent output
+    plan_write_timeout: bool = False  # True if we timed out waiting for plan write
 
 
 async def _terminate_process_safely(
@@ -82,7 +87,15 @@ class ExecutionState:
     plan_subagent_tool_id: Optional[str] = None
     plan_subagent_is_plan_type: bool = False  # True if subagent_type="Plan"
     plan_subagent_completed: bool = False
+    plan_subagent_completed_at: Optional[float] = None
     plan_subagent_result: Optional[str] = None  # Store Task output for plan content
+    # Track pending Write tools in plan mode so we don't terminate before plan file exists
+    pending_write_tools: dict[str, str] = field(default_factory=dict)  # tool_id -> path
+    exit_plan_mode_detected_at: Optional[float] = None
+    plan_write_timeout: bool = False
+    plan_write_completed: bool = False
+    plan_write_path: Optional[str] = None
+    plan_write_wait_logged: bool = False
 
 
 class SubprocessExecutor:
@@ -257,12 +270,45 @@ class SubprocessExecutor:
         try:
             # Read stdout line by line with timeout protection
             while True:
+                read_timeout = READLINE_TIMEOUT_SECONDS
+                if (
+                    state.exit_plan_mode_detected
+                    and not state.plan_subagent_completed
+                    and not state.pending_write_tools
+                ):
+                    if state.exit_plan_mode_detected_at is None:
+                        state.exit_plan_mode_detected_at = time.monotonic()
+                    remaining = PLAN_WRITE_GRACE_SECONDS - (
+                        time.monotonic() - state.exit_plan_mode_detected_at
+                    )
+                    if remaining <= 0:
+                        logger.warning(
+                            f"{log_prefix}ExitPlanMode detected but no plan artifacts appeared; "
+                            "terminating after grace period"
+                        )
+                        state.plan_write_timeout = True
+                        await _terminate_process_safely(process)
+                        break
+                    read_timeout = min(read_timeout, remaining)
+
                 try:
                     line = await asyncio.wait_for(
                         process.stdout.readline(),
-                        timeout=READLINE_TIMEOUT_SECONDS,
+                        timeout=read_timeout,
                     )
                 except asyncio.TimeoutError:
+                    if (
+                        state.exit_plan_mode_detected
+                        and not state.plan_subagent_completed
+                        and not state.pending_write_tools
+                    ):
+                        logger.warning(
+                            f"{log_prefix}No plan artifact within grace period; terminating"
+                        )
+                        state.plan_write_timeout = True
+                        await _terminate_process_safely(process)
+                        break
+
                     logger.error(
                         f"{log_prefix}Readline timeout after {READLINE_TIMEOUT_SECONDS}s - "
                         "Claude process may be hung or lost connection"
@@ -302,7 +348,20 @@ class SubprocessExecutor:
                     # Log tool use and track file context
                     if msg.raw:
                         message = msg.raw.get("message", {})
-                        for block in message.get("content", []):
+                        if not isinstance(message, dict):
+                            logger.debug(
+                                f"{log_prefix}Unexpected assistant message type: {type(message)}"
+                            )
+                            message = {}
+                        content_blocks = message.get("content", [])
+                        if not isinstance(content_blocks, list):
+                            logger.debug(
+                                f"{log_prefix}Unexpected assistant content type: {type(content_blocks)}"
+                            )
+                            content_blocks = []
+                        for block in content_blocks:
+                            if not isinstance(block, dict):
+                                continue
                             if block.get("type") == "tool_use":
                                 tool_name = block.get("name", "unknown")
                                 tool_input = block.get("input", {})
@@ -310,6 +369,17 @@ class SubprocessExecutor:
                                 if tool_name in ("Read", "Edit", "Write"):
                                     file_path = tool_input.get("file_path", "")
                                     logger.info(f"{log_prefix}Tool: {tool_name} {file_path}")
+                                    if tool_name in ("Write", "Edit") and file_path:
+                                        current_mode = await self._get_current_permission_mode(
+                                            db_session_id, permission_mode
+                                        )
+                                        if current_mode == "plan" and file_path.endswith(".md"):
+                                            tool_id = block.get("id")
+                                            if tool_id and tool_id not in state.pending_write_tools:
+                                                state.pending_write_tools[tool_id] = file_path
+                                                logger.info(
+                                                    f"{log_prefix}Tracking pending plan write: {file_path}"
+                                                )
                                 elif tool_name == "Bash":
                                     command = tool_input.get("command", "")[:50]
                                     logger.info(f"{log_prefix}Tool: Bash '{command}...'")
@@ -335,6 +405,8 @@ class SubprocessExecutor:
                                     # Mark for early termination to handle approval in Slack
                                     if current_mode == "plan":
                                         state.exit_plan_mode_detected = True
+                                        if state.exit_plan_mode_detected_at is None:
+                                            state.exit_plan_mode_detected_at = time.monotonic()
                                         logger.info(
                                             f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval (mode={current_mode})"
                                         )
@@ -358,6 +430,7 @@ class SubprocessExecutor:
                                         state.plan_subagent_is_plan_type = subagent_type == "Plan"
                                         # Reset completed flag for new Task to ensure we wait for it
                                         state.plan_subagent_completed = False
+                                        state.plan_subagent_completed_at = None
                                         if subagent_type == "Plan":
                                             logger.info(
                                                 f"{log_prefix}Tool: Task (Plan subagent) - will trigger approval on completion (mode={current_mode})"
@@ -376,12 +449,26 @@ class SubprocessExecutor:
                 elif msg.type == "user" and msg.raw:
                     # Log tool results summary
                     message = msg.raw.get("message", {})
-                    for block in message.get("content", []):
+                    if not isinstance(message, dict):
+                        logger.debug(
+                            f"{log_prefix}Unexpected user message type: {type(message)}"
+                        )
+                        message = {}
+                    content_blocks = message.get("content", [])
+                    if not isinstance(content_blocks, list):
+                        logger.debug(
+                            f"{log_prefix}Unexpected user content type: {type(content_blocks)}"
+                        )
+                        content_blocks = []
+                    for block in content_blocks:
+                        if not isinstance(block, dict):
+                            continue
                         if block.get("type") == "tool_result":
-                            tool_use_id = block.get("tool_use_id", "")[:8]
+                            tool_use_id = block.get("tool_use_id", "")
+                            tool_use_id_short = tool_use_id[:8]
                             is_error = block.get("is_error", False)
                             status = "ERROR" if is_error else "OK"
-                            logger.info(f"{log_prefix}Tool result [{tool_use_id}]: {status}")
+                            logger.info(f"{log_prefix}Tool result [{tool_use_id_short}]: {status}")
 
                             # Detect ExitPlanMode ERROR for immediate retry
                             # Note: exit_plan_mode_detected is only set when mode was "plan" at
@@ -411,6 +498,7 @@ class SubprocessExecutor:
                                     f"{log_prefix}Task tool completed in plan mode - capturing result"
                                 )
                                 state.plan_subagent_completed = True
+                                state.plan_subagent_completed_at = time.monotonic()
                                 # Only capture result content if this is a Plan subagent
                                 # Non-Plan subagents (Explore, general-purpose) may return
                                 # file listings or other data that shouldn't be used as plan content
@@ -418,6 +506,8 @@ class SubprocessExecutor:
                                     result_content = block.get("content", [])
                                     if isinstance(result_content, list):
                                         for content_block in result_content:
+                                            if not isinstance(content_block, dict):
+                                                continue
                                             if content_block.get("type") == "text":
                                                 state.plan_subagent_result = content_block.get(
                                                     "text", ""
@@ -433,6 +523,16 @@ class SubprocessExecutor:
                                     logger.debug(
                                         f"{log_prefix}Non-Plan Task completed, not capturing as plan content"
                                     )
+                            # Track Write tool completion to avoid early termination
+                            if tool_use_id in state.pending_write_tools:
+                                file_path = state.pending_write_tools.pop(tool_use_id)
+                                status = "ERROR" if is_error else "OK"
+                                logger.info(
+                                    f"{log_prefix}Write tool completed ({status}) for {file_path}"
+                                )
+                                if not is_error:
+                                    state.plan_write_completed = True
+                                    state.plan_write_path = file_path
                 elif msg.type == "init":
                     logger.info(f"{log_prefix}Session initialized: {msg.session_id}")
                 elif msg.type == "error":
@@ -454,6 +554,9 @@ class SubprocessExecutor:
                 # Accumulate content
                 if msg.type == "assistant" and msg.content:
                     accumulated_output += msg.content
+                elif msg.type == "result" and msg.content and not accumulated_output:
+                    # Some CLI commands only populate the result field.
+                    accumulated_output = msg.content
 
                 # Track result metadata
                 if msg.type == "result":
@@ -501,12 +604,29 @@ class SubprocessExecutor:
                     plan_subagent_pending = (
                         state.plan_subagent_tool_id and not state.plan_subagent_completed
                     )
-                    if plan_subagent_pending:
-                        logger.info(
-                            f"{log_prefix}ExitPlanMode detected but Plan subagent still running - "
-                            "waiting for subagent to complete"
-                        )
-                        # Don't terminate yet - continue processing to get subagent result
+                    write_pending = bool(state.pending_write_tools)
+                    if plan_subagent_pending or write_pending:
+                        if write_pending:
+                            elapsed = 0.0
+                            if state.exit_plan_mode_detected_at is not None:
+                                elapsed = time.monotonic() - state.exit_plan_mode_detected_at
+                            if elapsed > PLAN_WRITE_GRACE_SECONDS:
+                                logger.warning(
+                                    f"{log_prefix}ExitPlanMode detected but Write tools still pending "
+                                    f"after {elapsed:.1f}s; terminating anyway"
+                                )
+                                await _terminate_process_safely(process)
+                                break
+                            logger.info(
+                                f"{log_prefix}ExitPlanMode detected but Write tool(s) still pending - "
+                                "waiting for writes to complete"
+                            )
+                        else:
+                            logger.info(
+                                f"{log_prefix}ExitPlanMode detected but Plan subagent still running - "
+                                "waiting for subagent to complete"
+                            )
+                        # Don't terminate yet - continue processing to get subagent result / writes
                     else:
                         logger.info(f"{log_prefix}Terminating execution to handle plan approval in Slack")
                         await _terminate_process_safely(process)
@@ -518,9 +638,45 @@ class SubprocessExecutor:
                 # Note: We only auto-terminate for Plan subagents, not general Task tools.
                 # General Task tools might be followed by more work before ExitPlanMode.
                 if state.plan_subagent_completed and state.plan_subagent_is_plan_type:
-                    logger.info(f"{log_prefix}Terminating execution to handle Plan subagent approval in Slack")
-                    await _terminate_process_safely(process)
-                    break  # Exit the message processing loop
+                    if state.pending_write_tools:
+                        elapsed = 0.0
+                        if state.plan_subagent_completed_at is not None:
+                            elapsed = time.monotonic() - state.plan_subagent_completed_at
+                        if elapsed > PLAN_WRITE_GRACE_SECONDS:
+                            logger.warning(
+                                f"{log_prefix}Plan subagent completed but Write tools still pending "
+                                f"after {elapsed:.1f}s; terminating anyway"
+                            )
+                            await _terminate_process_safely(process)
+                            break
+                        logger.info(
+                            f"{log_prefix}Plan subagent completed but Write tool(s) still pending - "
+                            "waiting for writes to complete"
+                        )
+                    else:
+                        if state.plan_write_completed:
+                            logger.info(
+                                f"{log_prefix}Plan write completed ({state.plan_write_path}); "
+                                "terminating for Plan subagent approval"
+                            )
+                            await _terminate_process_safely(process)
+                            break  # Exit the message processing loop
+                        elapsed = 0.0
+                        if state.plan_subagent_completed_at is not None:
+                            elapsed = time.monotonic() - state.plan_subagent_completed_at
+                        if elapsed > PLAN_WRITE_GRACE_SECONDS:
+                            logger.warning(
+                                f"{log_prefix}Plan subagent completed but no plan write detected "
+                                f"after {elapsed:.1f}s; terminating anyway"
+                            )
+                            await _terminate_process_safely(process)
+                            break  # Exit the message processing loop
+                        if not state.plan_write_wait_logged:
+                            logger.info(
+                                f"{log_prefix}Plan subagent completed - waiting up to "
+                                f"{PLAN_WRITE_GRACE_SECONDS:.0f}s for plan write to start/finish"
+                            )
+                            state.plan_write_wait_logged = True
 
                 if msg.is_final:
                     break
@@ -602,6 +758,7 @@ class SubprocessExecutor:
                 has_pending_question=state.ask_user_question_detected,
                 has_pending_plan_approval=has_plan_approval,
                 plan_subagent_result=state.plan_subagent_result,
+                plan_write_timeout=state.plan_write_timeout,
             )
 
         except asyncio.CancelledError:

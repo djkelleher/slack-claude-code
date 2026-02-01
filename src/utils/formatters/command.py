@@ -43,20 +43,21 @@ def command_response(
 
     # Add footer with metadata
     footer_parts = []
-    if duration_ms:
+    if duration_ms is not None:
         footer_parts.append(f":stopwatch: {duration_ms / 1000:.1f}s")
-    if cost_usd:
+    if cost_usd is not None:
         footer_parts.append(f":moneybag: ${cost_usd:.4f}")
     if command_id is not None:
         footer_parts.append(f":memo: History #{command_id}")
 
-    blocks.append({"type": "divider"})
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": " | ".join(footer_parts)}],
-        }
-    )
+    if footer_parts:
+        blocks.append({"type": "divider"})
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": " | ".join(footer_parts)}],
+            }
+        )
 
     return blocks
 
@@ -258,19 +259,20 @@ def command_response_with_tables(
     # Add footer to the last message
     if messages:
         footer_parts = []
-        if duration_ms:
+        if duration_ms is not None:
             footer_parts.append(f":stopwatch: {duration_ms / 1000:.1f}s")
-        if cost_usd:
+        if cost_usd is not None:
             footer_parts.append(f":moneybag: ${cost_usd:.4f}")
         if command_id is not None:
             footer_parts.append(f":memo: History #{command_id}")
 
-        messages[-1].append({"type": "divider"})
-        messages[-1].append(
-            {
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": " | ".join(footer_parts)}],
-            }
-        )
+        if footer_parts:
+            messages[-1].append({"type": "divider"})
+            messages[-1].append(
+                {
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": " | ".join(footer_parts)}],
+                }
+            )
 
     return messages if messages else [[{"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}}]]

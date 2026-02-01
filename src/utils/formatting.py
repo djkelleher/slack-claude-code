@@ -29,7 +29,6 @@ from .formatters.command import (
 from .formatters.directory import cwd_updated, directory_listing
 from .formatters.job import job_status_list, parallel_job_status, sequential_job_status
 from .formatters.queue import queue_item_complete, queue_item_running, queue_status
-from .formatters.session import session_cleanup_result, session_list
 from .formatters.streaming import processing_message, streaming_update
 
 
@@ -139,14 +138,6 @@ class SlackFormatter:
         cls, path: str, entries: list[tuple[str, bool]], is_cwd: bool = False
     ) -> list[dict]:
         return directory_listing(path, entries, is_cwd)
-
-    @classmethod
-    def session_list(cls, sessions: list) -> list[dict]:
-        return session_list(sessions)
-
-    @classmethod
-    def session_cleanup_result(cls, deleted_count: int, inactive_days: int) -> list[dict]:
-        return session_cleanup_result(deleted_count, inactive_days)
 
     @classmethod
     def command_response_with_tables(

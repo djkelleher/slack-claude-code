@@ -15,7 +15,7 @@ from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
 from .slack_ui import build_plan_approval_blocks
-from src.utils.slack_helpers import sanitize_snippet_content
+from src.utils.slack_helpers import post_text_snippet, sanitize_snippet_content, upload_text_file
 
 
 @dataclass
@@ -106,21 +106,36 @@ class PlanApprovalManager:
         try:
             # Post approval message to Slack
             if slack_client:
-                # First upload the plan as a file snippet (collapsible, downloadable)
+                # First upload the plan as a file snippet (collapsible, not binary)
                 if plan_content:
                     try:
                         filename = os.path.basename(plan_file_path) if plan_file_path else "plan.md"
-                        sanitized_plan = sanitize_snippet_content(plan_content)
-                        await slack_client.files_upload_v2(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            content=sanitized_plan,
+                        if not filename.lower().endswith(".md"):
+                            filename = f"{filename}.md"
+                        await upload_text_file(
+                            client=slack_client,
+                            channel_id=channel_id,
+                            content=plan_content,
                             filename=filename,
-                            snippet_type="markdown",
                             title=f"Implementation Plan: {filename}",
+                            thread_ts=thread_ts,
                         )
                     except Exception as e:
                         logger.warning(f"Failed to upload plan file: {e}")
+                        try:
+                            await post_text_snippet(
+                                client=slack_client,
+                                channel_id=channel_id,
+                                content=sanitize_snippet_content(plan_content),
+                                title="Implementation Plan (inline)",
+                                thread_ts=thread_ts,
+                                format_as_text=True,
+                                render_tables=True,
+                            )
+                        except Exception as fallback_error:
+                            logger.warning(
+                                f"Failed to post inline plan snippet: {fallback_error}"
+                            )
 
                 # Then post the approval buttons
                 blocks = build_plan_approval_blocks(

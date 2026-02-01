@@ -3,10 +3,47 @@
 from typing import Any, Optional
 
 from src.config import config
+from slack_sdk.errors import SlackApiError
+
 from src.utils.formatting import SlackFormatter
 from src.utils.formatters.base import MAX_TEXT_LENGTH, split_text_into_blocks
 from src.utils.formatters.markdown import markdown_to_slack_mrkdwn
 from src.utils.formatters.table import extract_tables_from_text, split_text_by_tables
+
+
+def _table_block_to_markdown(table_block: dict) -> str:
+    rows = table_block.get("rows", [])
+    if not rows:
+        return ""
+
+    def cell_text(cell: dict) -> str:
+        return str(cell.get("text", "")).replace("\n", " ").strip()
+
+    header_cells = [cell_text(cell) for cell in rows[0]]
+    if not header_cells:
+        return ""
+    separator = ["---"] * len(header_cells)
+    lines = [
+        f"| {' | '.join(header_cells)} |",
+        f"| {' | '.join(separator)} |",
+    ]
+    for row in rows[1:]:
+        row_cells = [cell_text(cell) for cell in row]
+        lines.append(f"| {' | '.join(row_cells)} |")
+    return "\n".join(lines).strip()
+
+
+def _fallback_blocks_for_table_blocks(blocks: list[dict]) -> list[dict]:
+    fallback_blocks: list[dict] = []
+    for block in blocks:
+        if block.get("type") != "table":
+            fallback_blocks.append(block)
+            continue
+        table_text = _table_block_to_markdown(block)
+        if not table_text:
+            continue
+        fallback_blocks.extend(split_text_into_blocks(table_text, max_length=MAX_TEXT_LENGTH))
+    return fallback_blocks
 
 
 def sanitize_snippet_content(content: str) -> str:
@@ -271,7 +308,18 @@ async def post_text_snippet(
             kwargs = {"channel": channel_id, "text": title, "blocks": payload_blocks}
             if thread_ts:
                 kwargs["thread_ts"] = thread_ts
-            result = await client.chat_postMessage(**kwargs)
+            try:
+                result = await client.chat_postMessage(**kwargs)
+            except SlackApiError as e:
+                if e.response.get("error") != "invalid_blocks":
+                    raise
+                fallback_blocks = header_blocks + _fallback_blocks_for_table_blocks(blocks)
+                if not fallback_blocks:
+                    raise
+                fallback_kwargs = {"channel": channel_id, "text": title, "blocks": fallback_blocks}
+                if thread_ts:
+                    fallback_kwargs["thread_ts"] = thread_ts
+                result = await client.chat_postMessage(**fallback_kwargs)
 
         return result
 
