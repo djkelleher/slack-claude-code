@@ -78,22 +78,6 @@ Control the working directory for Claude's file operations.
 | `/pwd` | Print working directory | `/pwd` |
 | `/add-dir` | Add directory to context | `/add-dir ./lib` |
 
-#### CLI Tools
-Direct access to Claude Code CLI functionality.
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/init` | Initialize project config | `/init` |
-| `/memory` | View/edit Claude's memory | `/memory` |
-| `/review` | Review code changes | `/review` |
-| `/doctor` | Diagnose installation | `/doctor` |
-| `/stats` | Usage stats info (use `/cost` for session costs) | `/stats` |
-| `/context` | Display context info | `/context` |
-| `/todos` | List and manage todos | `/todos` |
-| `/mcp` | Show MCP server configuration | `/mcp` |
-| `/claude-help` | Show Claude Code help | `/claude-help` |
-| `/claude-config` | Show configuration | `/claude-config` |
-
 #### Agents
 Configurable subagents for specialized tasks. Matches terminal Claude Code's agent system.
 
