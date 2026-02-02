@@ -6,6 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.config_storage import get_storage
 
+# Global constant for Claude plans directory
+PLANS_DIR = str(Path.home() / ".claude" / "plans")
+
 
 class ExecutionTimeouts(BaseModel):
     """Timeout configuration for command execution."""

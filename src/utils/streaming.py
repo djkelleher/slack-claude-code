@@ -1,13 +1,15 @@
 """Streaming message update utilities for Slack."""
 
 import asyncio
+import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from loguru import logger
 
-from src.config import config
+from src.config import PLANS_DIR, config
 from src.utils.formatting import SlackFormatter
 
 if TYPE_CHECKING:
@@ -103,9 +105,7 @@ class StreamingMessageState:
         str
             Full path to the session-specific plan file.
         """
-        import os
-
-        plans_dir = os.path.expanduser("~/.claude/plans")
+        plans_dir = PLANS_DIR
         return os.path.join(plans_dir, self.get_session_plan_filename())
 
     def get_execution_plan_path(self, execution_id: Optional[str] = None) -> str:
@@ -121,9 +121,7 @@ class StreamingMessageState:
         str
             Full path to the execution-specific plan file.
         """
-        import os
-
-        plans_dir = os.path.expanduser("~/.claude/plans")
+        plans_dir = PLANS_DIR
         return os.path.join(plans_dir, self.get_execution_plan_filename(execution_id))
 
     def get_plan_file_path(
@@ -151,10 +149,7 @@ class StreamingMessageState:
         str or None
             Path to the plan file, or None if not found.
         """
-        import os
-        import re
-
-        plans_dir = os.path.expanduser("~/.claude/plans")
+        plans_dir = PLANS_DIR
 
         # Log available tool activities for debugging
         tool_names = [f"{t.name}({t.id[:8]})" for t in self.tool_activities.values()]
@@ -230,8 +225,6 @@ class StreamingMessageState:
         # Fallback: scan directory for recently modified plan files
         # Note: This fallback can cause race conditions with parallel sessions
         # Session-specific naming (above) should be preferred
-        import time
-
         candidates = []
         now = time.time()
         max_age_seconds = config.timeouts.limits.plan_file_max_age_seconds
@@ -287,9 +280,7 @@ class StreamingMessageState:
         str or None
             Path to the most recent plan file written, or None if not found.
         """
-        import os
-
-        plans_dir = os.path.expanduser("~/.claude/plans")
+        plans_dir = PLANS_DIR
         in_plans_dir: list[tuple[str, float]] = []
         elsewhere: list[tuple[str, float]] = []
 
@@ -337,9 +328,7 @@ class StreamingMessageState:
         str or None
             Path to the most recent plan file in the window, or None if not found.
         """
-        import os
-
-        plans_dir = os.path.expanduser("~/.claude/plans")
+        plans_dir = PLANS_DIR
         if not os.path.isdir(plans_dir):
             return None
 

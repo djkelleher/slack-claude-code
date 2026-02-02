@@ -15,6 +15,7 @@ import sys
 import time
 import traceback
 import uuid
+from typing import Any
 
 from loguru import logger
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -23,7 +24,7 @@ from slack_sdk.errors import SlackApiError
 
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.subprocess_executor import SubprocessExecutor
-from src.config import config
+from src.config import PLANS_DIR, config
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
@@ -44,7 +45,7 @@ async def slack_api_with_retry(
     api_call,
     max_retries: int = 3,
     base_delay: float = 1.0,
-) -> any:
+) -> Any:
     """
     Execute a Slack API call with retry logic for transient failures.
 
@@ -436,7 +437,7 @@ async def main():
         execution_prompt = prompt
         if session.permission_mode == "plan":
             # Ensure the plans directory exists (Claude's designated file will be here)
-            plans_dir = os.path.expanduser("~/.claude/plans")
+            plans_dir = PLANS_DIR
             os.makedirs(plans_dir, exist_ok=True)
             execution_prompt = (
                 f"{prompt}\n\n"
@@ -705,7 +706,7 @@ async def main():
                     logger.warning(
                         "No plan file written by tools; persisting Plan subagent output as fallback"
                     )
-                    fallback_dir = os.path.expanduser("~/.claude/plans")
+                    fallback_dir = PLANS_DIR
                     os.makedirs(fallback_dir, exist_ok=True)
                     fallback_name = f"plan-session-{session.id}-fallback-{int(time.time())}.md"
                     fallback_path = os.path.join(fallback_dir, fallback_name)

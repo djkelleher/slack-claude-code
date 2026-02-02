@@ -258,6 +258,9 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     new_cmd.id, "failed", result.output, result.error
                 )
 
+            # Stop heartbeat before sending final response
+            await streaming_state.stop_heartbeat()
+
             # Format response with table support (may produce multiple messages)
             output = result.output or result.error or "No output"
             message_blocks_list = SlackFormatter.command_response_with_tables(
@@ -287,6 +290,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         except asyncio.CancelledError:
             logger.info("Rerun command was cancelled")
+            await streaming_state.stop_heartbeat()
             await deps.db.update_command_status(new_cmd.id, "cancelled", error_message="Cancelled")
             await client.chat_update(
                 channel=channel_id,
@@ -295,6 +299,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             )
         except (OSError, IOError) as e:
             logger.error(f"I/O error rerunning command: {e}")
+            await streaming_state.stop_heartbeat()
             await deps.db.update_command_status(new_cmd.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
@@ -304,6 +309,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         except Exception as e:
             # Catch unexpected errors to prevent handler crash
             logger.error(f"Unexpected error rerunning command: {type(e).__name__}: {e}")
+            await streaming_state.stop_heartbeat()
             await deps.db.update_command_status(new_cmd.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
