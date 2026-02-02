@@ -1,5 +1,7 @@
 """Unit tests for configuration module."""
 
+from pathlib import Path
+
 import pytest
 
 from src.config import (
@@ -10,6 +12,7 @@ from src.config import (
     StreamingConfig,
     DisplayConfig,
     TimeoutConfig,
+    PLANS_DIR,
     config,
 )
 
@@ -21,19 +24,16 @@ class TestExecutionTimeouts:
         """ExecutionTimeouts has correct defaults."""
         timeouts = ExecutionTimeouts()
 
-        assert timeouts.permission == 300
         assert timeouts.usage_check == 30
         assert timeouts.max_questions_per_conversation == 10
 
     def test_custom_values(self):
         """ExecutionTimeouts accepts custom values."""
         timeouts = ExecutionTimeouts(
-            permission=120,
             usage_check=15,
             max_questions_per_conversation=5,
         )
 
-        assert timeouts.permission == 120
         assert timeouts.usage_check == 15
         assert timeouts.max_questions_per_conversation == 5
 
@@ -108,7 +108,8 @@ class TestTimeoutConfig:
         timeout_config = TimeoutConfig()
 
         # Access nested values
-        assert timeout_config.execution.permission == 300
+        assert timeout_config.execution.usage_check == 30
+        assert timeout_config.execution.max_questions_per_conversation == 10
         assert timeout_config.slack.message_update_throttle == 2.0
         assert timeout_config.cache.usage == 60
         assert timeout_config.streaming.max_accumulated_size == 500000
@@ -176,3 +177,21 @@ class TestAutoApproveToolsParsing:
         monkeypatch.delenv("AUTO_APPROVE_TOOLS", raising=False)
         test_config = Config(AUTO_APPROVE_TOOLS_STR=" Read , Glob , Grep ", _env_file=None)
         assert test_config.AUTO_APPROVE_TOOLS == ["Read", "Glob", "Grep"]
+
+
+class TestPlansDirConstant:
+    """Tests for PLANS_DIR global constant."""
+
+    def test_plans_dir_is_string(self):
+        """PLANS_DIR is a string."""
+        assert isinstance(PLANS_DIR, str)
+
+    def test_plans_dir_path_format(self):
+        """PLANS_DIR has correct path format."""
+        assert PLANS_DIR.endswith(".claude/plans")
+        assert str(Path.home()) in PLANS_DIR
+
+    def test_plans_dir_equals_expanded_path(self):
+        """PLANS_DIR equals the expanded home path."""
+        expected = str(Path.home() / ".claude" / "plans")
+        assert PLANS_DIR == expected
