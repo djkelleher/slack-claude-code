@@ -68,8 +68,14 @@ def flatten_text(text: str) -> str:
 
     def flush_paragraph():
         if current_paragraph:
-            # Join paragraph lines with spaces
-            result_lines.append(" ".join(current_paragraph))
+            # Join paragraph lines, ensuring proper spacing
+            joined = current_paragraph[0]
+            for part in current_paragraph[1:]:
+                if not part:
+                    continue
+                # Always add a space between parts (they were separate lines)
+                joined += " " + part
+            result_lines.append(joined)
             current_paragraph.clear()
 
     for line in lines:
@@ -345,3 +351,257 @@ def split_text_into_blocks(
                 blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
 
     return blocks
+
+
+def _parse_inline_elements(text: str) -> list[dict]:
+    """Parse inline markdown formatting into rich_text elements.
+
+    Handles bold (**text** or __text__), italic (*text* or _text_),
+    inline code (`code`), and strikethrough (~~text~~).
+
+    Parameters
+    ----------
+    text : str
+        Text with inline markdown formatting.
+
+    Returns
+    -------
+    list[dict]
+        List of rich_text element objects.
+    """
+    elements = []
+    i = 0
+
+    while i < len(text):
+        # Check for inline code (highest priority - don't parse inside code)
+        if text[i] == "`" and i + 1 < len(text):
+            end = text.find("`", i + 1)
+            if end != -1:
+                code_text = text[i + 1 : end]
+                if code_text:
+                    elements.append({"type": "text", "text": code_text, "style": {"code": True}})
+                i = end + 1
+                continue
+
+        # Check for bold (**text**)
+        if text[i : i + 2] == "**":
+            end = text.find("**", i + 2)
+            if end != -1:
+                bold_text = text[i + 2 : end]
+                if bold_text:
+                    elements.append({"type": "text", "text": bold_text, "style": {"bold": True}})
+                i = end + 2
+                continue
+
+        # Check for bold (__text__)
+        if text[i : i + 2] == "__":
+            end = text.find("__", i + 2)
+            if end != -1:
+                bold_text = text[i + 2 : end]
+                if bold_text:
+                    elements.append({"type": "text", "text": bold_text, "style": {"bold": True}})
+                i = end + 2
+                continue
+
+        # Check for strikethrough (~~text~~)
+        if text[i : i + 2] == "~~":
+            end = text.find("~~", i + 2)
+            if end != -1:
+                strike_text = text[i + 2 : end]
+                if strike_text:
+                    elements.append(
+                        {"type": "text", "text": strike_text, "style": {"strike": True}}
+                    )
+                i = end + 2
+                continue
+
+        # Check for italic (*text*) - but not ** which is bold
+        if text[i] == "*" and (i + 1 >= len(text) or text[i + 1] != "*"):
+            end = i + 1
+            while end < len(text):
+                if text[end] == "*" and (end + 1 >= len(text) or text[end + 1] != "*"):
+                    break
+                end += 1
+            if end < len(text):
+                italic_text = text[i + 1 : end]
+                if italic_text:
+                    elements.append(
+                        {"type": "text", "text": italic_text, "style": {"italic": True}}
+                    )
+                i = end + 1
+                continue
+
+        # Check for italic (_text_) - but not __ which is bold
+        if text[i] == "_" and (i + 1 >= len(text) or text[i + 1] != "_"):
+            end = i + 1
+            while end < len(text):
+                if text[end] == "_" and (end + 1 >= len(text) or text[end + 1] != "_"):
+                    break
+                end += 1
+            if end < len(text):
+                italic_text = text[i + 1 : end]
+                if italic_text:
+                    elements.append(
+                        {"type": "text", "text": italic_text, "style": {"italic": True}}
+                    )
+                i = end + 1
+                continue
+
+        # Regular text - collect until next special character
+        start = i
+        while i < len(text) and text[i] not in "`*_~":
+            i += 1
+        if i > start:
+            elements.append({"type": "text", "text": text[start:i]})
+
+    return elements if elements else [{"type": "text", "text": text}]
+
+
+def text_to_rich_text_blocks(text: str, max_length: int = MAX_TEXT_LENGTH) -> list[dict]:
+    """Convert markdown-formatted text to Slack rich_text blocks.
+
+    rich_text blocks render at full width unlike section blocks which
+    render at ~50% width on desktop clients.
+
+    Handles:
+    - Paragraphs (separated by blank lines)
+    - Headers (## Title) -> bold text
+    - Bullet lists (- item or * item)
+    - Numbered lists (1. item)
+    - Code blocks (```code```)
+    - Inline formatting (bold, italic, code, strikethrough)
+    - Blockquotes (> text)
+
+    Parameters
+    ----------
+    text : str
+        Markdown-formatted text.
+    max_length : int
+        Maximum text length (for splitting into multiple blocks).
+
+    Returns
+    -------
+    list[dict]
+        List of rich_text block objects.
+    """
+    if not text:
+        return [{"type": "rich_text", "elements": []}]
+
+    # First flatten paragraph text
+    text = flatten_text(text)
+
+    elements = []
+    lines = text.split("\n")
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Skip empty lines (they create paragraph breaks)
+        if not stripped:
+            i += 1
+            continue
+
+        # Code block (```)
+        if stripped.startswith("```"):
+            code_lines = []
+            lang = stripped[3:].strip()  # Language hint after ```
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1  # Skip closing ```
+
+            code_content = "\n".join(code_lines)
+            if code_content:
+                elements.append(
+                    {
+                        "type": "rich_text_preformatted",
+                        "elements": [{"type": "text", "text": code_content}],
+                    }
+                )
+            continue
+
+        # Header (## Title)
+        header_match = re.match(r"^#{1,6}\s+(.+)$", stripped)
+        if header_match:
+            header_text = header_match.group(1)
+            elements.append(
+                {
+                    "type": "rich_text_section",
+                    "elements": [{"type": "text", "text": header_text, "style": {"bold": True}}],
+                }
+            )
+            i += 1
+            continue
+
+        # Blockquote (> text)
+        if stripped.startswith(">"):
+            quote_text = stripped[1:].strip()
+            elements.append(
+                {
+                    "type": "rich_text_quote",
+                    "elements": _parse_inline_elements(quote_text),
+                }
+            )
+            i += 1
+            continue
+
+        # Bullet list (- item or * item or • item)
+        # Require content after bullet to avoid infinite loop on empty bullets like "- "
+        bullet_match = re.match(r"^[-*•]\s+(.+)$", stripped)
+        if bullet_match:
+            list_items = []
+            while i < len(lines):
+                item_line = lines[i].strip()
+                item_match = re.match(r"^[-*•]\s+(.+)$", item_line)
+                if item_match:
+                    item_text = item_match.group(1)
+                    list_items.append(
+                        {"type": "rich_text_section", "elements": _parse_inline_elements(item_text)}
+                    )
+                    i += 1
+                elif not item_line:
+                    # Empty line ends the list
+                    break
+                else:
+                    break
+
+            if list_items:
+                elements.append({"type": "rich_text_list", "style": "bullet", "elements": list_items})
+            continue
+
+        # Numbered list (1. item)
+        numbered_match = re.match(r"^(\d+)\.\s+(.+)$", stripped)
+        if numbered_match:
+            list_items = []
+            while i < len(lines):
+                item_line = lines[i].strip()
+                item_match = re.match(r"^\d+\.\s+(.+)$", item_line)
+                if item_match:
+                    item_text = item_match.group(1)
+                    list_items.append(
+                        {"type": "rich_text_section", "elements": _parse_inline_elements(item_text)}
+                    )
+                    i += 1
+                elif not item_line:
+                    break
+                else:
+                    break
+
+            if list_items:
+                elements.append(
+                    {"type": "rich_text_list", "style": "ordered", "elements": list_items}
+                )
+            continue
+
+        # Regular paragraph
+        para_elements = _parse_inline_elements(stripped)
+        elements.append({"type": "rich_text_section", "elements": para_elements})
+        i += 1
+
+    if not elements:
+        return [{"type": "rich_text", "elements": []}]
+
+    return [{"type": "rich_text", "elements": elements}]

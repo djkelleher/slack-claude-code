@@ -199,6 +199,126 @@ class DatabaseRepository:
                 ),
             )
 
+    async def add_session_dir(
+        self, channel_id: str, thread_ts: Optional[str], directory: str
+    ) -> list:
+        """Add a directory to the session's added_dirs list.
+
+        Returns the updated list of directories.
+        """
+        async with self._transact() as db:
+            # Get current directories
+            cursor = await db.execute(
+                """SELECT added_dirs FROM sessions
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (channel_id, thread_ts, thread_ts, thread_ts),
+            )
+            row = await cursor.fetchone()
+            current_dirs = json.loads(row[0]) if row and row[0] else []
+
+            # Add directory if not already present
+            if directory not in current_dirs:
+                current_dirs.append(directory)
+
+            # Update database
+            await db.execute(
+                """UPDATE sessions SET added_dirs = ?, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    json.dumps(current_dirs),
+                    datetime.now(timezone.utc).isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )
+            return current_dirs
+
+    async def remove_session_dir(
+        self, channel_id: str, thread_ts: Optional[str], directory: str
+    ) -> list:
+        """Remove a directory from the session's added_dirs list.
+
+        Returns the updated list of directories.
+        """
+        async with self._transact() as db:
+            # Get current directories
+            cursor = await db.execute(
+                """SELECT added_dirs FROM sessions
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (channel_id, thread_ts, thread_ts, thread_ts),
+            )
+            row = await cursor.fetchone()
+            current_dirs = json.loads(row[0]) if row and row[0] else []
+
+            # Remove directory if present
+            if directory in current_dirs:
+                current_dirs.remove(directory)
+
+            # Update database
+            await db.execute(
+                """UPDATE sessions SET added_dirs = ?, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    json.dumps(current_dirs) if current_dirs else None,
+                    datetime.now(timezone.utc).isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )
+            return current_dirs
+
+    async def clear_session_dirs(
+        self, channel_id: str, thread_ts: Optional[str]
+    ) -> None:
+        """Clear all added directories from a session."""
+        async with self._transact() as db:
+            await db.execute(
+                """UPDATE sessions SET added_dirs = NULL, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )
+
+    async def get_session_dirs(
+        self, channel_id: str, thread_ts: Optional[str]
+    ) -> list:
+        """Get the list of added directories for a session."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """SELECT added_dirs FROM sessions
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (channel_id, thread_ts, thread_ts, thread_ts),
+            )
+            row = await cursor.fetchone()
+            return json.loads(row[0]) if row and row[0] else []
+
     async def get_session_by_id(self, session_id: int) -> Optional[Session]:
         """Get a session by its database ID."""
         async with self._get_connection() as db:

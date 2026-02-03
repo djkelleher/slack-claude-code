@@ -6,7 +6,7 @@ from src.config import config
 from slack_sdk.errors import SlackApiError
 
 from src.utils.formatting import SlackFormatter
-from src.utils.formatters.base import MAX_TEXT_LENGTH, split_text_into_blocks
+from src.utils.formatters.base import MAX_TEXT_LENGTH, split_text_into_blocks, text_to_rich_text_blocks
 from src.utils.formatters.markdown import markdown_to_slack_mrkdwn
 from src.utils.formatters.table import extract_tables_from_text, split_text_by_tables
 
@@ -33,16 +33,50 @@ def _table_block_to_markdown(table_block: dict) -> str:
     return "\n".join(lines).strip()
 
 
+def _rich_text_to_plain_text(rich_text_block: dict) -> str:
+    """Convert a rich_text block back to plain text."""
+    text_parts = []
+    for element in rich_text_block.get("elements", []):
+        elem_type = element.get("type", "")
+        if elem_type == "rich_text_section":
+            for sub_elem in element.get("elements", []):
+                if sub_elem.get("type") == "text":
+                    text_parts.append(sub_elem.get("text", ""))
+        elif elem_type == "rich_text_list":
+            for i, item in enumerate(element.get("elements", []), 1):
+                prefix = f"{i}. " if element.get("style") == "ordered" else "• "
+                for sub_elem in item.get("elements", []):
+                    if sub_elem.get("type") == "text":
+                        text_parts.append(f"\n{prefix}{sub_elem.get('text', '')}")
+        elif elem_type == "rich_text_preformatted":
+            code_text = ""
+            for sub_elem in element.get("elements", []):
+                if sub_elem.get("type") == "text":
+                    code_text += sub_elem.get("text", "")
+            if code_text:
+                text_parts.append(f"\n```\n{code_text}\n```\n")
+        elif elem_type == "rich_text_quote":
+            for sub_elem in element.get("elements", []):
+                if sub_elem.get("type") == "text":
+                    text_parts.append(f"\n> {sub_elem.get('text', '')}")
+    return "".join(text_parts)
+
+
 def _fallback_blocks_for_table_blocks(blocks: list[dict]) -> list[dict]:
     fallback_blocks: list[dict] = []
     for block in blocks:
-        if block.get("type") != "table":
+        block_type = block.get("type")
+        if block_type == "table":
+            table_text = _table_block_to_markdown(block)
+            if table_text:
+                fallback_blocks.extend(split_text_into_blocks(table_text, max_length=MAX_TEXT_LENGTH))
+        elif block_type == "rich_text":
+            # Convert rich_text to section blocks as fallback
+            plain_text = _rich_text_to_plain_text(block)
+            if plain_text:
+                fallback_blocks.extend(split_text_into_blocks(plain_text, max_length=MAX_TEXT_LENGTH))
+        else:
             fallback_blocks.append(block)
-            continue
-        table_text = _table_block_to_markdown(block)
-        if not table_text:
-            continue
-        fallback_blocks.extend(split_text_into_blocks(table_text, max_length=MAX_TEXT_LENGTH))
     return fallback_blocks
 
 
@@ -208,10 +242,11 @@ async def post_text_snippet(
         messages = []
         for segment in segments:
             if segment["type"] == "text":
-                formatted_text = markdown_to_slack_mrkdwn(segment["content"])
-                if not formatted_text:
+                text_content = segment["content"]
+                if not text_content or not text_content.strip():
                     continue
-                blocks = split_text_into_blocks(formatted_text, max_length=MAX_TEXT_LENGTH)
+                # Use rich_text blocks for full-width display
+                blocks = text_to_rich_text_blocks(text_content)
                 max_content_blocks = 49  # Slack limit is 50 blocks per message
                 for start in range(0, len(blocks), max_content_blocks):
                     messages.append(blocks[start : start + max_content_blocks])
@@ -267,43 +302,59 @@ async def post_text_snippet(
 
         return result
 
-    # Convert markdown to Slack mrkdwn if format_as_text is True
+    # For format_as_text, use rich_text blocks for full-width display
     if format_as_text:
-        content = markdown_to_slack_mrkdwn(content)
+        # Title header
+        title_blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}*"}},
+        ]
+        # Content as rich_text blocks
+        content_blocks = text_to_rich_text_blocks(content)
+        blocks = title_blocks + content_blocks
 
-    # Calculate overhead for title that gets combined with content
-    # For format_as_text: "*{title}*\n\n" = len(title) + 6 chars
-    # For code blocks: "```...```" = 6 chars (title is in separate block)
-    if format_as_text:
-        title_overhead = len(title) + 6  # "*{title}*\n\n"
-    else:
-        title_overhead = 0  # Title is in a separate section block
+        kwargs = {
+            "channel": channel_id,
+            "text": title,
+            "blocks": blocks,
+        }
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
 
-    code_block_overhead = 0 if format_as_text else 6  # "```...```"
+        try:
+            return await client.chat_postMessage(**kwargs)
+        except SlackApiError as e:
+            # Fallback to section blocks if rich_text blocks fail
+            if e.response.get("error") == "invalid_blocks":
+                from src.utils.formatters.markdown import markdown_to_slack_mrkdwn
 
-    # If content is small enough, post as single message
-    content_limit = config.SLACK_BLOCK_TEXT_LIMIT - title_overhead - code_block_overhead
+                formatted_content = markdown_to_slack_mrkdwn(content)
+                fallback_blocks = split_text_into_blocks(
+                    f"*{title}*\n\n{formatted_content}", max_length=MAX_TEXT_LENGTH
+                )
+                fallback_kwargs = {
+                    "channel": channel_id,
+                    "text": title,
+                    "blocks": fallback_blocks,
+                }
+                if thread_ts:
+                    fallback_kwargs["thread_ts"] = thread_ts
+                return await client.chat_postMessage(**fallback_kwargs)
+            raise
+
+    # For code blocks (format_as_text=False), use the existing logic
+    code_block_overhead = 6  # "```...```"
+    content_limit = config.SLACK_BLOCK_TEXT_LIMIT - code_block_overhead
     if len(content) <= content_limit:
-        if format_as_text:
-            # Format as text without code block
-            blocks = [
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*{title}*\n\n{content}"},
-                },
-            ]
-        else:
-            # Format as code block
-            blocks = [
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*{title}*"},
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"```{content}```"},
-                },
-            ]
+        blocks = [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*{title}*"},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"```{content}```"},
+            },
+        ]
 
         kwargs = {
             "channel": channel_id,
@@ -315,21 +366,12 @@ async def post_text_snippet(
 
         return await client.chat_postMessage(**kwargs)
 
-    # For larger content, split into multiple messages
+    # For larger code block content, split into multiple messages
     chunks = []
     remaining = content
 
-    # First chunk has title overhead, subsequent chunks don't
-    is_first_chunk = True
     while remaining:
-        # Account for ``` markers (6 chars) if using code blocks
-        # First chunk includes title, subsequent chunks don't
-        if format_as_text:
-            # format: "*{title}* (part X/Y)\n\n{chunk}" for first, just "{chunk}" for rest
-            # Extra overhead for "(part X/Y)" ~15 chars max
-            overhead = (len(title) + 6 + 15) if is_first_chunk else 0
-        else:
-            overhead = 6  # "```...```"
+        overhead = 6  # "```...```"
         chunk_size = config.SLACK_BLOCK_TEXT_LIMIT - overhead
         if len(remaining) <= chunk_size:
             chunks.append(remaining)
@@ -342,60 +384,36 @@ async def post_text_snippet(
 
         chunks.append(remaining[:break_point])
         remaining = remaining[break_point:].lstrip("\n")
-        is_first_chunk = False
 
     result = None
     for i, chunk in enumerate(chunks):
         if i == 0:
             # First message includes title
-            if format_as_text:
-                blocks = [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*{title}* (part {i+1}/{len(chunks)})\n\n{chunk}",
-                        },
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*{title}* (part {i+1}/{len(chunks)})",
                     },
-                ]
-            else:
-                blocks = [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*{title}* (part {i+1}/{len(chunks)})",
-                        },
-                    },
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
-                    },
-                ]
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
+                },
+            ]
         else:
             continued_text = f"_continued ({i+1}/{len(chunks)})_"
-            if format_as_text:
-                blocks = [
-                    {
-                        "type": "context",
-                        "elements": [{"type": "mrkdwn", "text": continued_text}],
-                    },
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": chunk},
-                    },
-                ]
-            else:
-                blocks = [
-                    {
-                        "type": "context",
-                        "elements": [{"type": "mrkdwn", "text": continued_text}],
-                    },
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
-                    },
-                ]
+            blocks = [
+                {
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": continued_text}],
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"```{chunk}```"},
+                },
+            ]
 
         kwargs = {
             "channel": channel_id,

@@ -69,14 +69,16 @@ Each Slack thread maintains an isolated Claude session with its own context.
 | `/cost` | Show session cost | `/cost` |
 
 #### Navigation
-Control the working directory for Claude's file operations.
+Control the working directory and additional directories for Claude's file operations.
 
 | Command | Description | Example |
 |---------|-------------|---------|
 | `/ls` | List directory contents | `/ls`, `/ls src/` |
 | `/cd` | Change working directory | `/cd /home/user/project`, `cd subfolder`, `cd ..` |
 | `/pwd` | Print working directory | `/pwd` |
-| `/add-dir` | Add directory to context | `/add-dir ./lib` |
+| `/add-dir` | Add directory to context | `/add-dir /home/user/other-project` |
+| `/remove-dir` | Remove directory from context | `/remove-dir /home/user/other-project` |
+| `/list-dirs` | List all directories in context | `/list-dirs` |
 
 #### Agents
 Configurable subagents for specialized tasks. Matches terminal Claude Code's agent system.

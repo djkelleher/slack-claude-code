@@ -12,6 +12,7 @@ from src.approval.plan_manager import PlanApprovalManager
 from src.approval.slack_ui import build_approval_result_blocks, build_plan_result_blocks
 from src.claude.streaming import ToolActivity
 from src.config import config
+from src.utils.formatters.base import markdown_to_mrkdwn
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.formatting import SlackFormatter
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
@@ -351,6 +352,8 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         output = cmd.output or "No output"
+        # Convert markdown to Slack mrkdwn (flattens paragraphs)
+        output = markdown_to_mrkdwn(output)
         # Truncate for modal (max ~3000 chars)
         if len(output) > 2900:
             output = output[:2900] + "\n\n... (output truncated)"

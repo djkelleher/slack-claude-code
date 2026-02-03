@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Optional
 
-from .base import escape_markdown, markdown_to_mrkdwn, truncate_from_start
+from .base import escape_markdown, text_to_rich_text_blocks, truncate_from_start
 from .tool_blocks import format_tool_activity_section
 
 if TYPE_CHECKING:
@@ -53,12 +53,8 @@ def streaming_update(
         ":heavy_check_mark: Complete" if is_complete else ":arrows_counterclockwise: Streaming..."
     )
 
-    # Truncate and convert to Slack mrkdwn format
+    # Truncate output if too long
     current_output = truncate_from_start(current_output)
-    # Convert any standard markdown to Slack mrkdwn
-    formatted_output = (
-        markdown_to_mrkdwn(current_output) if current_output else "_Waiting for response..._"
-    )
 
     blocks = [
         {
@@ -71,11 +67,14 @@ def streaming_update(
             ],
         },
         {"type": "divider"},
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": formatted_output},
-        },
     ]
+
+    # Convert to rich_text blocks (renders at full width unlike section blocks)
+    if current_output:
+        output_blocks = text_to_rich_text_blocks(current_output)
+        blocks.extend(output_blocks)
+    else:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_Waiting for response..._"}})
 
     # Add tool activity section if there are tools
     if tool_activities:

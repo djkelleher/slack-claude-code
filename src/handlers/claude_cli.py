@@ -189,7 +189,129 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @slack_command(require_text=True, usage_hint="Usage: /add-dir <path>")
     async def handle_add_dir(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /add-dir <path> command - add directory to context."""
-        await _send_claude_command(ctx, f"/add-dir {ctx.text}", deps)
+        directory = ctx.text.strip()
+
+        # Add directory to session's added_dirs list
+        added_dirs = await deps.db.add_session_dir(ctx.channel_id, ctx.thread_ts, directory)
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text=f"Added directory: {directory}",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f":file_folder: *Directory Added*\n\n"
+                            f"Added `{directory}` to context.\n\n"
+                            f"*Current directories ({len(added_dirs)}):*\n"
+                            + "\n".join(f"• `{d}`" for d in added_dirs)
+                        ),
+                    },
+                }
+            ],
+        )
+
+    @app.command("/remove-dir")
+    @slack_command(require_text=True, usage_hint="Usage: /remove-dir <path>")
+    async def handle_remove_dir(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /remove-dir <path> command - remove directory from context."""
+        directory = ctx.text.strip()
+
+        # Get current dirs to check if it exists
+        current_dirs = await deps.db.get_session_dirs(ctx.channel_id, ctx.thread_ts)
+
+        if directory not in current_dirs:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text=f"Directory not found: {directory}",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f":warning: Directory `{directory}` is not in the context.\n\n"
+                                f"*Current directories ({len(current_dirs)}):*\n"
+                                + (
+                                    "\n".join(f"• `{d}`" for d in current_dirs)
+                                    if current_dirs
+                                    else "_No directories added_"
+                                )
+                            ),
+                        },
+                    }
+                ],
+            )
+            return
+
+        # Remove directory from session's added_dirs list
+        remaining_dirs = await deps.db.remove_session_dir(
+            ctx.channel_id, ctx.thread_ts, directory
+        )
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text=f"Removed directory: {directory}",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f":file_folder: *Directory Removed*\n\n"
+                            f"Removed `{directory}` from context.\n\n"
+                            f"*Remaining directories ({len(remaining_dirs)}):*\n"
+                            + (
+                                "\n".join(f"• `{d}`" for d in remaining_dirs)
+                                if remaining_dirs
+                                else "_No directories added_"
+                            )
+                        ),
+                    },
+                }
+            ],
+        )
+
+    @app.command("/list-dirs")
+    @slack_command()
+    async def handle_list_dirs(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /list-dirs command - list directories in context."""
+        added_dirs = await deps.db.get_session_dirs(ctx.channel_id, ctx.thread_ts)
+
+        # Get working directory for context
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
+        )
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text=f"Directories in context: {len(added_dirs)}",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f":file_folder: *Directories in Context*\n\n"
+                            f"*Working directory:* `{session.working_directory}`\n\n"
+                            f"*Added directories ({len(added_dirs)}):*\n"
+                            + (
+                                "\n".join(f"• `{d}`" for d in added_dirs)
+                                if added_dirs
+                                else "_No additional directories added_"
+                            )
+                            + "\n\n_Use `/add-dir <path>` to add directories, `/remove-dir <path>` to remove._"
+                        ),
+                    },
+                }
+            ],
+        )
 
     @app.command("/compact")
     @slack_command()

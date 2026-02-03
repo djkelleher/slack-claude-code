@@ -8,6 +8,7 @@ from .base import (
     markdown_to_mrkdwn,
     sanitize_error,
     split_text_into_blocks,
+    text_to_rich_text_blocks,
 )
 from .table import extract_tables_from_text, split_text_by_tables
 
@@ -20,10 +21,7 @@ def command_response(
     cost_usd: Optional[float] = None,
     is_error: bool = False,
 ) -> list[dict]:
-    """Format a command response."""
-    # Convert standard markdown to Slack mrkdwn
-    formatted_output = markdown_to_mrkdwn(output) if output else "_No output_"
-
+    """Format a command response using rich_text blocks for full-width display."""
     blocks = [
         {
             "type": "context",
@@ -37,9 +35,12 @@ def command_response(
         {"type": "divider"},
     ]
 
-    # Split output into multiple blocks if needed
-    output_blocks = split_text_into_blocks(formatted_output)
-    blocks.extend(output_blocks)
+    # Convert to rich_text blocks (renders at full width unlike section blocks)
+    if output:
+        output_blocks = text_to_rich_text_blocks(output)
+        blocks.extend(output_blocks)
+    else:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}})
 
     # Add footer with metadata
     footer_parts = []
@@ -77,22 +78,20 @@ def command_response_with_file(
     tuple[list[dict], str, str]
         Tuple of (blocks, file_content, file_title)
     """
-    # Extract a preview (first meaningful content)
-    lines = output.strip().split("\n")
-    preview_lines = []
-    char_count = 0
-    for line in lines:
-        if char_count + len(line) > 500:
-            break
-        preview_lines.append(line)
-        char_count += len(line)
-
-    preview = "\n".join(preview_lines)
-    if len(output) > len(preview):
-        preview += "\n\n_... (see attached file for full response)_"
-
-    # Convert preview to Slack mrkdwn
-    formatted_preview = markdown_to_mrkdwn(preview) if preview else "_No output_"
+    # Extract a preview (first meaningful content, up to ~500 chars)
+    preview = output.strip()
+    if len(preview) > 500:
+        # Try to break at a sentence boundary
+        break_point = preview.rfind(". ", 0, 500)
+        if break_point > 200:
+            preview = preview[: break_point + 1]
+        else:
+            # Fall back to word boundary
+            break_point = preview.rfind(" ", 0, 500)
+            if break_point > 200:
+                preview = preview[:break_point]
+            else:
+                preview = preview[:500]
 
     blocks = [
         {
@@ -105,14 +104,22 @@ def command_response_with_file(
             ],
         },
         {"type": "divider"},
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": formatted_preview},
-        },
     ]
 
+    # Use rich_text blocks for full-width preview display
+    if preview:
+        preview_blocks = text_to_rich_text_blocks(preview)
+        blocks.extend(preview_blocks)
+        # Add truncation notice
+        if len(output) > len(preview):
+            blocks.append(
+                {"type": "section", "text": {"type": "mrkdwn", "text": "_... (continued in thread)_"}}
+            )
+    else:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}})
+
     # Add footer with metadata
-    footer_parts = [f":page_facing_up: Full response attached ({len(output):,} chars)"]
+    footer_parts = [f":speech_balloon: Full response in thread ({len(output):,} chars)"]
     if duration_ms:
         footer_parts.append(f":stopwatch: {duration_ms / 1000:.1f}s")
     if cost_usd:
@@ -201,9 +208,7 @@ def command_response_with_tables(
     for segment in segments:
         if segment["type"] == "text":
             text_content = segment["content"]
-            formatted_text = markdown_to_mrkdwn(text_content) if text_content else None
-
-            if not formatted_text:
+            if not text_content or not text_content.strip():
                 continue
 
             blocks = []
@@ -224,12 +229,9 @@ def command_response_with_tables(
                 blocks.append({"type": "divider"})
                 is_first = False
 
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": formatted_text},
-                }
-            )
+            # Use rich_text blocks for full-width display
+            output_blocks = text_to_rich_text_blocks(text_content)
+            blocks.extend(output_blocks)
 
             messages.append(blocks)
 

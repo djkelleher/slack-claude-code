@@ -1,34 +1,52 @@
-# Claude Code Guidelines
+# CLAUDE.md
 
-## Import Management
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-- Don't ever use optional dependency management
-- Always assume all modules are installed and available
-- Don't use ImportError catch blocks
-- Don't use lazy imports
-- All imports should go at the top of the file
+## Build & Test Commands
 
-## Environment
+```bash
+# Run all tests
+pytest
 
-- Python: `/home/dan/miniforge3/envs/trading/bin/python`
-- postgres / timescale: postgresql://danklab777:danklab987123@0.0.0.0:5653/danklab
+# Run single test file
+pytest tests/unit/test_repository.py
 
-## General
-- try not to use getattr. please check what attributes objects have and use object.attribute to access it.
-- Do not use hasattr. We need to check what attributes objects have when the code is written.
-- Do not every revert files back to older git commits without asking first.
-- Do not create nested folders with only a single file in it.
-- Commit all changes after code is modified. use a detailed and clear commit message.
+# Run single test
+pytest tests/unit/test_repository.py::test_function_name -v
 
-## Import Management
-- don't make __all__ definitions anywhere
-- All imports at top of files - no lazy imports, no `try/except ImportError` blocks
-- Never use ImportError handling - assume all imports succeed
-- Don't implement things for backward compatability (do not re-export, do not use name aliases, do not make wrapper functions)
-- Use canonical module locations: `from quant.core import Greeks` (not from submodules)
-- When refactoring moves a module, update all imports directly - don't re-export from old location for backward compatibility
-- Order: stdlib → third-party → local (isort with black profile)
-- Line length: 100 characters max
+# Run with coverage
+pytest --cov=src
+
+# Format code
+black src/ tests/ --line-length 100
+
+# Sort imports
+isort src/ tests/ --profile black
+
+# Lint
+flake8 src/ tests/ --max-complexity 10
+```
+
+## Architecture
+
+This is a Slack bot that wraps Claude Code CLI, providing a Slack interface for remote access.
+
+**Core Flow:**
+1. Slack events/commands arrive via Socket Mode (`app.py`)
+2. Commands are routed to handlers in `src/handlers/`
+3. Claude CLI is invoked via `SubprocessExecutor` which streams JSON output
+4. Responses are formatted and posted back to Slack with `SlackFormatter`
+
+**Key Components:**
+
+- `SubprocessExecutor` (`src/claude/subprocess_executor.py`): Executes Claude CLI with `--output-format stream-json`, handles streaming responses, manages process lifecycle, and detects special events (AskUserQuestion, ExitPlanMode)
+- `StreamParser` (`src/claude/streaming.py`): Parses Claude CLI's stream-json output into typed `StreamMessage` objects
+- `DatabaseRepository` (`src/database/repository.py`): SQLite persistence for sessions, queue items, jobs, notification settings. Uses WAL mode and UPSERT for concurrent access
+- `SlackFormatter` (`src/utils/formatting.py`): Converts Claude output to Slack Block Kit format with syntax highlighting, tables, and collapsible sections
+
+**Session Model:** Each Slack channel is one session. Threads within a channel create separate isolated sessions (tracked by `thread_ts`).
+
+**Handler Pattern:** All command handlers use the `@slack_command()` decorator from `src/handlers/base.py` which handles ack, context creation, validation, and error formatting.
 
 ## Code Style
 
@@ -40,8 +58,23 @@
 
 ## Naming Conventions
 
-- Classes: `PascalCase` (OrderStatus, BrokerAdapter)
-- Functions/methods: `snake_case` (place_order, get_positions)
-- Constants: `UPPER_SNAKE_CASE` (TERMINAL_ORDER_STATUSES)
-- Private: leading underscore (_request, _build_payload)
-- Enum values: `lowercase` string values (OrderStatus.PENDING = "pending")
+- Classes: `PascalCase`
+- Functions/methods: `snake_case`
+- Constants: `UPPER_SNAKE_CASE`
+- Private: leading underscore (`_method`)
+- Enum values: lowercase string values (`OrderStatus.PENDING = "pending"`)
+
+## Import Rules
+
+- All imports at top of files - no lazy imports, no `try/except ImportError`
+- Never use ImportError handling - assume all imports succeed
+- No `__all__` definitions
+- No backward compatibility re-exports or wrappers
+- Order: stdlib → third-party → local
+
+## General Rules
+
+- Do not use `getattr` or `hasattr` - use direct attribute access
+- Do not revert files to older git commits without asking first
+- Do not create nested folders with only a single file
+- Commit all changes after code is modified with detailed commit messages

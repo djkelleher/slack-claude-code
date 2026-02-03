@@ -12,6 +12,7 @@ from src.agents.executor import AgentExecutor
 from src.agents.models import AgentExecutionStatus, AgentSource
 from src.agents.registry import get_registry
 from src.config import config
+from src.utils.formatters.base import markdown_to_mrkdwn
 from src.utils.formatting import SlackFormatter
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
@@ -368,8 +369,9 @@ async def _run_agent_with_streaming(
 
         await streaming_state.stop_heartbeat()
 
-        # Format final output
+        # Format final output - convert markdown to Slack mrkdwn (flattens paragraphs)
         output = result.output or result.error or "No output"
+        output = markdown_to_mrkdwn(output)
         if len(output) > 2500:
             output = output[:2500] + "\n\n... (truncated)"
 
