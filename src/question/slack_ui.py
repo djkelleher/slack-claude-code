@@ -76,9 +76,12 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
         if i < len(pending.questions) - 1:
             blocks.append({"type": "divider"})
 
-    # Add submit button for multi-select questions
-    has_multiselect = any(q.multi_select for q in pending.questions)
-    if has_multiselect:
+    # Always add a single confirm button at the bottom.
+    # For single-question single-select, individual button clicks auto-resolve
+    # (no confirm needed). For multi-question or multi-select, users must click
+    # confirm after making all selections.
+    needs_confirm = len(pending.questions) > 1 or any(q.multi_select for q in pending.questions)
+    if needs_confirm:
         blocks.append(
             {
                 "type": "actions",
@@ -88,11 +91,11 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
                         "type": "button",
                         "text": {
                             "type": "plain_text",
-                            "text": "Submit Selections",
+                            "text": "Confirm",
                             "emoji": True,
                         },
                         "style": "primary",
-                        "action_id": "question_multiselect_submit",
+                        "action_id": "question_confirm_submit",
                         "value": pending.question_id,
                     }
                 ],

@@ -110,6 +110,7 @@ class SubprocessExecutor:
         db: Optional["DatabaseRepository"] = None,
     ) -> None:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self._process_channels: dict[str, str] = {}  # track_id -> channel_id
         self._lock: asyncio.Lock = asyncio.Lock()
         self.db = db
         # Per-execution state to avoid race conditions between concurrent executions
@@ -151,6 +152,7 @@ class SubprocessExecutor:
         permission_mode: Optional[str] = None,
         db_session_id: Optional[int] = None,
         model: Optional[str] = None,
+        channel_id: Optional[str] = None,
         _recursion_depth: int = 0,
         _is_retry_after_exit_plan_error: bool = False,
     ) -> ExecutionResult:
@@ -166,6 +168,7 @@ class SubprocessExecutor:
             permission_mode: Permission mode to use (overrides config default)
             db_session_id: Database session ID for smart context tracking (optional)
             model: Model to use (e.g., "opus", "sonnet", "haiku")
+            channel_id: Slack channel ID for channel-specific cancellation
             _recursion_depth: Internal parameter to track retry depth (max 3)
 
         Returns:
@@ -202,10 +205,11 @@ class SubprocessExecutor:
             "stream-json",
         ]
 
-        # Add model flag if specified
-        if model:
-            cmd.extend(["--model", model])
-            logger.info(f"{log_prefix}Using --model {model}")
+        # Add model flag if specified (explicit model > config default)
+        effective_model = model or config.DEFAULT_MODEL
+        if effective_model:
+            cmd.extend(["--model", effective_model])
+            logger.info(f"{log_prefix}Using --model {effective_model}")
 
         # Determine permission mode: explicit > config default
         mode = permission_mode or config.CLAUDE_PERMISSION_MODE
@@ -258,6 +262,8 @@ class SubprocessExecutor:
         # Track process for cancellation (track_id already defined above)
         async with self._lock:
             self._active_processes[track_id] = process
+            if channel_id:
+                self._process_channels[track_id] = channel_id
 
         parser = StreamParser()
         accumulated_output = ""
@@ -370,10 +376,15 @@ class SubprocessExecutor:
                                     file_path = tool_input.get("file_path", "")
                                     logger.info(f"{log_prefix}Tool: {tool_name} {file_path}")
                                     if tool_name in ("Write", "Edit") and file_path:
-                                        current_mode = await self._get_current_permission_mode(
-                                            db_session_id, permission_mode
-                                        )
-                                        if current_mode == "plan" and file_path.endswith(".md"):
+                                        # Track .md writes when we know plan mode is active
+                                        # (either from ExitPlanMode detection or DB mode)
+                                        in_plan_mode = state.exit_plan_mode_detected
+                                        if not in_plan_mode:
+                                            current_mode = await self._get_current_permission_mode(
+                                                db_session_id, permission_mode
+                                            )
+                                            in_plan_mode = current_mode == "plan"
+                                        if in_plan_mode and file_path.endswith(".md"):
                                             tool_id = block.get("id")
                                             if tool_id and tool_id not in state.pending_write_tools:
                                                 state.pending_write_tools[tool_id] = file_path
@@ -397,53 +408,40 @@ class SubprocessExecutor:
                                     logger.info(f"{log_prefix}AskUserQuestion detected - will terminate for Slack handling")
                                 elif tool_name == "ExitPlanMode":
                                     state.exit_plan_mode_tool_id = block.get("id")
-                                    # Check current mode from DB - user may have switched to plan mode
-                                    # during execution via /mode command
-                                    current_mode = await self._get_current_permission_mode(
-                                        db_session_id, permission_mode
+                                    # Always set exit_plan_mode_detected when Claude calls
+                                    # ExitPlanMode. Claude calling this tool is definitive
+                                    # evidence that plan mode is active, regardless of what
+                                    # the DB says. The DB mode can be stale after a
+                                    # question-answer cycle resumes the session.
+                                    state.exit_plan_mode_detected = True
+                                    if state.exit_plan_mode_detected_at is None:
+                                        state.exit_plan_mode_detected_at = time.monotonic()
+                                    logger.info(
+                                        f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval"
                                     )
-                                    # Mark for early termination to handle approval in Slack
-                                    if current_mode == "plan":
-                                        state.exit_plan_mode_detected = True
-                                        if state.exit_plan_mode_detected_at is None:
-                                            state.exit_plan_mode_detected_at = time.monotonic()
-                                        logger.info(
-                                            f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval (mode={current_mode})"
-                                        )
-                                    else:
-                                        logger.info(f"{log_prefix}Tool: ExitPlanMode (mode={current_mode}, no approval needed)")
                                 elif tool_name == "Task":
-                                    # Track Task tools for plan approval when in plan mode
-                                    # This includes both Plan subagents and general-purpose agents
-                                    # that might be used to create plans
                                     subagent_type = tool_input.get("subagent_type", "")
                                     desc = tool_input.get("description", "")[:50]
-                                    # Check current mode from DB - user may have switched to plan mode
-                                    current_mode = await self._get_current_permission_mode(
-                                        db_session_id, permission_mode
-                                    )
-                                    if current_mode == "plan":
-                                        # Track ANY Task tool in plan mode to capture its result
-                                        # This prevents race conditions where ExitPlanMode terminates
-                                        # before we can capture the plan content from the Task result
+                                    # Always track Plan subagents (definitive plan mode
+                                    # evidence). For other Task tools, check DB mode to
+                                    # avoid false positives from non-plan exploration tasks.
+                                    should_track = subagent_type == "Plan"
+                                    if not should_track:
+                                        current_mode = await self._get_current_permission_mode(
+                                            db_session_id, permission_mode
+                                        )
+                                        should_track = current_mode == "plan"
+                                    if should_track:
                                         state.plan_subagent_tool_id = block.get("id")
                                         state.plan_subagent_is_plan_type = subagent_type == "Plan"
-                                        # Reset completed flag for new Task to ensure we wait for it
                                         state.plan_subagent_completed = False
                                         state.plan_subagent_completed_at = None
-                                        if subagent_type == "Plan":
-                                            logger.info(
-                                                f"{log_prefix}Tool: Task (Plan subagent) - will trigger approval on completion (mode={current_mode})"
-                                            )
-                                        else:
-                                            logger.info(
-                                                f"{log_prefix}Tool: Task '{desc}...' - tracking for plan approval (mode={current_mode})"
-                                            )
+                                        logger.info(
+                                            f"{log_prefix}Tool: Task (subagent_type={subagent_type or 'default'}) "
+                                            f"'{desc}...' - tracking for plan approval"
+                                        )
                                     else:
-                                        if subagent_type == "Plan":
-                                            logger.info(f"{log_prefix}Tool: Task (Plan subagent) '{desc}...' (mode={current_mode}, no approval)")
-                                        else:
-                                            logger.info(f"{log_prefix}Tool: Task '{desc}...'")
+                                        logger.info(f"{log_prefix}Tool: Task '{desc}...'")
                                 else:
                                     logger.info(f"{log_prefix}Tool: {tool_name}")
                 elif msg.type == "user" and msg.raw:
@@ -471,13 +469,10 @@ class SubprocessExecutor:
                             logger.info(f"{log_prefix}Tool result [{tool_use_id_short}]: {status}")
 
                             # Detect ExitPlanMode ERROR for immediate retry
-                            # Note: exit_plan_mode_detected is only set when mode was "plan" at
-                            # tool detection time (checked via DB), so we check that flag here
-                            # instead of permission_mode to support dynamic mode switching
                             if (
                                 is_error
                                 and state.exit_plan_mode_tool_id
-                                and tool_use_id.startswith(state.exit_plan_mode_tool_id[:8])
+                                and tool_use_id == state.exit_plan_mode_tool_id
                                 and state.exit_plan_mode_detected
                                 and not _is_retry_after_exit_plan_error
                             ):
@@ -487,12 +482,10 @@ class SubprocessExecutor:
                                 state.exit_plan_mode_error_detected = True
 
                             # Detect Task tool completion in plan mode
-                            # Note: plan_subagent_tool_id is only set when mode was "plan" at
-                            # tool detection time (checked via DB), so no additional mode check needed
                             if (
                                 not is_error
                                 and state.plan_subagent_tool_id
-                                and tool_use_id.startswith(state.plan_subagent_tool_id[:8])
+                                and tool_use_id == state.plan_subagent_tool_id
                             ):
                                 logger.info(
                                     f"{log_prefix}Task tool completed in plan mode - capturing result"
@@ -715,12 +708,11 @@ class SubprocessExecutor:
                     permission_mode=permission_mode,
                     db_session_id=db_session_id,
                     model=model,
+                    channel_id=channel_id,
                     _recursion_depth=_recursion_depth + 1,
                 )
 
             # Check if ExitPlanMode error detected - retry without plan mode
-            # Note: exit_plan_mode_error_detected is only set when mode was "plan" at tool
-            # detection time, so no need to re-check permission_mode here
             if state.exit_plan_mode_error_detected and not _is_retry_after_exit_plan_error:
                 logger.info(
                     f"{log_prefix}Retrying execution with bypass mode after ExitPlanMode error (depth={_recursion_depth + 1})"
@@ -736,6 +728,7 @@ class SubprocessExecutor:
                     permission_mode=config.DEFAULT_BYPASS_MODE,  # Switch to bypass mode
                     db_session_id=db_session_id,
                     model=model,
+                    channel_id=channel_id,
                     _recursion_depth=_recursion_depth + 1,
                     _is_retry_after_exit_plan_error=True,  # Prevent infinite retry
                 )
@@ -784,6 +777,7 @@ class SubprocessExecutor:
         finally:
             async with self._lock:
                 self._active_processes.pop(track_id, None)
+                self._process_channels.pop(track_id, None)
             async with self._states_lock:
                 self._execution_states.pop(track_id, None)
 
@@ -801,6 +795,34 @@ class SubprocessExecutor:
         async with self._lock:
             processes = list(self._active_processes.values())
             self._active_processes.clear()
+            self._process_channels.clear()
+        for process in processes:
+            process.terminate()
+        return len(processes)
+
+    async def cancel_by_channel(self, channel_id: str) -> int:
+        """Cancel all active executions for a specific channel.
+
+        Args:
+            channel_id: The Slack channel ID to cancel executions for
+
+        Returns:
+            Number of processes cancelled
+        """
+        async with self._lock:
+            # Find all track_ids for this channel
+            track_ids_to_cancel = [
+                track_id
+                for track_id, ch_id in self._process_channels.items()
+                if ch_id == channel_id
+            ]
+            # Get processes and remove from tracking
+            processes = []
+            for track_id in track_ids_to_cancel:
+                if track_id in self._active_processes:
+                    processes.append(self._active_processes.pop(track_id))
+                    self._process_channels.pop(track_id, None)
+
         for process in processes:
             process.terminate()
         return len(processes)
