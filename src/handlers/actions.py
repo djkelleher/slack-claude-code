@@ -1050,7 +1050,100 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
     # Model selection handlers
     # -------------------------------------------------------------------------
 
-    @app.action(re.compile(r"^select_model_.*$"))
+    @app.action("select_model_custom")
+    async def handle_custom_model_button(ack, action, body, client, logger):
+        """Handle custom model button click - open modal for input."""
+        await ack()
+
+        # Parse channel_id and thread_ts from value
+        value_parts = action["value"].split("|")
+        channel_id = value_parts[0]
+        thread_ts = value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
+
+        # Open modal for custom model input
+        await client.views_open(
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "callback_id": "custom_model_submit",
+                "private_metadata": json.dumps({"channel_id": channel_id, "thread_ts": thread_ts}),
+                "title": {"type": "plain_text", "text": "Custom Model"},
+                "submit": {"type": "plain_text", "text": "Set Model"},
+                "close": {"type": "plain_text", "text": "Cancel"},
+                "blocks": [
+                    {
+                        "type": "input",
+                        "block_id": "custom_model_block",
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "custom_model_input",
+                            "placeholder": {
+                                "type": "plain_text",
+                                "text": "e.g., claude-opus-4-5-20250101",
+                            },
+                        },
+                        "label": {"type": "plain_text", "text": "Model ID"},
+                        "hint": {
+                            "type": "plain_text",
+                            "text": "Enter the full model identifier",
+                        },
+                    }
+                ],
+            },
+        )
+
+    @app.view("custom_model_submit")
+    async def handle_custom_model_submit(ack, body, client, view, logger):
+        """Handle custom model modal submission."""
+        await ack()
+
+        # Parse channel info from private_metadata
+        try:
+            metadata = json.loads(view["private_metadata"])
+            channel_id = metadata["channel_id"]
+            thread_ts = metadata.get("thread_ts")
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Invalid custom model modal metadata: {e}")
+            return
+
+        # Get the custom model value
+        model_name = view["state"]["values"]["custom_model_block"]["custom_model_input"]["value"]
+        model_name = model_name.strip()
+
+        if not model_name:
+            return
+
+        try:
+            # Update session with the custom model
+            await deps.db.update_session_model(channel_id, thread_ts, model_name)
+
+            # Post confirmation message
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f"Model changed to {model_name}",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f":heavy_check_mark: Model changed to *{model_name}*",
+                        },
+                    }
+                ],
+            )
+            logger.info(f"Custom model changed to {model_name} for channel {channel_id}")
+
+        except Exception as e:
+            logger.error(f"Custom model change failed: {e}")
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f"Error changing model: {str(e)}",
+                blocks=SlackFormatter.error_message(str(e)),
+            )
+
+    @app.action(re.compile(r"^select_model_(?!custom$).*$"))
     async def handle_model_selection(ack, action, body, client, logger):
         """Handle model selection button click."""
         await ack()

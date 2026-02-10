@@ -45,6 +45,53 @@ class TestSession:
         assert session.created_at == datetime.fromisoformat("2024-01-15T10:30:00")
         assert session.last_active == datetime.fromisoformat("2024-01-15T11:00:00")
 
+    def test_from_row_full_schema_with_codex(self):
+        """from_row handles full schema with Codex fields."""
+        row = (
+            1,  # id
+            "C123ABC",  # channel_id
+            "1234567890.123456",  # thread_ts
+            "/home/user",  # working_directory
+            "session-abc123",  # claude_session_id
+            "plan",  # permission_mode
+            "2024-01-15T10:30:00",  # created_at
+            "2024-01-15T11:00:00",  # last_active
+            "gpt-5-codex",  # model
+            "[]",  # added_dirs (JSON)
+            "codex-session-456",  # codex_session_id
+            "danger-full-access",  # sandbox_mode
+            "never",  # approval_mode
+        )
+
+        session = Session.from_row(row)
+
+        assert session.id == 1
+        assert session.model == "gpt-5-codex"
+        assert session.codex_session_id == "codex-session-456"
+        assert session.sandbox_mode == "danger-full-access"
+        assert session.approval_mode == "never"
+
+    def test_get_backend_claude(self):
+        """get_backend returns 'claude' for Claude models."""
+        session = Session(channel_id="C123", model="opus")
+        assert session.get_backend() == "claude"
+
+        session = Session(channel_id="C123", model="claude-sonnet-4")
+        assert session.get_backend() == "claude"
+
+    def test_get_backend_codex(self):
+        """get_backend returns 'codex' for Codex models."""
+        session = Session(channel_id="C123", model="gpt-5-codex")
+        assert session.get_backend() == "codex"
+
+        session = Session(channel_id="C123", model="o3")
+        assert session.get_backend() == "codex"
+
+    def test_get_backend_default(self):
+        """get_backend returns 'claude' for None model."""
+        session = Session(channel_id="C123", model=None)
+        assert session.get_backend() == "claude"
+
     def test_from_row_old_schema(self):
         """from_row handles old schema without model column."""
         row = (

@@ -451,8 +451,14 @@ def _parse_inline_elements(text: str) -> list[dict]:
         start = i
         while i < len(text) and text[i] not in "`*_~":
             i += 1
-        if i > start:
-            elements.append({"type": "text", "text": text[start:i]})
+        if i == start:
+            # Unmatched special character (no closing marker found above) -
+            # consume it as literal text to avoid infinite loop
+            i += 1
+            # Continue collecting regular text after the unmatched marker
+            while i < len(text) and text[i] not in "`*_~":
+                i += 1
+        elements.append({"type": "text", "text": text[start:i]})
 
     return elements if elements else [{"type": "text", "text": text}]
 
