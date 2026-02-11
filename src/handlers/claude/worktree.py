@@ -24,9 +24,7 @@ def register_worktree_commands(app: AsyncApp, deps: HandlerDependencies) -> None
     """
     git_service = GitService()
 
-    @app.command("/worktree")
-    @slack_command()
-    async def handle_worktree(ctx: CommandContext, deps: HandlerDependencies = deps):
+    async def _handle_worktree(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /worktree [add|list|switch|merge] <args> command."""
         session = await deps.db.get_or_create_session(
             ctx.channel_id,
@@ -70,6 +68,11 @@ def register_worktree_commands(app: AsyncApp, deps: HandlerDependencies) -> None
                 text=f"Git error: {e}",
                 blocks=SlackFormatter.error_message(f"Git error: {e}"),
             )
+
+    # Register both /worktree and /wt alias
+    handle_worktree = slack_command()(_handle_worktree)
+    app.command("/worktree")(handle_worktree)
+    app.command("/wt")(handle_worktree)
 
 
 async def _handle_add(
