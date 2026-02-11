@@ -20,6 +20,7 @@ from .claude import (
     register_mode_command,
     register_parallel_commands,
     register_queue_commands,
+    register_worktree_commands,
 )
 
 # Codex-specific handlers
@@ -74,6 +75,7 @@ def register_commands(
     register_agents_command(app, deps)
     register_mode_command(app, deps)
     register_git_commands(app, deps)
+    register_worktree_commands(app, deps)
     register_cancel_commands(app, deps)
 
     # Codex-specific handlers
