@@ -6,7 +6,7 @@ from typing import Optional
 
 from loguru import logger
 
-from .models import Checkpoint, GitStatus
+from .models import Checkpoint, GitStatus, Worktree
 
 
 class GitError(Exception):
@@ -350,3 +350,224 @@ class GitService:
                 branches.append(line)
 
         return branches, current_branch
+
+    # -------------------------------------------------------------------------
+    # Worktree Operations
+    # -------------------------------------------------------------------------
+
+    async def get_main_worktree(self, working_directory: str) -> str:
+        """Get the path of the main worktree (original clone).
+
+        Resolves correctly even when called from within a secondary worktree.
+
+        Parameters
+        ----------
+        working_directory : str
+            Any directory within the git repo or a worktree.
+
+        Returns
+        -------
+        str
+            Absolute path to the main worktree root.
+        """
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        # git worktree list --porcelain always lists the main worktree first
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "worktree", "list", "--porcelain"
+        )
+        if returncode != 0:
+            raise GitError(f"Failed to get worktree info: {stderr}")
+
+        for line in stdout.split("\n"):
+            if line.startswith("worktree "):
+                return line[len("worktree "):]
+
+        # Fallback
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "rev-parse", "--show-toplevel"
+        )
+        if returncode != 0:
+            raise GitError(f"Failed to get repo root: {stderr}")
+        return stdout
+
+    async def list_worktrees(self, working_directory: str) -> list[Worktree]:
+        """List all worktrees for the repository.
+
+        Parameters
+        ----------
+        working_directory : str
+            Any directory within the git repo or a worktree.
+
+        Returns
+        -------
+        list[Worktree]
+            List of Worktree objects.
+        """
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "worktree", "list", "--porcelain"
+        )
+        if returncode != 0:
+            raise GitError(f"Failed to list worktrees: {stderr}")
+
+        worktrees: list[Worktree] = []
+        current_wt: dict[str, str] = {}
+        is_first = True
+
+        for line in stdout.split("\n"):
+            if not line.strip():
+                if current_wt:
+                    worktrees.append(
+                        Worktree(
+                            path=current_wt.get("worktree", ""),
+                            branch=current_wt.get("branch", "").replace(
+                                "refs/heads/", ""
+                            ),
+                            commit=current_wt.get("HEAD", ""),
+                            is_main=is_first,
+                        )
+                    )
+                    is_first = False
+                    current_wt = {}
+                continue
+
+            if line.startswith("worktree "):
+                current_wt["worktree"] = line[len("worktree "):]
+            elif line.startswith("HEAD "):
+                current_wt["HEAD"] = line[len("HEAD "):]
+            elif line.startswith("branch "):
+                current_wt["branch"] = line[len("branch "):]
+            elif line == "detached":
+                current_wt["branch"] = "(detached HEAD)"
+
+        # Handle last entry (no trailing blank line)
+        if current_wt:
+            worktrees.append(
+                Worktree(
+                    path=current_wt.get("worktree", ""),
+                    branch=current_wt.get("branch", "").replace("refs/heads/", ""),
+                    commit=current_wt.get("HEAD", ""),
+                    is_main=is_first,
+                )
+            )
+
+        return worktrees
+
+    async def add_worktree(self, working_directory: str, branch_name: str) -> str:
+        """Create a new worktree with a new branch.
+
+        The worktree is placed in a sibling `-worktrees/` directory. For example,
+        if the main repo is at `/home/user/project`, the worktree goes to
+        `/home/user/project-worktrees/<branch-name>`.
+
+        Parameters
+        ----------
+        working_directory : str
+            Current working directory (any dir in the repo).
+        branch_name : str
+            Name for the new branch and worktree directory.
+
+        Returns
+        -------
+        str
+            Absolute path to the new worktree directory.
+        """
+        self._validate_branch_name(branch_name)
+
+        main_root = await self.get_main_worktree(working_directory)
+        worktree_base = main_root + "-worktrees"
+        worktree_path = str(Path(worktree_base) / branch_name)
+
+        if Path(worktree_path).exists():
+            raise GitError(f"Worktree directory already exists: {worktree_path}")
+
+        # Create the worktrees base directory if needed
+        Path(worktree_base).mkdir(parents=True, exist_ok=True)
+
+        # git worktree add -b <branch> <path>
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "worktree", "add", "-b", branch_name, worktree_path
+        )
+        if returncode != 0:
+            raise GitError(f"Failed to create worktree: {stderr}")
+
+        return worktree_path
+
+    async def remove_worktree(
+        self, working_directory: str, worktree_path: str, force: bool = False
+    ) -> bool:
+        """Remove a worktree.
+
+        Parameters
+        ----------
+        working_directory : str
+            Any directory within the repo (NOT the worktree being removed).
+        worktree_path : str
+            Path to the worktree to remove.
+        force : bool
+            If True, force removal even with uncommitted changes.
+
+        Returns
+        -------
+        bool
+            True if successfully removed.
+        """
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        args = ["worktree", "remove", worktree_path]
+        if force:
+            args.append("--force")
+
+        stdout, stderr, returncode = await self._run_git_command(working_directory, *args)
+        if returncode != 0:
+            raise GitError(f"Failed to remove worktree: {stderr}")
+
+        return True
+
+    async def merge_branch(
+        self, working_directory: str, branch_name: str
+    ) -> tuple[bool, str]:
+        """Merge a branch into the current branch.
+
+        Parameters
+        ----------
+        working_directory : str
+            The directory to merge into (checked out to the target branch).
+        branch_name : str
+            The branch to merge from.
+
+        Returns
+        -------
+        tuple[bool, str]
+            (success, message). success is False if there were conflicts.
+        """
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        self._validate_branch_name(branch_name)
+
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "merge", branch_name
+        )
+
+        if returncode == 0:
+            return True, stdout or "Merge completed successfully."
+
+        # Check for merge conflicts
+        if "CONFLICT" in stdout or "CONFLICT" in stderr:
+            conf_out, _, _ = await self._run_git_command(
+                working_directory, "diff", "--name-only", "--diff-filter=U"
+            )
+            conflict_files = [f for f in conf_out.split("\n") if f.strip()]
+            conflict_msg = f"Merge conflicts in {len(conflict_files)} file(s):\n"
+            conflict_msg += "\n".join(f"  - {f}" for f in conflict_files[:20])
+            if len(conflict_files) > 20:
+                conflict_msg += f"\n  ... and {len(conflict_files) - 20} more"
+            return False, conflict_msg
+
+        raise GitError(f"Merge failed: {stderr or stdout}")

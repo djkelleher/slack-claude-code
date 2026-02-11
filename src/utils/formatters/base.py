@@ -81,25 +81,35 @@ def flatten_text(text: str) -> str:
     for line in lines:
         stripped = line.strip()
 
-        # Check if this is a structural line that should be preserved
-        is_structural = (
+        # Classify lines into: break (forces separation), start (begins a new
+        # logical block but can have continuations), or continuation (appends
+        # to the current block).
+        is_break = (
             not stripped  # Blank line (paragraph separator)
-            or stripped.startswith("#")  # Header
-            or stripped.startswith("- ")  # Bullet list
-            or stripped.startswith("* ")  # Bullet list
-            or stripped.startswith("• ")  # Already converted bullet
-            or re.match(r"^\d+\.\s", stripped)  # Numbered list
-            or stripped.startswith(">")  # Blockquote
             or stripped.startswith("\x00")  # Protected content placeholder
             or stripped.startswith("---")  # Horizontal rule
             or stripped.startswith("***")  # Horizontal rule
         )
 
-        if is_structural:
+        is_new_block_start = (
+            stripped.startswith("#")  # Header
+            or stripped.startswith("- ")  # Bullet list
+            or stripped.startswith("* ")  # Bullet list
+            or stripped.startswith("• ")  # Already converted bullet
+            or re.match(r"^\d+\.\s", stripped)  # Numbered list
+            or stripped.startswith(">")  # Blockquote
+        )
+
+        if is_break:
             flush_paragraph()
             result_lines.append(stripped)
+        elif is_new_block_start:
+            # Start a new logical block - flush previous, then collect this
+            # line so continuations can be joined to it
+            flush_paragraph()
+            current_paragraph.append(stripped)
         else:
-            # Regular paragraph text - collect for joining
+            # Continuation text - collect for joining to current block
             if stripped:
                 current_paragraph.append(stripped)
 
@@ -451,8 +461,14 @@ def _parse_inline_elements(text: str) -> list[dict]:
         start = i
         while i < len(text) and text[i] not in "`*_~":
             i += 1
-        if i > start:
-            elements.append({"type": "text", "text": text[start:i]})
+        if i == start:
+            # Unmatched special character (no closing marker found above) -
+            # consume it as literal text to avoid infinite loop
+            i += 1
+            # Continue collecting regular text after the unmatched marker
+            while i < len(text) and text[i] not in "`*_~":
+                i += 1
+        elements.append({"type": "text", "text": text[start:i]})
 
     return elements if elements else [{"type": "text", "text": text}]
 

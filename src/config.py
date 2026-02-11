@@ -9,6 +9,56 @@ from src.config_storage import get_storage
 # Global constant for Claude plans directory
 PLANS_DIR = str(Path.home() / ".claude" / "plans")
 
+# Model-to-backend mapping
+CLAUDE_MODELS: set[str] = {
+    "opus",
+    "sonnet",
+    "haiku",
+    "claude-opus-4",
+    "claude-sonnet-4",
+    "claude-sonnet-4-5",
+    "claude-haiku-4",
+}
+
+CODEX_MODELS: set[str] = {
+    "gpt-5-codex",
+    "gpt-5",
+    "codex",
+    "o3",
+    "o4-mini",
+}
+
+
+def get_backend_for_model(model: Optional[str]) -> str:
+    """
+    Determine which backend to use based on the model name.
+
+    Args:
+        model: The model name (e.g., "opus", "gpt-5-codex")
+
+    Returns:
+        "claude" or "codex"
+    """
+    if model is None:
+        return "claude"  # Default to Claude
+
+    model_lower = model.lower()
+
+    # Check exact matches first
+    if model_lower in CLAUDE_MODELS:
+        return "claude"
+    if model_lower in CODEX_MODELS:
+        return "codex"
+
+    # Check prefixes for extended model names
+    if model_lower.startswith("claude"):
+        return "claude"
+    if model_lower.startswith("gpt") or model_lower.startswith("codex") or model_lower.startswith("o"):
+        return "codex"
+
+    # Default to Claude for unknown models
+    return "claude"
+
 
 class ExecutionTimeouts(BaseModel):
     """Timeout configuration for command execution."""
@@ -161,6 +211,7 @@ class Config(BaseSettings):
     # Slack API limits
     SLACK_BLOCK_TEXT_LIMIT: int = 2900
     SLACK_FILE_THRESHOLD: int = 2000
+    SLACK_MAX_BLOCKS_PER_MESSAGE: int = 50
 
     # Valid permission modes for Claude Code CLI
     VALID_PERMISSION_MODES: tuple[str, ...] = (
@@ -182,6 +233,31 @@ class Config(BaseSettings):
 
     # GitHub repository for web viewer links
     GITHUB_REPO: str = ""
+
+    # Codex configuration
+    CODEX_SANDBOX_MODE: str = "workspace-write"
+    CODEX_APPROVAL_MODE: str = "on-request"
+
+    # Valid sandbox modes for Codex CLI
+    VALID_SANDBOX_MODES: tuple[str, ...] = (
+        "read-only",
+        "workspace-write",
+        "danger-full-access",
+    )
+
+    # Valid approval modes for Codex CLI
+    VALID_APPROVAL_MODES: tuple[str, ...] = (
+        "untrusted",
+        "on-failure",
+        "on-request",
+        "never",
+    )
+
+    # PTY session configuration (for Codex)
+    USE_PTY_SESSIONS: bool = True
+    PTY_MAX_SESSIONS: int = 10
+    PTY_IDLE_TIMEOUT_MINUTES: int = 30
+    PTY_CLEANUP_INTERVAL_SECONDS: int = 60
 
     # Execution timeout overrides from environment
     USAGE_CHECK_TIMEOUT: int = 30

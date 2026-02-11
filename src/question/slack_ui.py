@@ -7,7 +7,7 @@ and capturing user responses.
 import json
 from typing import TYPE_CHECKING
 
-from src.utils.formatters.base import split_text_into_blocks
+from src.utils.formatters.base import text_to_rich_text_blocks
 
 if TYPE_CHECKING:
     from .manager import PendingQuestion, Question
@@ -39,18 +39,16 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
 
     blocks.append({"type": "divider"})
 
-    # Add context text if provided (split into multiple blocks if needed)
+    # Add context text if provided (rich_text for full-width display)
     if context_text and context_text.strip():
-        context_blocks = split_text_into_blocks(context_text.strip(), "section")
-        blocks.extend(context_blocks)
+        blocks.extend(text_to_rich_text_blocks(context_text.strip()))
         blocks.append({"type": "divider"})
 
     # Build blocks for each question
     for i, question in enumerate(pending.questions):
-        # Question text (split into multiple blocks if needed)
-        question_text = f"*{question.header}*\n{question.question}"
-        question_blocks = split_text_into_blocks(question_text, "section")
-        blocks.extend(question_blocks)
+        # Question text (rich_text for full-width display)
+        question_text = f"**{question.header}**\n{question.question}"
+        blocks.extend(text_to_rich_text_blocks(question_text))
 
         # Build action buttons for options
         if question.multi_select:
@@ -61,24 +59,26 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
             # For single-select, use buttons (includes "Other" button)
             blocks.append(_build_button_block(pending.question_id, i, question))
 
-        # Add option descriptions if any
+        # Add option descriptions if any (rich_text for full-width display)
         descriptions = []
         for opt in question.options:
             if opt.description:
-                descriptions.append(f"• *{opt.label}*: {opt.description}")
+                descriptions.append(f"- **{opt.label}**: {opt.description}")
 
         if descriptions:
             descriptions_text = "\n".join(descriptions)
-            description_blocks = split_text_into_blocks(descriptions_text, "context")
-            blocks.extend(description_blocks)
+            blocks.extend(text_to_rich_text_blocks(descriptions_text))
 
         # Add spacing between questions
         if i < len(pending.questions) - 1:
             blocks.append({"type": "divider"})
 
-    # Add submit button for multi-select questions
-    has_multiselect = any(q.multi_select for q in pending.questions)
-    if has_multiselect:
+    # Always add a single confirm button at the bottom.
+    # For single-question single-select, individual button clicks auto-resolve
+    # (no confirm needed). For multi-question or multi-select, users must click
+    # confirm after making all selections.
+    needs_confirm = len(pending.questions) > 1 or any(q.multi_select for q in pending.questions)
+    if needs_confirm:
         blocks.append(
             {
                 "type": "actions",
@@ -88,11 +88,11 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
                         "type": "button",
                         "text": {
                             "type": "plain_text",
-                            "text": "Submit Selections",
+                            "text": "Confirm",
                             "emoji": True,
                         },
                         "style": "primary",
-                        "action_id": "question_multiselect_submit",
+                        "action_id": "question_confirm_submit",
                         "value": pending.question_id,
                     }
                 ],
@@ -251,24 +251,24 @@ def build_question_result_blocks(
     # Header showing answered
     blocks.append(
         {
-            "type": "section",
+            "type": "header",
             "text": {
-                "type": "mrkdwn",
-                "text": f":heavy_check_mark: *Question answered by <@{user_id}>*",
+                "type": "plain_text",
+                "text": ":heavy_check_mark: Question answered",
+                "emoji": True,
             },
         }
     )
 
     blocks.append({"type": "divider"})
 
-    # Show each question and answer (split into multiple blocks if needed)
+    # Show each question and answer (rich_text for full-width display)
     for i, question in enumerate(pending.questions):
         selected = pending.answers.get(i, ["(no answer)"])
         answer_text = ", ".join(selected)
 
-        result_text = f"*{question.header}*\n_{question.question}_\n\n*Answer:* {answer_text}"
-        result_blocks = split_text_into_blocks(result_text, "section")
-        blocks.extend(result_blocks)
+        result_text = f"**{question.header}**\n*{question.question}*\n\n**Answer:** {answer_text}"
+        blocks.extend(text_to_rich_text_blocks(result_text))
 
     return blocks
 

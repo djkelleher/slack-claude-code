@@ -1,10 +1,11 @@
-"""Mode command handler: /mode."""
+"""Mode command handler: /mode (Claude permission modes)."""
 
 from slack_bolt.async_app import AsyncApp
 
-from ..config import config
-from ..utils.formatting import SlackFormatter
-from .base import CommandContext, HandlerDependencies, slack_command
+from src.config import config
+from src.utils.formatting import SlackFormatter
+
+from ..base import CommandContext, HandlerDependencies, slack_command
 
 # Mode aliases: short name -> CLI mode value
 MODE_ALIASES = {

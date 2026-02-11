@@ -6,10 +6,10 @@ import uuid
 
 from slack_bolt.async_app import AsyncApp
 
-from src.config import config
+from src.config import config, get_backend_for_model, CLAUDE_MODELS, CODEX_MODELS
 from src.utils.formatting import SlackFormatter
 
-from .base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, slack_command
 
 
 def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
@@ -62,6 +62,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 execution_id=str(uuid.uuid4()),
                 permission_mode=session.permission_mode,
                 model=session.model,
+                channel_id=ctx.channel_id,
             )
 
             # Update session if needed
@@ -364,8 +365,10 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         if ctx.text:
             # Direct model selection via command argument
             model_name = ctx.text.strip().lower()
-            # Normalize model names
+
+            # Normalize model names (support both Claude and Codex models)
             model_map = {
+                # Claude models
                 "opus": "opus",
                 "opus-4": "opus",
                 "opus-4.5": "opus",
@@ -374,18 +377,28 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 "sonnet-4.5": "sonnet",
                 "haiku": "haiku",
                 "haiku-4": "haiku",
+                # Codex models
+                "codex": "codex",
+                "gpt-5": "gpt-5",
+                "gpt-5-codex": "gpt-5-codex",
+                "o3": "o3",
+                "o4-mini": "o4-mini",
             }
             normalized = model_map.get(model_name, model_name)
+            backend = get_backend_for_model(normalized)
+
             await deps.db.update_session_model(ctx.channel_id, ctx.thread_ts, normalized)
+
+            backend_label = "Claude Code" if backend == "claude" else "OpenAI Codex"
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
-                text=f":heavy_check_mark: Model changed to *{normalized}*",
+                text=f":heavy_check_mark: Model changed to *{normalized}* ({backend_label})",
                 blocks=[
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":heavy_check_mark: Model changed to *{normalized}*",
+                            "text": f":heavy_check_mark: Model changed to *{normalized}*\n_Backend: {backend_label}_",
                         },
                     }
                 ],
@@ -394,27 +407,29 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             # Show current model and allow selection via buttons
             # Get current model from session (default to opus)
             current_model = session.model or "opus"
+            current_backend = get_backend_for_model(current_model)
 
-            # Available models (opus first as default)
-            models = [
+            # Available models (organized by backend)
+            claude_models = [
                 {"name": "opus", "display": "Claude Opus 4.5", "desc": "Most capable model"},
-                {
-                    "name": "sonnet",
-                    "display": "Claude Sonnet 4.5",
-                    "desc": "Balanced performance and speed",
-                },
-                {
-                    "name": "haiku",
-                    "display": "Claude Haiku 4",
-                    "desc": "Fastest and most cost-effective",
-                },
+                {"name": "sonnet", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
+                {"name": "haiku", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
+            ]
+
+            codex_models = [
+                {"name": "gpt-5-codex", "display": "GPT-5 Codex", "desc": "OpenAI's most capable coding model"},
+                {"name": "o3", "display": "O3", "desc": "OpenAI reasoning model"},
+                {"name": "o4-mini", "display": "O4 Mini", "desc": "Fast and efficient"},
             ]
 
             # Get display name for current model
+            all_models = claude_models + codex_models
             current_display = next(
-                (m["display"] for m in models if m["name"] == current_model),
+                (m["display"] for m in all_models if m["name"] == current_model),
                 current_model,
             )
+
+            backend_label = "Claude Code" if current_backend == "claude" else "OpenAI Codex"
 
             # Build button blocks
             blocks = [
@@ -422,13 +437,17 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*Current Model:* {current_display}\n\nSelect a model:",
+                        "text": f"*Current Model:* {current_display}\n*Backend:* {backend_label}\n\nSelect a model:",
                     },
                 },
                 {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "*Claude Code Models*"},
+                },
             ]
 
-            for model in models:
+            for model in claude_models:
                 is_current = model["name"] == current_model
                 button_text = f"{'✓ ' if is_current else ''}{model['display']}"
 
@@ -458,6 +477,75 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                         "accessory": button_accessory,
                     }
                 )
+
+            blocks.append({"type": "divider"})
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "*OpenAI Codex Models*"},
+                }
+            )
+
+            for model in codex_models:
+                is_current = model["name"] == current_model
+                button_text = f"{'✓ ' if is_current else ''}{model['display']}"
+
+                # Build button accessory
+                button_accessory = {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": button_text,
+                        "emoji": True,
+                    },
+                    "action_id": f"select_model_{model['name']}",
+                    "value": f"{ctx.channel_id}|{ctx.thread_ts or ''}",
+                }
+
+                # Only add style if it's the current model
+                if is_current:
+                    button_accessory["style"] = "primary"
+
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*{model['display']}*\n{model['desc']}",
+                        },
+                        "accessory": button_accessory,
+                    }
+                )
+
+            # Add custom model option
+            blocks.append({"type": "divider"})
+
+            # Check if current model is a custom one (not in predefined lists)
+            predefined_models = {m["name"] for m in all_models}
+            is_custom_model = current_model not in predefined_models
+
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*Custom Model*\nEnter any model ID (e.g., `claude-opus-4-5-20250101`)"
+                            + (f"\n_Currently using: `{current_model}`_" if is_custom_model else "")
+                        ),
+                    },
+                    "accessory": {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Enter Custom Model",
+                            "emoji": True,
+                        },
+                        "action_id": "select_model_custom",
+                        "value": f"{ctx.channel_id}|{ctx.thread_ts or ''}",
+                    },
+                }
+            )
 
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
