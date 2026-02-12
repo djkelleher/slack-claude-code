@@ -83,6 +83,9 @@ class TestSession:
         session = Session(channel_id="C123", model="claude-opus-4-6")
         assert session.get_backend() == "claude"
 
+        session = Session(channel_id="C123", model="claude-opus-4-5-20250929")
+        assert session.get_backend() == "claude"
+
     def test_get_backend_codex(self):
         """get_backend returns 'codex' for Codex models."""
         session = Session(channel_id="C123", model="gpt-5-codex")

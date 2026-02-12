@@ -372,7 +372,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 # Claude models
                 "opus": "opus",
                 "opus-4": "opus",
-                "opus-4.5": "opus",
+                "opus-4.5": "claude-opus-4-5-20250929",
                 "opus-4.6": "opus",
                 "sonnet": "sonnet",
                 "sonnet-4": "sonnet",
@@ -428,6 +428,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             # Available models (organized by backend)
             claude_models = [
                 {"name": "opus", "display": "Claude Opus 4.6", "desc": "Most capable model"},
+                {"name": "claude-opus-4-5-20250929", "display": "Claude Opus 4.5", "desc": "Previous generation Opus"},
                 {"name": "sonnet", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
                 {"name": "haiku", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
             ]
