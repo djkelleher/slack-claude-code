@@ -35,6 +35,30 @@ CODEX_MODELS: set[str] = {
 }
 
 
+EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh")
+
+
+def parse_model_effort(model: str) -> tuple[str, Optional[str]]:
+    """Parse effort suffix from a Codex model name.
+
+    Parameters
+    ----------
+    model : str
+        Model name, possibly with effort suffix (e.g., "gpt-5.3-codex-high").
+
+    Returns
+    -------
+    tuple[str, Optional[str]]
+        (base_model, effort_level) — effort_level is None if no suffix found.
+    """
+    model_lower = model.lower()
+    # Check xhigh before high since "-high" is a suffix of "-xhigh"
+    for suffix in ("-xhigh", "-medium", "-high", "-low"):
+        if model_lower.endswith(suffix):
+            return model[: -len(suffix)], suffix[1:]
+    return model, None
+
+
 def get_backend_for_model(model: Optional[str]) -> str:
     """
     Determine which backend to use based on the model name.
@@ -258,15 +282,6 @@ class Config(BaseSettings):
         "on-request",
         "never",
     )
-
-    # Valid reasoning effort levels for Codex CLI
-    VALID_REASONING_LEVELS: tuple[str, ...] = (
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-    )
-    DEFAULT_REASONING_EFFORT: str = "medium"
 
     # PTY session configuration (for Codex)
     USE_PTY_SESSIONS: bool = True

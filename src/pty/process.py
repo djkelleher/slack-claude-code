@@ -8,6 +8,8 @@ from typing import Optional
 import pexpect
 from loguru import logger
 
+from src.config import parse_model_effort
+
 from .types import PTYSessionConfig
 
 
@@ -45,13 +47,12 @@ class CodexProcess:
         if self.config.approval_mode:
             args.extend(["--ask-for-approval", self.config.approval_mode])
 
-        # Add model if specified
+        # Add model if specified, parsing out effort suffix
         if self.config.model:
-            args.extend(["--model", self.config.model])
-
-        # Add reasoning effort level
-        if self.config.reasoning_effort:
-            args.extend(["-c", f'model_reasoning_effort="{self.config.reasoning_effort}"'])
+            base_model, effort = parse_model_effort(self.config.model)
+            args.extend(["--model", base_model])
+            if effort:
+                args.extend(["-c", f'model_reasoning_effort="{effort}"'])
 
         # Add working directory
         args.extend(["--cd", str(cwd)])

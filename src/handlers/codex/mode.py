@@ -1,4 +1,4 @@
-"""Codex mode switching command handlers: /sandbox, /approval, /effort."""
+"""Codex mode switching command handlers: /sandbox, /approval."""
 
 from slack_bolt.async_app import AsyncApp
 
@@ -132,91 +132,6 @@ def register_codex_mode_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "text": {
                         "type": "mrkdwn",
                         "text": f":clipboard: Approval mode updated to `{new_mode}`",
-                    },
-                }
-            ],
-        )
-
-    @app.command("/effort")
-    @slack_command()
-    async def handle_effort(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Set reasoning effort level for the session (Codex)."""
-        session = await deps.db.get_or_create_session(
-            ctx.channel_id, ctx.thread_ts, config.DEFAULT_WORKING_DIR
-        )
-
-        # Map user-friendly names to config values
-        effort_aliases = {
-            "low": "low",
-            "medium": "medium",
-            "med": "medium",
-            "high": "high",
-            "xhigh": "xhigh",
-            "extra high": "xhigh",
-            "extra-high": "xhigh",
-            "extra_high": "xhigh",
-        }
-
-        # Display names for levels
-        effort_display = {
-            "low": "Low — Fast responses with lighter reasoning",
-            "medium": "Medium — Balances speed and reasoning depth",
-            "high": "High — Greater reasoning depth for complex problems",
-            "xhigh": "Extra High — Maximum reasoning depth",
-        }
-
-        if not ctx.text:
-            # Show current level and available options
-            current_level = session.reasoning_effort or config.DEFAULT_REASONING_EFFORT
-            levels_list = "\n".join(
-                [f"• `{k}` — {v.split(' — ')[1]}" for k, v in effort_display.items()]
-            )
-
-            await ctx.client.chat_postMessage(
-                channel=ctx.channel_id,
-                blocks=[
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f":brain: *Current reasoning effort:* `{current_level}`\n\n*Available levels:*\n{levels_list}",
-                        },
-                    },
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": "Use `/effort <level>` to change the reasoning effort. Only applies to Codex models.",
-                            }
-                        ],
-                    },
-                ],
-            )
-            return
-
-        new_level = effort_aliases.get(ctx.text.lower().strip())
-
-        if not new_level:
-            await ctx.client.chat_postMessage(
-                channel=ctx.channel_id,
-                blocks=SlackFormatter.error_message(
-                    f"Invalid reasoning effort: `{ctx.text.strip()}`\n\n"
-                    f"Valid levels: {', '.join(config.VALID_REASONING_LEVELS)}"
-                ),
-            )
-            return
-
-        await deps.db.update_session_reasoning_effort(ctx.channel_id, ctx.thread_ts, new_level)
-
-        await ctx.client.chat_postMessage(
-            channel=ctx.channel_id,
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f":brain: Reasoning effort updated to `{new_level}`",
                     },
                 }
             ],

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from loguru import logger
 
-from src.config import config
+from src.config import config, parse_model_effort
 
 from .streaming import StreamMessage, StreamParser
 
@@ -55,7 +55,6 @@ class SubprocessExecutor:
         db_session_id: Optional[int] = None,
         model: Optional[str] = None,
         channel_id: Optional[str] = None,
-        reasoning_effort: Optional[str] = None,
         _recursion_depth: int = 0,
     ) -> ExecutionResult:
         """Execute a prompt via Codex CLI subprocess.
@@ -114,10 +113,15 @@ class SubprocessExecutor:
                 "--json",  # Stream JSON events
             ]
 
-        # Add model flag if specified
+        # Add model flag if specified, parsing out effort suffix
+        effort = None
         if model:
-            cmd.extend(["--model", model])
-            logger.info(f"{log_prefix}Using --model {model}")
+            base_model, effort = parse_model_effort(model)
+            cmd.extend(["--model", base_model])
+            logger.info(f"{log_prefix}Using --model {base_model}")
+            if effort:
+                cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
+                logger.info(f"{log_prefix}Using reasoning effort: {effort}")
 
         # Determine sandbox mode: explicit > session > config default
         mode = sandbox_mode or config.CODEX_SANDBOX_MODE
@@ -140,11 +144,6 @@ class SubprocessExecutor:
                 f"{log_prefix}Invalid approval mode: {approval}, using {config.CODEX_APPROVAL_MODE}"
             )
             cmd.extend(["--ask-for-approval", config.CODEX_APPROVAL_MODE])
-
-        # Add reasoning effort level via config override
-        if reasoning_effort and reasoning_effort in config.VALID_REASONING_LEVELS:
-            cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
-            logger.info(f"{log_prefix}Using reasoning effort: {reasoning_effort}")
 
         # Add working directory
         cmd.extend(["--cd", working_directory])
@@ -310,7 +309,6 @@ class SubprocessExecutor:
                     db_session_id=db_session_id,
                     model=model,
                     channel_id=channel_id,
-                    reasoning_effort=reasoning_effort,
                     _recursion_depth=_recursion_depth + 1,
                 )
 

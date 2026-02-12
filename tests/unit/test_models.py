@@ -5,6 +5,7 @@ from datetime import datetime
 
 import pytest
 
+from src.config import parse_model_effort
 from src.database.models import (
     CommandHistory,
     GitCheckpoint,
@@ -61,7 +62,6 @@ class TestSession:
             "codex-session-456",  # codex_session_id
             "danger-full-access",  # sandbox_mode
             "never",  # approval_mode
-            "xhigh",  # reasoning_effort
         )
 
         session = Session.from_row(row)
@@ -71,7 +71,6 @@ class TestSession:
         assert session.codex_session_id == "codex-session-456"
         assert session.sandbox_mode == "danger-full-access"
         assert session.approval_mode == "never"
-        assert session.reasoning_effort == "xhigh"
 
     def test_get_backend_claude(self):
         """get_backend returns 'claude' for Claude models."""
@@ -96,6 +95,13 @@ class TestSession:
         assert session.get_backend() == "codex"
 
         session = Session(channel_id="C123", model="gpt-5.1-codex-max")
+        assert session.get_backend() == "codex"
+
+        # Effort-suffixed models should also route to codex
+        session = Session(channel_id="C123", model="gpt-5.3-codex-high")
+        assert session.get_backend() == "codex"
+
+        session = Session(channel_id="C123", model="gpt-5.1-codex-max-xhigh")
         assert session.get_backend() == "codex"
 
     def test_get_backend_default(self):
@@ -152,6 +158,37 @@ class TestSession:
         """session_display_name formats channel sessions correctly."""
         session = Session(channel_id="C123ABC", thread_ts=None)
         assert session.session_display_name() == "C123ABC (Channel)"
+
+
+class TestParseModelEffort:
+    """Tests for parse_model_effort utility."""
+
+    def test_no_effort_suffix(self):
+        """Returns None effort when no suffix present."""
+        assert parse_model_effort("gpt-5.3-codex") == ("gpt-5.3-codex", None)
+        assert parse_model_effort("opus") == ("opus", None)
+
+    def test_effort_suffixes(self):
+        """Parses all effort level suffixes correctly."""
+        assert parse_model_effort("gpt-5.3-codex-low") == ("gpt-5.3-codex", "low")
+        assert parse_model_effort("gpt-5.3-codex-medium") == ("gpt-5.3-codex", "medium")
+        assert parse_model_effort("gpt-5.3-codex-high") == ("gpt-5.3-codex", "high")
+        assert parse_model_effort("gpt-5.3-codex-xhigh") == ("gpt-5.3-codex", "xhigh")
+
+    def test_max_model_with_effort(self):
+        """Handles models ending in -max correctly (not confused with effort)."""
+        assert parse_model_effort("gpt-5.1-codex-max") == ("gpt-5.1-codex-max", None)
+        assert parse_model_effort("gpt-5.1-codex-max-high") == ("gpt-5.1-codex-max", "high")
+        assert parse_model_effort("gpt-5.1-codex-max-xhigh") == ("gpt-5.1-codex-max", "xhigh")
+
+    def test_mini_model_with_effort(self):
+        """Handles models ending in -mini correctly."""
+        assert parse_model_effort("gpt-5.1-codex-mini") == ("gpt-5.1-codex-mini", None)
+        assert parse_model_effort("gpt-5.1-codex-mini-low") == ("gpt-5.1-codex-mini", "low")
+
+    def test_case_insensitive(self):
+        """Parsing is case-insensitive."""
+        assert parse_model_effort("GPT-5.3-CODEX-HIGH") == ("GPT-5.3-CODEX", "high")
 
 
 class TestCommandHistory:
