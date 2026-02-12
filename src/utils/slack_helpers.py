@@ -33,21 +33,41 @@ def _table_block_to_markdown(table_block: dict) -> str:
     return "\n".join(lines).strip()
 
 
+def _section_elements_to_mrkdwn(elements: list[dict]) -> str:
+    """Convert a list of rich_text inline elements to mrkdwn text."""
+    parts = []
+    for elem in elements:
+        if elem.get("type") != "text":
+            continue
+        text = elem.get("text", "")
+        style = elem.get("style", {})
+        if style.get("code"):
+            text = f"`{text}`"
+        if style.get("bold"):
+            text = f"*{text}*"
+        if style.get("italic"):
+            text = f"_{text}_"
+        if style.get("strike"):
+            text = f"~{text}~"
+        parts.append(text)
+    return "".join(parts)
+
+
 def _rich_text_to_plain_text(rich_text_block: dict) -> str:
-    """Convert a rich_text block back to plain text."""
+    """Convert a rich_text block back to mrkdwn-formatted plain text."""
     text_parts = []
     for element in rich_text_block.get("elements", []):
         elem_type = element.get("type", "")
         if elem_type == "rich_text_section":
-            for sub_elem in element.get("elements", []):
-                if sub_elem.get("type") == "text":
-                    text_parts.append(sub_elem.get("text", ""))
+            section_text = _section_elements_to_mrkdwn(element.get("elements", []))
+            if section_text:
+                text_parts.append(section_text)
         elif elem_type == "rich_text_list":
             for i, item in enumerate(element.get("elements", []), 1):
                 prefix = f"{i}. " if element.get("style") == "ordered" else "• "
-                for sub_elem in item.get("elements", []):
-                    if sub_elem.get("type") == "text":
-                        text_parts.append(f"\n{prefix}{sub_elem.get('text', '')}")
+                item_text = _section_elements_to_mrkdwn(item.get("elements", []))
+                if item_text:
+                    text_parts.append(f"\n{prefix}{item_text}")
         elif elem_type == "rich_text_preformatted":
             code_text = ""
             for sub_elem in element.get("elements", []):
@@ -56,9 +76,9 @@ def _rich_text_to_plain_text(rich_text_block: dict) -> str:
             if code_text:
                 text_parts.append(f"\n```\n{code_text}\n```\n")
         elif elem_type == "rich_text_quote":
-            for sub_elem in element.get("elements", []):
-                if sub_elem.get("type") == "text":
-                    text_parts.append(f"\n> {sub_elem.get('text', '')}")
+            quote_text = _section_elements_to_mrkdwn(element.get("elements", []))
+            if quote_text:
+                text_parts.append(f"\n> {quote_text}")
     return "".join(text_parts)
 
 
