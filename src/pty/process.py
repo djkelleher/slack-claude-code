@@ -110,13 +110,15 @@ class CodexProcess:
                     logger.warning("Codex startup timeout with no output")
                     return False
                 else:
-                    logger.error("EOF during Codex startup")
+                    output = self.child.before or ""
+                    logger.error(f"EOF during Codex startup. Output: {output!r}")
                     return False
             except pexpect.TIMEOUT:
                 logger.warning("Codex startup timeout")
                 return False
             except pexpect.EOF:
-                logger.error("EOF during Codex startup - process died")
+                output = self.child.before or ""
+                logger.error(f"EOF during Codex startup - process died. Output: {output!r}")
                 return False
 
         return await loop.run_in_executor(None, read_until_ready)
