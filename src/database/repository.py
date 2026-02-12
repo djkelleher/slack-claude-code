@@ -896,3 +896,24 @@ class DatabaseRepository:
                     thread_ts,
                 ),
             )
+
+    async def update_session_reasoning_effort(
+        self, channel_id: str, thread_ts: Optional[str], reasoning_effort: str
+    ) -> None:
+        """Update the reasoning effort level for a session (Codex)."""
+        async with self._transact() as db:
+            await db.execute(
+                """UPDATE sessions SET reasoning_effort = ?, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    reasoning_effort,
+                    datetime.now(timezone.utc).isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )

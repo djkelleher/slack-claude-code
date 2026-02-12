@@ -80,6 +80,7 @@ def register_codex_session_commands(app: AsyncApp, deps: HandlerDependencies) ->
 
         sandbox_mode = session.sandbox_mode or config.CODEX_SANDBOX_MODE
         approval_mode = session.approval_mode or config.CODEX_APPROVAL_MODE
+        reasoning_effort = session.reasoning_effort or config.DEFAULT_REASONING_EFFORT
         model = session.model or config.DEFAULT_MODEL or "(default)"
         has_session = ":white_check_mark:" if session.codex_session_id else ":x:"
 
@@ -104,6 +105,10 @@ def register_codex_session_commands(app: AsyncApp, deps: HandlerDependencies) ->
             {
                 "type": "mrkdwn",
                 "text": f"*Approval:*\n`{approval_mode}`",
+            },
+            {
+                "type": "mrkdwn",
+                "text": f"*Reasoning Effort:*\n`{reasoning_effort}`",
             },
             {
                 "type": "mrkdwn",

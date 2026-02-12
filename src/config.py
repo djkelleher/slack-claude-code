@@ -15,12 +15,18 @@ CLAUDE_MODELS: set[str] = {
     "sonnet",
     "haiku",
     "claude-opus-4",
+    "claude-opus-4-6",
     "claude-sonnet-4",
     "claude-sonnet-4-5",
     "claude-haiku-4",
 }
 
 CODEX_MODELS: set[str] = {
+    "gpt-5.3-codex",
+    "gpt-5.2-codex",
+    "gpt-5.1-codex-max",
+    "gpt-5.2",
+    "gpt-5.1-codex-mini",
     "gpt-5-codex",
     "gpt-5",
     "codex",
@@ -252,6 +258,15 @@ class Config(BaseSettings):
         "on-request",
         "never",
     )
+
+    # Valid reasoning effort levels for Codex CLI
+    VALID_REASONING_LEVELS: tuple[str, ...] = (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
+    DEFAULT_REASONING_EFFORT: str = "medium"
 
     # PTY session configuration (for Codex)
     USE_PTY_SESSIONS: bool = True

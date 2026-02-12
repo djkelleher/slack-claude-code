@@ -56,6 +56,7 @@ class PTYExecutor:
         sandbox_mode: Optional[str] = None,
         approval_mode: Optional[str] = None,
         model: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
         timeout: float = 216000.0,  # 60 hours
     ) -> ExecutionResult:
         """Execute a prompt via PTY session.
@@ -80,6 +81,7 @@ class PTYExecutor:
             sandbox_mode=sandbox_mode or "workspace-write",
             approval_mode=approval_mode or "on-request",
             model=model,
+            reasoning_effort=reasoning_effort,
         )
 
         try:

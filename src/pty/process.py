@@ -49,6 +49,10 @@ class CodexProcess:
         if self.config.model:
             args.extend(["--model", self.config.model])
 
+        # Add reasoning effort level
+        if self.config.reasoning_effort:
+            args.extend(["-c", f'model_reasoning_effort="{self.config.reasoning_effort}"'])
+
         # Add working directory
         args.extend(["--cd", str(cwd)])
 

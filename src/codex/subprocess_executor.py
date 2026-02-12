@@ -55,6 +55,7 @@ class SubprocessExecutor:
         db_session_id: Optional[int] = None,
         model: Optional[str] = None,
         channel_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
         _recursion_depth: int = 0,
     ) -> ExecutionResult:
         """Execute a prompt via Codex CLI subprocess.
@@ -139,6 +140,11 @@ class SubprocessExecutor:
                 f"{log_prefix}Invalid approval mode: {approval}, using {config.CODEX_APPROVAL_MODE}"
             )
             cmd.extend(["--ask-for-approval", config.CODEX_APPROVAL_MODE])
+
+        # Add reasoning effort level via config override
+        if reasoning_effort and reasoning_effort in config.VALID_REASONING_LEVELS:
+            cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
+            logger.info(f"{log_prefix}Using reasoning effort: {reasoning_effort}")
 
         # Add working directory
         cmd.extend(["--cd", working_directory])
@@ -304,6 +310,7 @@ class SubprocessExecutor:
                     db_session_id=db_session_id,
                     model=model,
                     channel_id=channel_id,
+                    reasoning_effort=reasoning_effort,
                     _recursion_depth=_recursion_depth + 1,
                 )
 

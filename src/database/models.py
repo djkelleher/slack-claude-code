@@ -22,6 +22,7 @@ class Session:
     codex_session_id: Optional[str] = None  # For Codex resume
     sandbox_mode: str = "workspace-write"  # read-only, workspace-write, danger-full-access
     approval_mode: str = "on-request"  # untrusted, on-failure, on-request, never
+    reasoning_effort: str = "medium"  # low, medium, high, xhigh
 
     @classmethod
     def from_row(cls, row: tuple) -> "Session":
@@ -32,6 +33,7 @@ class Session:
         # - codex_session_id (pos 10)
         # - sandbox_mode (pos 11)
         # - approval_mode (pos 12)
+        # - reasoning_effort (pos 13)
         # Original 8 columns: id, channel_id, thread_ts, working_directory,
         #                     claude_session_id, permission_mode, created_at, last_active
         model = None
@@ -39,6 +41,7 @@ class Session:
         codex_session_id = None
         sandbox_mode = "workspace-write"
         approval_mode = "on-request"
+        reasoning_effort = "medium"
 
         if len(row) > 8:
             model = row[8]
@@ -50,6 +53,8 @@ class Session:
             sandbox_mode = row[11] or "workspace-write"
         if len(row) > 12:
             approval_mode = row[12] or "on-request"
+        if len(row) > 13:
+            reasoning_effort = row[13] or "medium"
 
         return cls(
             id=row[0],
@@ -65,6 +70,7 @@ class Session:
             codex_session_id=codex_session_id,
             sandbox_mode=sandbox_mode,
             approval_mode=approval_mode,
+            reasoning_effort=reasoning_effort,
         )
 
     def is_thread_session(self) -> bool:

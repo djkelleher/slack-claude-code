@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- Codex-specific fields
     codex_session_id TEXT DEFAULT NULL,
     sandbox_mode TEXT DEFAULT 'workspace-write',
-    approval_mode TEXT DEFAULT 'on-request'
+    approval_mode TEXT DEFAULT 'on-request',
+    reasoning_effort TEXT DEFAULT 'medium'
 );
 
 -- Command history table
@@ -173,6 +174,12 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     if "approval_mode" not in column_names:
         await db.execute(
             "ALTER TABLE sessions ADD COLUMN approval_mode TEXT DEFAULT 'on-request'"
+        )
+        await db.commit()
+
+    if "reasoning_effort" not in column_names:
+        await db.execute(
+            "ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT DEFAULT 'medium'"
         )
         await db.commit()
 

@@ -61,6 +61,7 @@ class TestSession:
             "codex-session-456",  # codex_session_id
             "danger-full-access",  # sandbox_mode
             "never",  # approval_mode
+            "xhigh",  # reasoning_effort
         )
 
         session = Session.from_row(row)
@@ -70,6 +71,7 @@ class TestSession:
         assert session.codex_session_id == "codex-session-456"
         assert session.sandbox_mode == "danger-full-access"
         assert session.approval_mode == "never"
+        assert session.reasoning_effort == "xhigh"
 
     def test_get_backend_claude(self):
         """get_backend returns 'claude' for Claude models."""
@@ -79,12 +81,21 @@ class TestSession:
         session = Session(channel_id="C123", model="claude-sonnet-4")
         assert session.get_backend() == "claude"
 
+        session = Session(channel_id="C123", model="claude-opus-4-6")
+        assert session.get_backend() == "claude"
+
     def test_get_backend_codex(self):
         """get_backend returns 'codex' for Codex models."""
         session = Session(channel_id="C123", model="gpt-5-codex")
         assert session.get_backend() == "codex"
 
         session = Session(channel_id="C123", model="o3")
+        assert session.get_backend() == "codex"
+
+        session = Session(channel_id="C123", model="gpt-5.3-codex")
+        assert session.get_backend() == "codex"
+
+        session = Session(channel_id="C123", model="gpt-5.1-codex-max")
         assert session.get_backend() == "codex"
 
     def test_get_backend_default(self):

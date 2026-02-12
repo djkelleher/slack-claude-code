@@ -372,15 +372,21 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 "opus": "opus",
                 "opus-4": "opus",
                 "opus-4.5": "opus",
+                "opus-4.6": "opus",
                 "sonnet": "sonnet",
                 "sonnet-4": "sonnet",
                 "sonnet-4.5": "sonnet",
                 "haiku": "haiku",
                 "haiku-4": "haiku",
                 # Codex models
-                "codex": "codex",
-                "gpt-5": "gpt-5",
+                "codex": "gpt-5.3-codex",
+                "gpt-5.3-codex": "gpt-5.3-codex",
+                "gpt-5.2-codex": "gpt-5.2-codex",
+                "gpt-5.1-codex-max": "gpt-5.1-codex-max",
+                "gpt-5.2": "gpt-5.2",
+                "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
                 "gpt-5-codex": "gpt-5-codex",
+                "gpt-5": "gpt-5",
                 "o3": "o3",
                 "o4-mini": "o4-mini",
             }
@@ -411,15 +417,20 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
             # Available models (organized by backend)
             claude_models = [
-                {"name": "opus", "display": "Claude Opus 4.5", "desc": "Most capable model"},
+                {"name": "opus", "display": "Claude Opus 4.6", "desc": "Most capable model"},
                 {"name": "sonnet", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
                 {"name": "haiku", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
             ]
 
             codex_models = [
-                {"name": "gpt-5-codex", "display": "GPT-5 Codex", "desc": "OpenAI's most capable coding model"},
-                {"name": "o3", "display": "O3", "desc": "OpenAI reasoning model"},
-                {"name": "o4-mini", "display": "O4 Mini", "desc": "Fast and efficient"},
+                {"name": "gpt-5.3-codex", "display": "GPT-5.3 Codex", "desc": "Latest frontier agentic coding model"},
+                {"name": "gpt-5.2-codex", "display": "GPT-5.2 Codex", "desc": "Frontier agentic coding model"},
+                {"name": "gpt-5.1-codex-max", "display": "GPT-5.1 Codex Max", "desc": "Deep and fast reasoning"},
+                {"name": "gpt-5.2", "display": "GPT-5.2", "desc": "Latest frontier model"},
+                {"name": "gpt-5.1-codex-mini", "display": "GPT-5.1 Codex Mini", "desc": "Cheaper, faster, less capable"},
+                {"name": "gpt-5-codex", "display": "GPT-5 Codex (Legacy)", "desc": "Legacy coding model"},
+                {"name": "o3", "display": "O3 (Legacy)", "desc": "OpenAI reasoning model"},
+                {"name": "o4-mini", "display": "O4 Mini (Legacy)", "desc": "Fast and efficient"},
             ]
 
             # Get display name for current model
@@ -530,7 +541,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f"*Custom Model*\nEnter any model ID (e.g., `claude-opus-4-5-20250101`)"
+                            f"*Custom Model*\nEnter any model ID (e.g., `claude-opus-4-6-20250101`)"
                             + (f"\n_Currently using: `{current_model}`_" if is_custom_model else "")
                         ),
                     },

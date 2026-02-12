@@ -248,6 +248,7 @@ async def _execute_codex_message(
             db_session_id=session.id,
             model=session.model,
             channel_id=channel_id,
+            reasoning_effort=session.reasoning_effort or config.DEFAULT_REASONING_EFFORT,
         )
 
         # Update session with Codex session ID for resume

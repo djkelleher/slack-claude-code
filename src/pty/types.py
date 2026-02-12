@@ -24,6 +24,7 @@ class PTYSessionConfig:
     sandbox_mode: str = "workspace-write"
     approval_mode: str = "on-request"
     model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
     # Timeouts
     startup_timeout: float = 30.0
