@@ -1079,7 +1079,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                             "action_id": "custom_model_input",
                             "placeholder": {
                                 "type": "plain_text",
-                                "text": "e.g., claude-opus-4-5-20250101",
+                                "text": "e.g., claude-opus-4-6-20250101",
                             },
                         },
                         "label": {"type": "plain_text", "text": "Model ID"},
@@ -1159,7 +1159,8 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         # Model display names
         model_display = {
-            "opus": "Claude Opus 4.5",
+            "opus": "Claude Opus 4.6",
+            "claude-opus-4-5-20250929": "Claude Opus 4.5",
             "sonnet": "Claude Sonnet 4.5",
             "haiku": "Claude Haiku 4",
         }
