@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 from loguru import logger
 
 from ..config import config
-from .streaming import StreamMessage, StreamParser
+from .streaming import StreamMessage, StreamParser, _concat_with_spacing
 
 # Timeout for reading a single line from Claude process stdout
 # If no output is received for this duration, assume the process is hung
@@ -546,7 +546,9 @@ class SubprocessExecutor:
 
                 # Accumulate content
                 if msg.type == "assistant" and msg.content:
-                    accumulated_output += msg.content
+                    accumulated_output = _concat_with_spacing(
+                        accumulated_output, msg.content
+                    )
                 elif msg.type == "result" and msg.content and not accumulated_output:
                     # Some CLI commands only populate the result field.
                     accumulated_output = msg.content

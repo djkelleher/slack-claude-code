@@ -7,6 +7,7 @@ from typing import Iterator, Optional
 
 from loguru import logger
 
+from src.claude.streaming import _concat_with_spacing
 from src.config import config
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
@@ -180,7 +181,9 @@ class StreamParser:
                 content = "".join(text_parts)
 
             if content:
-                self.accumulated_content += content
+                self.accumulated_content = _concat_with_spacing(
+                    self.accumulated_content, content
+                )
                 self.accumulated_detailed += content
 
             return StreamMessage(

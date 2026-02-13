@@ -8,6 +8,8 @@ from loguru import logger
 
 from src.config import config, parse_model_effort
 
+from src.claude.streaming import _concat_with_spacing
+
 from .streaming import StreamMessage, StreamParser
 
 if TYPE_CHECKING:
@@ -242,7 +244,9 @@ class SubprocessExecutor:
 
                 # Accumulate content
                 if msg.type == "assistant" and msg.content:
-                    accumulated_output += msg.content
+                    accumulated_output = _concat_with_spacing(
+                        accumulated_output, msg.content
+                    )
 
                 # Track result metadata
                 if msg.type == "result":

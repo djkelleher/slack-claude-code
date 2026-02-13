@@ -12,6 +12,22 @@ from src.config import config
 MAX_BUFFER_SIZE = 1024 * 1024  # 1MB
 
 
+def _concat_with_spacing(existing: str, new: str) -> str:
+    """Concatenate text ensuring a separator between chunks.
+
+    When Claude outputs text across multiple assistant messages (separated by
+    tool use), the chunks need a newline between them so sentences don't run
+    together like ``"found.Now let me"``.
+    """
+    if not existing or not new:
+        return existing + new
+    # If existing already ends with whitespace or new starts with it, no action needed
+    if existing[-1] in ("\n", " ") or new[0] in ("\n", " "):
+        return existing + new
+    # Separate distinct assistant turns with double newline (paragraph break)
+    return existing + "\n\n" + new
+
+
 @dataclass
 class ToolActivity:
     """Structured representation of a tool invocation.
@@ -277,7 +293,9 @@ class StreamParser:
                         detailed_content += f"  {key}: {value_preview}\n"
 
             if text_content:
-                self.accumulated_content += text_content
+                self.accumulated_content = _concat_with_spacing(
+                    self.accumulated_content, text_content
+                )
             if detailed_content:
                 self.accumulated_detailed += detailed_content
 
