@@ -63,11 +63,13 @@ def _rich_text_to_plain_text(rich_text_block: dict) -> str:
             if section_text:
                 text_parts.append(section_text)
         elif elem_type == "rich_text_list":
+            indent_level = element.get("indent", 0)
+            indent_spaces = "    " * indent_level
             for i, item in enumerate(element.get("elements", []), 1):
                 prefix = f"{i}. " if element.get("style") == "ordered" else "• "
                 item_text = _section_elements_to_mrkdwn(item.get("elements", []))
                 if item_text:
-                    text_parts.append(f"\n{prefix}{item_text}")
+                    text_parts.append(f"\n{indent_spaces}{prefix}{item_text}")
         elif elem_type == "rich_text_preformatted":
             code_text = ""
             for sub_elem in element.get("elements", []):
