@@ -42,6 +42,8 @@ class SubprocessExecutor:
         db: Optional["DatabaseRepository"] = None,
     ) -> None:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self._process_channels: dict[str, str] = {}  # track_id -> channel_id
+        self._lock: asyncio.Lock = asyncio.Lock()
         self.db = db
 
     async def execute(
@@ -137,15 +139,13 @@ class SubprocessExecutor:
             cmd.extend(["--sandbox", config.CODEX_SANDBOX_MODE])
 
         # Determine approval mode: explicit > session > config default
+        # Codex CLI doesn't support --ask-for-approval; map to equivalent flags
         approval = approval_mode or config.CODEX_APPROVAL_MODE
-        if approval in config.VALID_APPROVAL_MODES:
-            cmd.extend(["--ask-for-approval", approval])
-            logger.info(f"{log_prefix}Using --ask-for-approval {approval}")
+        if approval == "never":
+            cmd.append("--full-auto")
+            logger.info(f"{log_prefix}Using --full-auto (approval=never)")
         else:
-            logger.warning(
-                f"{log_prefix}Invalid approval mode: {approval}, using {config.CODEX_APPROVAL_MODE}"
-            )
-            cmd.extend(["--ask-for-approval", config.CODEX_APPROVAL_MODE])
+            logger.info(f"{log_prefix}Approval mode: {approval} (no extra flag needed)")
 
         # Add working directory
         cmd.extend(["--cd", working_directory])
@@ -181,7 +181,10 @@ class SubprocessExecutor:
         track_id = execution_id or session_id or "default"
         if channel_id:
             track_id = f"{channel_id}_{track_id}"
-        self._active_processes[track_id] = process
+        async with self._lock:
+            self._active_processes[track_id] = process
+            if channel_id:
+                self._process_channels[track_id] = channel_id
 
         parser = StreamParser()
         accumulated_output = ""
@@ -349,33 +352,53 @@ class SubprocessExecutor:
                 error=str(e),
             )
         finally:
-            self._active_processes.pop(track_id, None)
+            async with self._lock:
+                self._active_processes.pop(track_id, None)
+                self._process_channels.pop(track_id, None)
 
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""
-        process = self._active_processes.get(execution_id)
+        async with self._lock:
+            process = self._active_processes.get(execution_id)
         if process:
             process.terminate()
             return True
         return False
 
     async def cancel_by_channel(self, channel_id: str) -> int:
-        """Cancel all active executions for a channel."""
-        count = 0
-        for exec_id, process in list(self._active_processes.items()):
-            if channel_id in exec_id:
-                process.terminate()
-                count += 1
-        return count
+        """Cancel all active executions for a specific channel.
+
+        Args:
+            channel_id: The Slack channel ID to cancel executions for
+
+        Returns:
+            Number of processes cancelled
+        """
+        async with self._lock:
+            track_ids_to_cancel = [
+                track_id
+                for track_id, ch_id in self._process_channels.items()
+                if ch_id == channel_id
+            ]
+            processes = []
+            for track_id in track_ids_to_cancel:
+                if track_id in self._active_processes:
+                    processes.append(self._active_processes.pop(track_id))
+                    self._process_channels.pop(track_id, None)
+
+        for process in processes:
+            process.terminate()
+        return len(processes)
 
     async def cancel_all(self) -> int:
         """Cancel all active executions."""
-        count = 0
-        for process in list(self._active_processes.values()):
+        async with self._lock:
+            processes = list(self._active_processes.values())
+            self._active_processes.clear()
+            self._process_channels.clear()
+        for process in processes:
             process.terminate()
-            count += 1
-        self._active_processes.clear()
-        return count
+        return len(processes)
 
     async def shutdown(self) -> None:
         """Shutdown and cancel all active executions."""
