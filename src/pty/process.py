@@ -43,9 +43,9 @@ class CodexProcess:
         if self.config.sandbox_mode:
             args.extend(["--sandbox", self.config.sandbox_mode])
 
-        # Add approval mode
-        if self.config.approval_mode:
-            args.extend(["--ask-for-approval", self.config.approval_mode])
+        # Add approval mode (Codex CLI uses --full-auto, not --ask-for-approval)
+        if self.config.approval_mode == "never":
+            args.append("--full-auto")
 
         # Add model if specified, parsing out effort suffix
         if self.config.model:
