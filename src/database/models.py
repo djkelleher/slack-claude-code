@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from src.config import get_backend_for_model
+
 
 @dataclass
 class Session:
@@ -10,26 +12,44 @@ class Session:
     channel_id: str = ""
     thread_ts: Optional[str] = None  # Thread timestamp for thread-based sessions
     working_directory: str = "~"
-    claude_session_id: Optional[str] = None  # For --resume flag
-    permission_mode: Optional[str] = None  # Per-session permission mode override
-    model: Optional[str] = None  # Model to use (e.g., "opus", "sonnet", "haiku")
+    claude_session_id: Optional[str] = None  # For Claude --resume flag
+    permission_mode: Optional[str] = None  # Per-session permission mode override (Claude)
+    model: Optional[str] = None  # Model to use (e.g., "opus", "sonnet", "haiku", "gpt-5-codex")
     added_dirs: list = field(default_factory=list)  # Directories added via /add-dir
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
+    # Codex-specific fields
+    codex_session_id: Optional[str] = None  # For Codex resume
+    sandbox_mode: str = "workspace-write"  # read-only, workspace-write, danger-full-access
+    approval_mode: str = "on-request"  # untrusted, on-failure, on-request, never
 
     @classmethod
     def from_row(cls, row: tuple) -> "Session":
         # Handle schema evolution with ALTER TABLE ADD COLUMN
-        # Columns are appended at the end in order: model (pos 8), added_dirs (pos 9)
+        # Columns are appended at the end in order:
+        # - model (pos 8)
+        # - added_dirs (pos 9)
+        # - codex_session_id (pos 10)
+        # - sandbox_mode (pos 11)
+        # - approval_mode (pos 12)
         # Original 8 columns: id, channel_id, thread_ts, working_directory,
         #                     claude_session_id, permission_mode, created_at, last_active
         model = None
         added_dirs = []
+        codex_session_id = None
+        sandbox_mode = "workspace-write"
+        approval_mode = "on-request"
 
         if len(row) > 8:
             model = row[8]
         if len(row) > 9:
             added_dirs = json.loads(row[9]) if row[9] else []
+        if len(row) > 10:
+            codex_session_id = row[10]
+        if len(row) > 11:
+            sandbox_mode = row[11] or "workspace-write"
+        if len(row) > 12:
+            approval_mode = row[12] or "on-request"
 
         return cls(
             id=row[0],
@@ -42,6 +62,9 @@ class Session:
             added_dirs=added_dirs,
             created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
             last_active=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
+            codex_session_id=codex_session_id,
+            sandbox_mode=sandbox_mode,
+            approval_mode=approval_mode,
         )
 
     def is_thread_session(self) -> bool:
@@ -53,6 +76,16 @@ class Session:
         if self.is_thread_session():
             return f"{self.channel_id} (Thread: {self.thread_ts})"
         return f"{self.channel_id} (Channel)"
+
+    def get_backend(self) -> str:
+        """Get the backend type based on the current model.
+
+        Returns
+        -------
+        str
+            "claude" or "codex"
+        """
+        return get_backend_for_model(self.model)
 
 
 @dataclass

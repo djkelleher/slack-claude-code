@@ -23,12 +23,15 @@ from slack_bolt.async_app import AsyncApp
 from slack_sdk.errors import SlackApiError
 
 from src.approval.plan_manager import PlanApprovalManager
-from src.claude.subprocess_executor import SubprocessExecutor
-from src.config import PLANS_DIR, config
+from src.claude.subprocess_executor import SubprocessExecutor as ClaudeExecutor
+from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
+from src.codex.pty_executor import PTYExecutor
+from src.config import PLANS_DIR, config, get_backend_for_model
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
+from src.pty.pool import PTYSessionPool
 from src.question.manager import QuestionManager
 from src.utils.detail_cache import DetailCache
 from src.utils.file_downloader import (
@@ -84,10 +87,18 @@ async def slack_api_with_retry(
     raise last_error
 
 
-async def shutdown(executor: SubprocessExecutor) -> None:
+async def shutdown(
+    claude_executor: ClaudeExecutor,
+    codex_executor: CodexExecutor | None = None,
+) -> None:
     """Graceful shutdown: cleanup active processes."""
     logger.info("Shutting down - cleaning up active processes...")
-    await executor.shutdown()
+    await claude_executor.shutdown()
+    if codex_executor:
+        await codex_executor.shutdown()
+    # Cleanup PTY sessions if enabled
+    if config.USE_PTY_SESSIONS:
+        await PTYSessionPool.cleanup_all()
     logger.info("All processes terminated")
 
 
@@ -159,6 +170,202 @@ async def post_channel_notification(
         logger.error(f"Failed to post channel notification after {max_retries} attempts: {e}")
 
 
+async def _execute_codex_message(
+    client,
+    deps,
+    session,
+    channel_id: str,
+    thread_ts: str | None,
+    prompt: str,
+    logger,
+) -> None:
+    """Execute a message using the Codex backend.
+
+    This is a simpler execution flow than Claude - no question handling,
+    no plan mode, just direct execution with streaming output.
+    """
+    from src.codex.streaming import StreamMessage as CodexStreamMessage
+
+    # Create command history entry
+    cmd_history = await deps.db.add_command(session.id, prompt)
+    await deps.db.update_command_status(cmd_history.id, "running")
+
+    # Send initial processing message
+    response = await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=f"Processing: {prompt[:100]}...",
+        blocks=SlackFormatter.processing_message(prompt),
+    )
+    message_ts = response["ts"]
+
+    # Setup streaming state
+    execution_id = str(uuid.uuid4())
+
+    async def on_streaming_error(error_msg: str) -> None:
+        """Handle streaming errors by posting to Slack channel."""
+        try:
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f":warning: {error_msg}",
+            )
+        except Exception as e:
+            logger.error(f"Failed to post streaming error notification: {e}")
+
+    streaming_state = StreamingMessageState(
+        channel_id=channel_id,
+        message_ts=message_ts,
+        prompt=prompt,
+        client=client,
+        logger=logger,
+        track_tools=True,
+        smart_concat=True,
+        db_session_id=session.id,
+        on_error=on_streaming_error,
+    )
+    streaming_state.start_heartbeat()
+
+    # Create on_chunk callback for Codex streaming
+    async def on_chunk(msg: CodexStreamMessage) -> None:
+        content = msg.content if msg.type == "assistant" else ""
+        tools = msg.tool_activities
+        if content or tools:
+            await streaming_state.append_and_update(content or "", tools)
+
+    try:
+        # Codex interactive mode is a TUI that doesn't support --json output,
+        # so always use subprocess executor (codex exec --json) with session resume.
+        result = await deps.codex_executor.execute(
+            prompt=prompt,
+            working_directory=session.working_directory,
+            session_id=channel_id,
+            resume_session_id=session.codex_session_id,
+            execution_id=execution_id,
+            on_chunk=on_chunk,
+            sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
+            approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
+            db_session_id=session.id,
+            model=session.model,
+            channel_id=channel_id,
+        )
+
+        # Update session with Codex session ID for resume
+        if result.session_id:
+            await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
+
+        # Update command history
+        if result.success:
+            await deps.db.update_command_status(cmd_history.id, "completed", result.output)
+        else:
+            await deps.db.update_command_status(
+                cmd_history.id, "failed", result.output, result.error
+            )
+
+        # Stop heartbeat before final response
+        await streaming_state.stop_heartbeat()
+
+        # Send final response
+        output = result.output or result.error or "No output"
+
+        if SlackFormatter.should_attach_file(output):
+            # Large response - attach as file
+            blocks, file_content, file_title = SlackFormatter.command_response_with_file(
+                prompt=prompt,
+                output=output,
+                command_id=cmd_history.id,
+                duration_ms=result.duration_ms,
+                cost_usd=result.cost_usd,
+                is_error=not result.success,
+            )
+            await slack_api_with_retry(
+                lambda: client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text=output[:100] + "..." if len(output) > 100 else output,
+                    blocks=blocks,
+                )
+            )
+            # Post response content
+            try:
+                from src.utils.slack_helpers import post_text_snippet
+
+                await post_text_snippet(
+                    client=client,
+                    channel_id=channel_id,
+                    content=file_content,
+                    title="📄 Response summary",
+                    thread_ts=thread_ts,
+                    format_as_text=True,
+                    render_tables=True,
+                )
+            except Exception as post_error:
+                logger.error(f"Failed to post snippet: {post_error}")
+        else:
+            # Format response with table support
+            message_blocks_list = SlackFormatter.command_response_with_tables(
+                prompt=prompt,
+                output=output,
+                command_id=cmd_history.id,
+                duration_ms=result.duration_ms,
+                cost_usd=result.cost_usd,
+                is_error=not result.success,
+            )
+
+            # Update the first message
+            await slack_api_with_retry(
+                lambda: client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text=output[:100] + "..." if len(output) > 100 else output,
+                    blocks=message_blocks_list[0],
+                )
+            )
+
+            # Post additional messages for tables
+            for blocks in message_blocks_list[1:]:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text="Table",
+                    blocks=blocks,
+                )
+
+    except asyncio.CancelledError:
+        logger.info("Codex command execution was cancelled")
+        await streaming_state.stop_heartbeat()
+        await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
+        await client.chat_update(
+            channel=channel_id,
+            ts=message_ts,
+            text="Command cancelled",
+            blocks=SlackFormatter.error_message("Command was cancelled"),
+        )
+    except SlackApiError as e:
+        logger.error(f"Slack API error executing Codex command: {e}\n{traceback.format_exc()}")
+        await streaming_state.stop_heartbeat()
+        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
+        try:
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f":x: Slack API Error: {str(e)[:200]}",
+                blocks=SlackFormatter.error_message(f"Slack API Error: {str(e)}"),
+            )
+        except Exception as notify_error:
+            logger.error(f"Failed to post Slack API error notification: {notify_error}")
+    except Exception as e:
+        logger.error(f"Error executing Codex command: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        await streaming_state.stop_heartbeat()
+        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
+        await client.chat_update(
+            channel=channel_id,
+            ts=message_ts,
+            text=f"Error: {str(e)}",
+            blocks=SlackFormatter.error_message(str(e)),
+        )
+
+
 async def main():
     """Main application entry point."""
     # Validate configuration
@@ -176,7 +383,18 @@ async def main():
     # Create app components
     db = DatabaseRepository(config.DATABASE_PATH)
 
-    executor = SubprocessExecutor(db=db)
+    # Initialize Claude executor (always available)
+    claude_executor = ClaudeExecutor(db=db)
+
+    # Initialize Codex executor (optional)
+    codex_executor = CodexExecutor(db=db)
+
+    # Initialize PTY executor for persistent Codex sessions (if enabled)
+    pty_executor = PTYExecutor() if config.USE_PTY_SESSIONS else None
+
+    # Start PTY cleanup loop if enabled
+    if config.USE_PTY_SESSIONS:
+        await PTYSessionPool.start_cleanup_loop(config.PTY_CLEANUP_INTERVAL_SECONDS)
 
     # Create Slack app
     app = AsyncApp(
@@ -184,8 +402,12 @@ async def main():
         signing_secret=config.SLACK_SIGNING_SECRET,
     )
 
-    # Register handlers
-    deps = register_commands(app, db, executor)
+    # Register handlers (both Claude and Codex)
+    deps = register_commands(
+        app, db, claude_executor,
+        codex_executor=codex_executor,
+        pty_executor=pty_executor,
+    )
     register_actions(app, deps)
 
     # Add a simple health check
@@ -242,6 +464,15 @@ async def main():
             channel_id, thread_ts=thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
         logger.info(f"Using session: {session.session_display_name()}")
+
+        # Cancel any pending questions for this session - unblocks handlers stuck
+        # at wait_for_answer() when user sends a new message instead of clicking buttons
+        cancelled_questions = await QuestionManager.cancel_for_session(str(session.id))
+        if cancelled_questions:
+            logger.info(
+                f"Cancelled {cancelled_questions} pending question(s) for session {session.id} "
+                "due to new message"
+            )
 
         # Validate working directory exists
         if not os.path.isdir(session.working_directory):
@@ -349,6 +580,25 @@ async def main():
                 # No text, only files - provide default prompt
                 prompt = f"Please analyze these uploaded files:\n{file_refs}"
 
+        # Determine which backend to use based on session model
+        backend = get_backend_for_model(session.model)
+        logger.info(f"Using backend: {backend} (model: {session.model})")
+
+        # Route to appropriate execution path
+        if backend == "codex":
+            await _execute_codex_message(
+                client=client,
+                deps=deps,
+                session=session,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                prompt=prompt,
+                logger=logger,
+            )
+            return
+
+        # Claude backend - continue with Claude-specific execution below
+
         # Create command history entry
         cmd_history = await deps.db.add_command(session.id, prompt)
         await deps.db.update_command_status(cmd_history.id, "running")
@@ -452,7 +702,7 @@ async def main():
             )
 
         try:
-            result = await executor.execute(
+            result = await claude_executor.execute(
                 prompt=execution_prompt,
                 working_directory=session.working_directory,
                 session_id=channel_id,
@@ -462,6 +712,7 @@ async def main():
                 permission_mode=session.permission_mode,  # Use session's mode (falls back to config)
                 db_session_id=session.id,  # Pass for smart context tracking
                 model=session.model,  # Use session's selected model
+                channel_id=channel_id,  # For channel-specific cancellation
             )
 
             # Update session with Claude session ID for resume
@@ -548,7 +799,7 @@ async def main():
 
                     # Continue the conversation with the user's answer
                     # This will resume the session
-                    result = await executor.execute(
+                    result = await claude_executor.execute(
                         prompt=answer_text,
                         working_directory=session.working_directory,
                         session_id=channel_id,
@@ -558,6 +809,7 @@ async def main():
                         permission_mode=session.permission_mode,
                         db_session_id=session.id,
                         model=session.model,
+                        channel_id=channel_id,
                     )
 
                     # Update the new message_ts for any future operations
@@ -795,7 +1047,7 @@ async def main():
                     on_chunk = create_on_chunk_callback(streaming_state)
 
                     # Resume Claude session to execute the plan
-                    result = await executor.execute(
+                    result = await claude_executor.execute(
                         prompt="Plan approved. Please proceed with the implementation.",
                         working_directory=session.working_directory,
                         session_id=channel_id,
@@ -805,6 +1057,7 @@ async def main():
                         permission_mode=config.DEFAULT_BYPASS_MODE,
                         db_session_id=session.id,
                         model=session.model,
+                        channel_id=channel_id,
                     )
 
                     # Update message_ts for final response
@@ -1011,17 +1264,17 @@ async def main():
     await shutdown_event.wait()
 
     # Cleanup
-    await shutdown(executor)
+    await shutdown(claude_executor, codex_executor)
     await handler.close_async()
 
 
 def run():
-    # Check for subcommands (e.g., ccslack config ...)
-    if len(sys.argv) > 1 and sys.argv[0].endswith(("ccslack", "ccslack.exe")):
+    # Check for subcommands (e.g., aislack config ...)
+    if len(sys.argv) > 1 and sys.argv[0].endswith(("aislack", "aislack.exe", "ccslack", "ccslack.exe")):
         subcommand = sys.argv[1].lower()
         if subcommand == "config":
             # Forward to config CLI with remaining args
-            sys.argv = sys.argv[1:]  # Remove 'ccslack' from argv
+            sys.argv = sys.argv[1:]  # Remove 'aislack' from argv
             from src.cli import run as config_run
 
             return config_run()

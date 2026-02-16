@@ -1,3 +1,4 @@
+import functools
 from pathlib import Path
 from typing import Any, Optional
 
@@ -8,6 +9,87 @@ from src.config_storage import get_storage
 
 # Global constant for Claude plans directory
 PLANS_DIR = str(Path.home() / ".claude" / "plans")
+
+# Model-to-backend mapping
+CLAUDE_MODELS: set[str] = {
+    "opus",
+    "sonnet",
+    "haiku",
+    "claude-opus-4",
+    "claude-opus-4-5-20250929",
+    "claude-opus-4-6",
+    "claude-sonnet-4",
+    "claude-sonnet-4-5",
+    "claude-haiku-4",
+}
+
+CODEX_MODELS: set[str] = {
+    "gpt-5.3-codex",
+    "gpt-5.2-codex",
+    "gpt-5.1-codex-max",
+    "gpt-5.2",
+    "gpt-5.1-codex-mini",
+    "gpt-5-codex",
+    "gpt-5",
+    "codex",
+    "o3",
+    "o4-mini",
+}
+
+
+EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh")
+
+
+def parse_model_effort(model: str) -> tuple[str, Optional[str]]:
+    """Parse effort suffix from a Codex model name.
+
+    Parameters
+    ----------
+    model : str
+        Model name, possibly with effort suffix (e.g., "gpt-5.3-codex-high").
+
+    Returns
+    -------
+    tuple[str, Optional[str]]
+        (base_model, effort_level) — effort_level is None if no suffix found.
+    """
+    model_lower = model.lower()
+    # Check xhigh before high since "-high" is a suffix of "-xhigh"
+    for suffix in ("-xhigh", "-medium", "-high", "-low"):
+        if model_lower.endswith(suffix):
+            return model[: -len(suffix)], suffix[1:]
+    return model, None
+
+
+def get_backend_for_model(model: Optional[str]) -> str:
+    """
+    Determine which backend to use based on the model name.
+
+    Args:
+        model: The model name (e.g., "opus", "gpt-5-codex")
+
+    Returns:
+        "claude" or "codex"
+    """
+    if model is None:
+        return "claude"  # Default to Claude
+
+    model_lower = model.lower()
+
+    # Check exact matches first
+    if model_lower in CLAUDE_MODELS:
+        return "claude"
+    if model_lower in CODEX_MODELS:
+        return "codex"
+
+    # Check prefixes for extended model names
+    if model_lower.startswith("claude"):
+        return "claude"
+    if model_lower.startswith("gpt") or model_lower.startswith("codex") or (model_lower.startswith("o") and len(model_lower) > 1 and model_lower[1:2].isdigit()):
+        return "codex"
+
+    # Default to Claude for unknown models
+    return "claude"
 
 
 class ExecutionTimeouts(BaseModel):
@@ -161,6 +243,7 @@ class Config(BaseSettings):
     # Slack API limits
     SLACK_BLOCK_TEXT_LIMIT: int = 2900
     SLACK_FILE_THRESHOLD: int = 2000
+    SLACK_MAX_BLOCKS_PER_MESSAGE: int = 50
 
     # Valid permission modes for Claude Code CLI
     VALID_PERMISSION_MODES: tuple[str, ...] = (
@@ -182,6 +265,31 @@ class Config(BaseSettings):
 
     # GitHub repository for web viewer links
     GITHUB_REPO: str = ""
+
+    # Codex configuration
+    CODEX_SANDBOX_MODE: str = "workspace-write"
+    CODEX_APPROVAL_MODE: str = "on-request"
+
+    # Valid sandbox modes for Codex CLI
+    VALID_SANDBOX_MODES: tuple[str, ...] = (
+        "read-only",
+        "workspace-write",
+        "danger-full-access",
+    )
+
+    # Valid approval modes for Codex CLI
+    VALID_APPROVAL_MODES: tuple[str, ...] = (
+        "untrusted",
+        "on-failure",
+        "on-request",
+        "never",
+    )
+
+    # PTY session configuration (for Codex)
+    USE_PTY_SESSIONS: bool = True
+    PTY_MAX_SESSIONS: int = 10
+    PTY_IDLE_TIMEOUT_MINUTES: int = 30
+    PTY_CLEANUP_INTERVAL_SECONDS: int = 60
 
     # Execution timeout overrides from environment
     USAGE_CHECK_TIMEOUT: int = 30
@@ -212,7 +320,7 @@ class Config(BaseSettings):
             return []
         return [t.strip() for t in self.AUTO_APPROVE_TOOLS_STR.split(",") if t.strip()]
 
-    @property
+    @functools.cached_property
     def timeouts(self) -> TimeoutConfig:
         """Build TimeoutConfig from environment variables."""
         return TimeoutConfig(

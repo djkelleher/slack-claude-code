@@ -1,10 +1,11 @@
-"""Mode command handler: /mode."""
+"""Mode command handler: /mode (Claude permission modes)."""
 
 from slack_bolt.async_app import AsyncApp
 
-from ..config import config
-from ..utils.formatting import SlackFormatter
-from .base import CommandContext, HandlerDependencies, slack_command
+from src.config import config
+from src.utils.formatting import SlackFormatter
+
+from ..base import CommandContext, HandlerDependencies, slack_command
 
 # Mode aliases: short name -> CLI mode value
 MODE_ALIASES = {
@@ -12,7 +13,7 @@ MODE_ALIASES = {
     "accept": "acceptEdits",
     "default": "default",
     "plan": "plan",
-    "ask": "dontAsk",
+    "ask": "default",
     "delegate": "delegate",
 }
 
@@ -113,7 +114,7 @@ def _get_mode_description(mode: str) -> str:
         "bypass": "Auto-approve all operations (files, commands, etc.)",
         "accept": "Auto-accept file edits only",
         "plan": "Plan mode - Claude plans before executing",
-        "ask": "Ask before any operation",
+        "ask": "Default behavior - Claude asks for permission before operations",
         "default": "Default Claude behavior",
         "delegate": "Delegate permission decisions",
     }

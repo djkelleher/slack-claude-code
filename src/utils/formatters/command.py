@@ -2,6 +2,8 @@
 
 from typing import Optional
 
+from src.config import config
+
 from .base import (
     FILE_THRESHOLD,
     escape_markdown,
@@ -11,6 +13,29 @@ from .base import (
     text_to_rich_text_blocks,
 )
 from .table import extract_tables_from_text, split_text_by_tables
+
+
+def _split_blocks_by_limit(blocks: list[dict], max_blocks: int) -> list[list[dict]]:
+    """Split a list of blocks into chunks that fit within Slack's per-message limit.
+
+    Parameters
+    ----------
+    blocks : list[dict]
+        Block Kit blocks to split.
+    max_blocks : int
+        Maximum number of blocks per message.
+
+    Returns
+    -------
+    list[list[dict]]
+        List of block arrays, each within the limit.
+    """
+    if len(blocks) <= max_blocks:
+        return [blocks]
+    chunks = []
+    for start in range(0, len(blocks), max_blocks):
+        chunks.append(blocks[start : start + max_blocks])
+    return chunks
 
 
 def command_response(
@@ -205,6 +230,8 @@ def command_response_with_tables(
     messages = []
     is_first = True
 
+    max_blocks = config.SLACK_MAX_BLOCKS_PER_MESSAGE
+
     for segment in segments:
         if segment["type"] == "text":
             text_content = segment["content"]
@@ -233,7 +260,9 @@ def command_response_with_tables(
             output_blocks = text_to_rich_text_blocks(text_content)
             blocks.extend(output_blocks)
 
-            messages.append(blocks)
+            # Split into multiple messages if block count exceeds Slack limit
+            for chunk in _split_blocks_by_limit(blocks, max_blocks):
+                messages.append(chunk)
 
         elif segment["type"] == "table":
             table_block = table_blocks[segment["index"]]

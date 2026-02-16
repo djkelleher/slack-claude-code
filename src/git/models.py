@@ -60,3 +60,13 @@ class Checkpoint:
         if self.is_auto:
             return f"{self.name} (auto)"
         return self.name
+
+
+@dataclass
+class Worktree:
+    """Git worktree information."""
+
+    path: str
+    branch: str
+    commit: str = ""
+    is_main: bool = False
