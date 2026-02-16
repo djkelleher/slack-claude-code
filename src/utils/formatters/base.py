@@ -122,6 +122,31 @@ def flatten_text(text: str) -> str:
 
     flush_paragraph()
 
+    # Remove blank lines between consecutive list items so they stay in one group.
+    # When text is assembled from multiple streaming chunks (joined with \n\n),
+    # blank lines can appear between list items, causing each item to render as
+    # a separate numbered list in Slack (all starting from 1).
+    _LIST_ITEM_RE = re.compile(r"^(\s*[-*•]\s|^\s*\d+\.\s)")
+    cleaned = []
+    for i, rline in enumerate(result_lines):
+        if rline == "":
+            # Look ahead past any consecutive blank lines
+            j = i + 1
+            while j < len(result_lines) and result_lines[j] == "":
+                j += 1
+            next_is_list = j < len(result_lines) and _LIST_ITEM_RE.match(result_lines[j])
+            # Look back past any preceding blank lines
+            prev_is_list = False
+            for k in range(len(cleaned) - 1, -1, -1):
+                if cleaned[k] == "":
+                    continue
+                prev_is_list = bool(_LIST_ITEM_RE.match(cleaned[k]))
+                break
+            if prev_is_list and next_is_list:
+                continue  # Drop blank line between list items
+        cleaned.append(rline)
+    result_lines = cleaned
+
     # Rejoin with newlines
     text = "\n".join(result_lines)
 
