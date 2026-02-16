@@ -13,7 +13,7 @@ MODE_ALIASES = {
     "accept": "acceptEdits",
     "default": "default",
     "plan": "plan",
-    "ask": "dontAsk",
+    "ask": "default",
     "delegate": "delegate",
 }
 
@@ -114,7 +114,7 @@ def _get_mode_description(mode: str) -> str:
         "bypass": "Auto-approve all operations (files, commands, etc.)",
         "accept": "Auto-accept file edits only",
         "plan": "Plan mode - Claude plans before executing",
-        "ask": "Ask before any operation",
+        "ask": "Default behavior - Claude asks for permission before operations",
         "default": "Default Claude behavior",
         "delegate": "Delegate permission decisions",
     }

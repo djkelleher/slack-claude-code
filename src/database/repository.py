@@ -323,7 +323,10 @@ class DatabaseRepository:
         """Get a session by its database ID."""
         async with self._get_connection() as db:
             cursor = await db.execute(
-                "SELECT * FROM sessions WHERE id = ?",
+                """SELECT id, channel_id, thread_ts, working_directory,
+                          claude_session_id, permission_mode, created_at, last_active,
+                          model, added_dirs, codex_session_id, sandbox_mode, approval_mode
+                   FROM sessions WHERE id = ?""",
                 (session_id,),
             )
             row = await cursor.fetchone()

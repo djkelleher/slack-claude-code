@@ -3,6 +3,7 @@
 import asyncio
 import signal
 import uuid
+from pathlib import Path
 
 from slack_bolt.async_app import AsyncApp
 
@@ -118,14 +119,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_clear(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /clear command - cancel processes and reset Claude conversation."""
         # Step 1: Cancel all active executor processes for this channel
-        cancelled_count = 0
-        active_processes = deps.executor._active_processes
-        # Cancel processes where execution_id contains channel_id
-        for exec_id, process in list(active_processes.items()):
-            if ctx.channel_id in exec_id:
-                process.terminate()
-                cancelled_count += 1
-                ctx.logger.info(f"Terminated process: {exec_id}")
+        cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
+        if deps.codex_executor:
+            cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
 
         # Brief wait for graceful shutdown
         if cancelled_count > 0:
@@ -162,18 +158,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_esc(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /esc command - interrupt current operation (like pressing Escape)."""
         # Cancel all active executor processes for this channel
-        cancelled_count = 0
-        active_processes = deps.executor._active_processes
-        # Cancel processes where execution_id contains channel_id
-        for exec_id, process in list(active_processes.items()):
-            if ctx.channel_id in exec_id:
-                # Send SIGINT first (like Ctrl+C / Escape)
-                try:
-                    process.send_signal(signal.SIGINT)
-                except (ProcessLookupError, OSError):
-                    ctx.logger.debug(f"Process {exec_id} already terminated")
-                cancelled_count += 1
-                ctx.logger.info(f"Sent interrupt to process: {exec_id}")
+        cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
+        if deps.codex_executor:
+            cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
 
         if cancelled_count > 0:
             await ctx.client.chat_postMessage(
@@ -192,13 +179,32 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         """Handle /add-dir <path> command - add directory to context."""
         directory = ctx.text.strip()
 
-        # Add directory to session's added_dirs list
-        added_dirs = await deps.db.add_session_dir(ctx.channel_id, ctx.thread_ts, directory)
+        # Resolve and validate path
+        resolved_dir = Path(directory).expanduser().resolve()
+        if not resolved_dir.exists():
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Path does not exist: {resolved_dir}",
+                blocks=SlackFormatter.error_message(f"Path does not exist: `{resolved_dir}`"),
+            )
+            return
+        if not resolved_dir.is_dir():
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Not a directory: {resolved_dir}",
+                blocks=SlackFormatter.error_message(f"Not a directory: `{resolved_dir}`"),
+            )
+            return
+
+        # Add resolved directory to session's added_dirs list
+        added_dirs = await deps.db.add_session_dir(
+            ctx.channel_id, ctx.thread_ts, str(resolved_dir)
+        )
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             thread_ts=ctx.thread_ts,
-            text=f"Added directory: {directory}",
+            text=f"Added directory: {resolved_dir}",
             blocks=[
                 {
                     "type": "section",
@@ -206,7 +212,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                         "type": "mrkdwn",
                         "text": (
                             f":file_folder: *Directory Added*\n\n"
-                            f"Added `{directory}` to context.\n\n"
+                            f"Added `{resolved_dir}` to context.\n\n"
                             f"*Current directories ({len(added_dirs)}):*\n"
                             + "\n".join(f"• `{d}`" for d in added_dirs)
                         ),

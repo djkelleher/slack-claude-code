@@ -1,3 +1,4 @@
+import functools
 from pathlib import Path
 from typing import Any, Optional
 
@@ -84,7 +85,7 @@ def get_backend_for_model(model: Optional[str]) -> str:
     # Check prefixes for extended model names
     if model_lower.startswith("claude"):
         return "claude"
-    if model_lower.startswith("gpt") or model_lower.startswith("codex") or model_lower.startswith("o"):
+    if model_lower.startswith("gpt") or model_lower.startswith("codex") or (model_lower.startswith("o") and len(model_lower) > 1 and model_lower[1:2].isdigit()):
         return "codex"
 
     # Default to Claude for unknown models
@@ -319,7 +320,7 @@ class Config(BaseSettings):
             return []
         return [t.strip() for t in self.AUTO_APPROVE_TOOLS_STR.split(",") if t.strip()]
 
-    @property
+    @functools.cached_property
     def timeouts(self) -> TimeoutConfig:
         """Build TimeoutConfig from environment variables."""
         return TimeoutConfig(

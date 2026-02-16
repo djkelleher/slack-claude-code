@@ -216,9 +216,12 @@ class PTYSessionPool:
             If channel_id provided: dict with session info, or None if not found.
             If no channel_id: list of dicts for all sessions.
         """
+        # Take a snapshot to avoid reading the dict while it may be modified
+        sessions_snapshot = dict(cls._sessions)
+
         if channel_id is not None:
             key = cls._make_key(channel_id, thread_ts)
-            session = cls._sessions.get(key)
+            session = sessions_snapshot.get(key)
             if session:
                 return {
                     "session_id": session.session_id,
@@ -245,7 +248,7 @@ class PTYSessionPool:
                 "is_alive": s.is_alive(),
                 "pid": s.pid,
             }
-            for s in cls._sessions.values()
+            for s in sessions_snapshot.values()
         ]
 
     @classmethod
@@ -257,7 +260,10 @@ class PTYSessionPool:
 
     @classmethod
     def count(cls) -> int:
-        """Get number of active sessions."""
+        """Get number of active sessions.
+
+        Note: len() on a CPython dict is atomic, so no lock needed here.
+        """
         return len(cls._sessions)
 
     @classmethod
@@ -285,38 +291,36 @@ class PTYSessionPool:
         """
         now = datetime.now()
         idle_timeout = timedelta(seconds=cls.idle_timeout_seconds)
-        cleaned = 0
+        keys_to_remove: list[str] = []
 
-        # Get snapshot of keys
-        keys = list(cls._sessions.keys())
+        # Collect keys to remove under lock
+        lock = cls._get_lock()
+        async with lock:
+            for key, session in cls._sessions.items():
+                # Check if session is dead
+                if not session.is_alive():
+                    logger.info(f"Cleaning up dead PTY session: {key}")
+                    keys_to_remove.append(key)
+                    continue
 
-        for key in keys:
-            session = cls._sessions.get(key)
-            if not session:
-                continue
+                # Check idle timeout (only for IDLE sessions)
+                if session.state == SessionState.IDLE:
+                    idle_time = now - session.last_activity
+                    if idle_time > idle_timeout:
+                        logger.info(
+                            f"Cleaning up idle PTY session: {key} "
+                            f"(idle for {idle_time.total_seconds():.0f}s)"
+                        )
+                        keys_to_remove.append(key)
 
-            # Check if session is dead
-            if not session.is_alive():
-                logger.info(f"Cleaning up dead PTY session: {key}")
-                await cls.remove(*cls._parse_key(key))
-                cleaned += 1
-                continue
+        # Remove outside lock (remove() acquires the lock internally)
+        for key in keys_to_remove:
+            await cls.remove(*cls._parse_key(key))
 
-            # Check idle timeout (only for IDLE sessions)
-            if session.state == SessionState.IDLE:
-                idle_time = now - session.last_activity
-                if idle_time > idle_timeout:
-                    logger.info(
-                        f"Cleaning up idle PTY session: {key} "
-                        f"(idle for {idle_time.total_seconds():.0f}s)"
-                    )
-                    await cls.remove(*cls._parse_key(key))
-                    cleaned += 1
+        if keys_to_remove:
+            logger.info(f"Cleaned up {len(keys_to_remove)} PTY session(s)")
 
-        if cleaned > 0:
-            logger.info(f"Cleaned up {cleaned} PTY session(s)")
-
-        return cleaned
+        return len(keys_to_remove)
 
     @classmethod
     def _parse_key(cls, key: str) -> tuple[str, Optional[str]]:
