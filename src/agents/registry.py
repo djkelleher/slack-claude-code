@@ -240,6 +240,11 @@ class AgentRegistry:
                 return self._agents["bash"]
 
         # Default to general agent
+        if not self._agents:
+            raise RuntimeError(
+                "No agents registered. Ensure AgentRegistry.load() has been called "
+                "and BUILTIN_AGENTS is not empty."
+            )
         return self._agents.get("general", list(self._agents.values())[0])
 
     def add(self, agent: AgentConfig) -> None:

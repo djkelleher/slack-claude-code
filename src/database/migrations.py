@@ -14,7 +14,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     model TEXT DEFAULT NULL,
-    added_dirs TEXT DEFAULT NULL  -- JSON array of directories added via /add-dir
+    added_dirs TEXT DEFAULT NULL,  -- JSON array of directories added via /add-dir
+    -- Codex-specific fields
+    codex_session_id TEXT DEFAULT NULL,
+    sandbox_mode TEXT DEFAULT 'workspace-write',
+    approval_mode TEXT DEFAULT 'on-request'
 );
 
 -- Command history table
@@ -141,19 +145,28 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT NULL")
         await db.commit()
 
-    # Clean up invalid model values (timestamps that were incorrectly stored as model names)
-    # Valid models are: opus, sonnet, haiku, or NULL
-    await db.execute(
-        """UPDATE sessions SET model = NULL
-           WHERE model IS NOT NULL
-           AND model NOT IN ('opus', 'sonnet', 'haiku')"""
-    )
-    await db.commit()
-
     # Add added_dirs column if it doesn't exist
     if "added_dirs" not in column_names:
         await db.execute("ALTER TABLE sessions ADD COLUMN added_dirs TEXT DEFAULT NULL")
         await db.commit()
+
+    # Add Codex-specific columns if they don't exist
+    if "codex_session_id" not in column_names:
+        await db.execute("ALTER TABLE sessions ADD COLUMN codex_session_id TEXT DEFAULT NULL")
+        await db.commit()
+
+    if "sandbox_mode" not in column_names:
+        await db.execute(
+            "ALTER TABLE sessions ADD COLUMN sandbox_mode TEXT DEFAULT 'workspace-write'"
+        )
+        await db.commit()
+
+    if "approval_mode" not in column_names:
+        await db.execute(
+            "ALTER TABLE sessions ADD COLUMN approval_mode TEXT DEFAULT 'on-request'"
+        )
+        await db.commit()
+
 
 
 async def reset_database(db_path: str) -> None:

@@ -3,7 +3,6 @@
 Provides interactive management of configurable subagents.
 """
 
-import asyncio
 import uuid
 
 from slack_bolt.async_app import AsyncApp
@@ -16,7 +15,7 @@ from src.utils.formatters.base import markdown_to_mrkdwn
 from src.utils.formatting import SlackFormatter
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
-from .base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, slack_command
 
 
 def register_agents_command(app: AsyncApp, deps: HandlerDependencies) -> None:
@@ -365,6 +364,7 @@ async def _run_agent_with_streaming(
             permission_mode=permission_mode,
             model=model,
             db_session_id=session.id,
+            channel_id=channel_id,
         )
 
         await streaming_state.stop_heartbeat()

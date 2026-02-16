@@ -4,7 +4,7 @@ from slack_bolt.async_app import AsyncApp
 
 from src.utils.formatting import SlackFormatter
 
-from .base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, slack_command
 
 
 def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None:

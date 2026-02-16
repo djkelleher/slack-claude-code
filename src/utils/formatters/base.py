@@ -81,29 +81,71 @@ def flatten_text(text: str) -> str:
     for line in lines:
         stripped = line.strip()
 
-        # Check if this is a structural line that should be preserved
-        is_structural = (
+        # Classify lines into: break (forces separation), start (begins a new
+        # logical block but can have continuations), or continuation (appends
+        # to the current block).
+        is_break = (
             not stripped  # Blank line (paragraph separator)
-            or stripped.startswith("#")  # Header
-            or stripped.startswith("- ")  # Bullet list
-            or stripped.startswith("* ")  # Bullet list
-            or stripped.startswith("• ")  # Already converted bullet
-            or re.match(r"^\d+\.\s", stripped)  # Numbered list
-            or stripped.startswith(">")  # Blockquote
             or stripped.startswith("\x00")  # Protected content placeholder
             or stripped.startswith("---")  # Horizontal rule
             or stripped.startswith("***")  # Horizontal rule
         )
 
-        if is_structural:
+        is_list_item = (
+            stripped.startswith("- ")  # Bullet list
+            or stripped.startswith("* ")  # Bullet list
+            or stripped.startswith("• ")  # Already converted bullet
+            or re.match(r"^\d+\.\s", stripped)  # Numbered list
+        )
+
+        is_new_block_start = (
+            stripped.startswith("#")  # Header
+            or is_list_item
+            or stripped.startswith(">")  # Blockquote
+        )
+
+        if is_break:
             flush_paragraph()
             result_lines.append(stripped)
+        elif is_new_block_start:
+            # Start a new logical block - flush previous, then collect this
+            # line so continuations can be joined to it
+            flush_paragraph()
+            # Preserve leading whitespace for list items so downstream
+            # code can detect nesting (indented sub-lists)
+            leading = line[: len(line) - len(line.lstrip())] if is_list_item else ""
+            current_paragraph.append(leading + stripped)
         else:
-            # Regular paragraph text - collect for joining
+            # Continuation text - collect for joining to current block
             if stripped:
                 current_paragraph.append(stripped)
 
     flush_paragraph()
+
+    # Remove blank lines between consecutive list items so they stay in one group.
+    # When text is assembled from multiple streaming chunks (joined with \n\n),
+    # blank lines can appear between list items, causing each item to render as
+    # a separate numbered list in Slack (all starting from 1).
+    _LIST_ITEM_RE = re.compile(r"^(\s*[-*•]\s|^\s*\d+\.\s)")
+    cleaned = []
+    for i, rline in enumerate(result_lines):
+        if rline == "":
+            # Look ahead past any consecutive blank lines
+            j = i + 1
+            while j < len(result_lines) and result_lines[j] == "":
+                j += 1
+            next_is_list = j < len(result_lines) and _LIST_ITEM_RE.match(result_lines[j])
+            # Look back past any preceding blank lines
+            prev_is_list = False
+            for k in range(len(cleaned) - 1, -1, -1):
+                if cleaned[k] == "":
+                    continue
+                prev_is_list = bool(_LIST_ITEM_RE.match(cleaned[k]))
+                break
+            if prev_is_list and next_is_list:
+                continue  # Drop blank line between list items
+        cleaned.append(rline)
+    result_lines = cleaned
 
     # Rejoin with newlines
     text = "\n".join(result_lines)
@@ -432,29 +474,124 @@ def _parse_inline_elements(text: str) -> list[dict]:
                 continue
 
         # Check for italic (_text_) - but not __ which is bold
+        # Require word boundaries: opening _ must not be preceded by a word char,
+        # closing _ must not be followed by a word char (prevents snake_case matching)
         if text[i] == "_" and (i + 1 >= len(text) or text[i + 1] != "_"):
-            end = i + 1
-            while end < len(text):
-                if text[end] == "_" and (end + 1 >= len(text) or text[end + 1] != "_"):
-                    break
-                end += 1
-            if end < len(text):
-                italic_text = text[i + 1 : end]
-                if italic_text:
-                    elements.append(
-                        {"type": "text", "text": italic_text, "style": {"italic": True}}
-                    )
-                i = end + 1
-                continue
+            # Opening _ must be at start or preceded by non-word char
+            prev_is_word = i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")
+            if not prev_is_word:
+                end = i + 1
+                while end < len(text):
+                    if text[end] == "_" and (end + 1 >= len(text) or text[end + 1] != "_"):
+                        # Closing _ must be at end or followed by non-word char
+                        next_is_word = (end + 1 < len(text)) and (
+                            text[end + 1].isalnum() or text[end + 1] == "_"
+                        )
+                        if not next_is_word:
+                            break
+                    end += 1
+                if end < len(text):
+                    italic_text = text[i + 1 : end]
+                    if italic_text:
+                        elements.append(
+                            {"type": "text", "text": italic_text, "style": {"italic": True}}
+                        )
+                    i = end + 1
+                    continue
 
-        # Regular text - collect until next special character
+        # Regular text - collect until next potential formatting character.
+        # Underscores adjacent to word characters (e.g. snake_case) are not
+        # formatting markers, so skip over them as regular text.
         start = i
-        while i < len(text) and text[i] not in "`*_~":
+        while i < len(text):
+            ch = text[i]
+            if ch in "`*~":
+                break
+            if ch == "_":
+                # Only stop if this _ could be an opening italic marker
+                # (i.e. not preceded by a word character)
+                prev_word = i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")
+                if not prev_word:
+                    break
             i += 1
-        if i > start:
-            elements.append({"type": "text", "text": text[start:i]})
+        if i == start:
+            # Unmatched special character (no closing marker found above) -
+            # consume it as literal text to avoid infinite loop
+            i += 1
+            # Continue collecting regular text after the unmatched marker
+            while i < len(text):
+                ch = text[i]
+                if ch in "`*~":
+                    break
+                if ch == "_":
+                    prev_word = i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")
+                    if not prev_word:
+                        break
+                i += 1
+        elements.append({"type": "text", "text": text[start:i]})
 
     return elements if elements else [{"type": "text", "text": text}]
+
+
+def _get_line_indent(line: str) -> int:
+    """Return the number of leading spaces on a line."""
+    return len(line) - len(line.lstrip())
+
+
+def _collect_list_elements(lines: list[str], start: int, elements: list[dict]) -> None:
+    """Collect consecutive list items into rich_text_list elements with nesting.
+
+    Groups consecutive list lines by indent level and list style (bullet vs ordered).
+    Each group becomes a separate rich_text_list element. Indented groups get the
+    Slack ``indent`` property so they render as nested sub-lists.
+
+    Parameters
+    ----------
+    lines : list[str]
+        All lines of the document.
+    start : int
+        Index of the first list line to process.
+    elements : list[dict]
+        The elements list to append rich_text_list dicts to.
+    """
+    BULLET_RE = re.compile(r"^[-*•]\s+(.+)$")
+    NUMBERED_RE = re.compile(r"^\d+\.\s+(.+)$")
+
+    # Collect all consecutive list lines with their indent and style
+    groups: list[tuple[str, int, list[dict]]] = []  # (style, indent_level, items)
+
+    i = start
+    while i < len(lines):
+        raw = lines[i]
+        stripped = raw.strip()
+        if not stripped:
+            break
+
+        bullet_m = BULLET_RE.match(stripped)
+        numbered_m = NUMBERED_RE.match(stripped)
+        if not bullet_m and not numbered_m:
+            break
+
+        indent = _get_line_indent(raw)
+        indent_level = 1 if indent >= 2 else 0
+        style = "bullet" if bullet_m else "ordered"
+        item_text = bullet_m.group(1) if bullet_m else numbered_m.group(1)
+        item = {"type": "rich_text_section", "elements": _parse_inline_elements(item_text)}
+
+        # Append to current group if same style and indent, otherwise start new group
+        if groups and groups[-1][0] == style and groups[-1][1] == indent_level:
+            groups[-1][2].append(item)
+        else:
+            groups.append((style, indent_level, [item]))
+
+        i += 1
+
+    # Emit each group as a rich_text_list
+    for style, indent_level, items in groups:
+        list_element: dict = {"type": "rich_text_list", "style": style, "elements": items}
+        if indent_level > 0:
+            list_element["indent"] = indent_level
+        elements.append(list_element)
 
 
 def text_to_rich_text_blocks(text: str, max_length: int = MAX_TEXT_LENGTH) -> list[dict]:
@@ -548,52 +685,24 @@ def text_to_rich_text_blocks(text: str, max_length: int = MAX_TEXT_LENGTH) -> li
             i += 1
             continue
 
-        # Bullet list (- item or * item or • item)
-        # Require content after bullet to avoid infinite loop on empty bullets like "- "
+        # List items (bullet or numbered, with nesting support)
+        # Detect any list item (bullet or numbered) at any indent level
         bullet_match = re.match(r"^[-*•]\s+(.+)$", stripped)
-        if bullet_match:
-            list_items = []
-            while i < len(lines):
-                item_line = lines[i].strip()
-                item_match = re.match(r"^[-*•]\s+(.+)$", item_line)
-                if item_match:
-                    item_text = item_match.group(1)
-                    list_items.append(
-                        {"type": "rich_text_section", "elements": _parse_inline_elements(item_text)}
-                    )
-                    i += 1
-                elif not item_line:
-                    # Empty line ends the list
-                    break
-                else:
-                    break
-
-            if list_items:
-                elements.append({"type": "rich_text_list", "style": "bullet", "elements": list_items})
-            continue
-
-        # Numbered list (1. item)
         numbered_match = re.match(r"^(\d+)\.\s+(.+)$", stripped)
-        if numbered_match:
-            list_items = []
+        if bullet_match or numbered_match:
+            # Collect all consecutive list items, grouping by indent level and style.
+            # Each group becomes a separate rich_text_list element.
+            # Indented items get the "indent" property for Slack nesting.
+            _collect_list_elements(lines, i, elements)
+            # Advance past all consumed list lines
             while i < len(lines):
-                item_line = lines[i].strip()
-                item_match = re.match(r"^\d+\.\s+(.+)$", item_line)
-                if item_match:
-                    item_text = item_match.group(1)
-                    list_items.append(
-                        {"type": "rich_text_section", "elements": _parse_inline_elements(item_text)}
-                    )
-                    i += 1
-                elif not item_line:
+                raw = lines[i]
+                s = raw.strip()
+                if not s:
                     break
-                else:
+                if not (re.match(r"^[-*•]\s+(.+)$", s) or re.match(r"^\d+\.\s+(.+)$", s)):
                     break
-
-            if list_items:
-                elements.append(
-                    {"type": "rich_text_list", "style": "ordered", "elements": list_items}
-                )
+                i += 1
             continue
 
         # Regular paragraph

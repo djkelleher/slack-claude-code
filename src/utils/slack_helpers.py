@@ -33,21 +33,43 @@ def _table_block_to_markdown(table_block: dict) -> str:
     return "\n".join(lines).strip()
 
 
+def _section_elements_to_mrkdwn(elements: list[dict]) -> str:
+    """Convert a list of rich_text inline elements to mrkdwn text."""
+    parts = []
+    for elem in elements:
+        if elem.get("type") != "text":
+            continue
+        text = elem.get("text", "")
+        style = elem.get("style", {})
+        if style.get("code"):
+            text = f"`{text}`"
+        if style.get("bold"):
+            text = f"*{text}*"
+        if style.get("italic"):
+            text = f"_{text}_"
+        if style.get("strike"):
+            text = f"~{text}~"
+        parts.append(text)
+    return "".join(parts)
+
+
 def _rich_text_to_plain_text(rich_text_block: dict) -> str:
-    """Convert a rich_text block back to plain text."""
+    """Convert a rich_text block back to mrkdwn-formatted plain text."""
     text_parts = []
     for element in rich_text_block.get("elements", []):
         elem_type = element.get("type", "")
         if elem_type == "rich_text_section":
-            for sub_elem in element.get("elements", []):
-                if sub_elem.get("type") == "text":
-                    text_parts.append(sub_elem.get("text", ""))
+            section_text = _section_elements_to_mrkdwn(element.get("elements", []))
+            if section_text:
+                text_parts.append(section_text)
         elif elem_type == "rich_text_list":
+            indent_level = element.get("indent", 0)
+            indent_spaces = "    " * indent_level
             for i, item in enumerate(element.get("elements", []), 1):
                 prefix = f"{i}. " if element.get("style") == "ordered" else "• "
-                for sub_elem in item.get("elements", []):
-                    if sub_elem.get("type") == "text":
-                        text_parts.append(f"\n{prefix}{sub_elem.get('text', '')}")
+                item_text = _section_elements_to_mrkdwn(item.get("elements", []))
+                if item_text:
+                    text_parts.append(f"\n{indent_spaces}{prefix}{item_text}")
         elif elem_type == "rich_text_preformatted":
             code_text = ""
             for sub_elem in element.get("elements", []):
@@ -56,9 +78,9 @@ def _rich_text_to_plain_text(rich_text_block: dict) -> str:
             if code_text:
                 text_parts.append(f"\n```\n{code_text}\n```\n")
         elif elem_type == "rich_text_quote":
-            for sub_elem in element.get("elements", []):
-                if sub_elem.get("type") == "text":
-                    text_parts.append(f"\n> {sub_elem.get('text', '')}")
+            quote_text = _section_elements_to_mrkdwn(element.get("elements", []))
+            if quote_text:
+                text_parts.append(f"\n> {quote_text}")
     return "".join(text_parts)
 
 
@@ -247,7 +269,7 @@ async def post_text_snippet(
                     continue
                 # Use rich_text blocks for full-width display
                 blocks = text_to_rich_text_blocks(text_content)
-                max_content_blocks = 49  # Slack limit is 50 blocks per message
+                max_content_blocks = config.SLACK_MAX_BLOCKS_PER_MESSAGE - 1  # Reserve 1 for header
                 for start in range(0, len(blocks), max_content_blocks):
                     messages.append(blocks[start : start + max_content_blocks])
             else:
@@ -290,15 +312,30 @@ async def post_text_snippet(
             try:
                 result = await client.chat_postMessage(**kwargs)
             except SlackApiError as e:
-                if e.response.get("error") != "invalid_blocks":
+                error_code = e.response.get("error", "")
+                if error_code not in ("invalid_blocks", "msg_blocks_too_long"):
                     raise
                 fallback_blocks = header_blocks + _fallback_blocks_for_table_blocks(blocks)
                 if not fallback_blocks:
                     raise
-                fallback_kwargs = {"channel": channel_id, "text": title, "blocks": fallback_blocks}
-                if thread_ts:
-                    fallback_kwargs["thread_ts"] = thread_ts
-                result = await client.chat_postMessage(**fallback_kwargs)
+                # Split fallback blocks if still too many
+                max_blocks = config.SLACK_MAX_BLOCKS_PER_MESSAGE
+                if len(fallback_blocks) > max_blocks:
+                    for fb_start in range(0, len(fallback_blocks), max_blocks):
+                        fb_chunk = fallback_blocks[fb_start : fb_start + max_blocks]
+                        fb_kwargs = {"channel": channel_id, "text": title, "blocks": fb_chunk}
+                        if thread_ts:
+                            fb_kwargs["thread_ts"] = thread_ts
+                        result = await client.chat_postMessage(**fb_kwargs)
+                else:
+                    fallback_kwargs = {
+                        "channel": channel_id,
+                        "text": title,
+                        "blocks": fallback_blocks,
+                    }
+                    if thread_ts:
+                        fallback_kwargs["thread_ts"] = thread_ts
+                    result = await client.chat_postMessage(**fallback_kwargs)
 
         return result
 
@@ -310,36 +347,46 @@ async def post_text_snippet(
         ]
         # Content as rich_text blocks
         content_blocks = text_to_rich_text_blocks(content)
-        blocks = title_blocks + content_blocks
+        all_blocks = title_blocks + content_blocks
 
-        kwargs = {
-            "channel": channel_id,
-            "text": title,
-            "blocks": blocks,
-        }
-        if thread_ts:
-            kwargs["thread_ts"] = thread_ts
+        # Split into multiple messages if block count exceeds Slack limit
+        max_blocks = config.SLACK_MAX_BLOCKS_PER_MESSAGE
+        block_chunks = []
+        for start in range(0, len(all_blocks), max_blocks):
+            block_chunks.append(all_blocks[start : start + max_blocks])
 
-        try:
-            return await client.chat_postMessage(**kwargs)
-        except SlackApiError as e:
-            # Fallback to section blocks if rich_text blocks fail
-            if e.response.get("error") == "invalid_blocks":
-                from src.utils.formatters.markdown import markdown_to_slack_mrkdwn
+        result = None
+        for chunk in block_chunks:
+            kwargs = {
+                "channel": channel_id,
+                "text": title,
+                "blocks": chunk,
+            }
+            if thread_ts:
+                kwargs["thread_ts"] = thread_ts
 
+            try:
+                result = await client.chat_postMessage(**kwargs)
+            except SlackApiError as e:
+                error_code = e.response.get("error", "")
+                if error_code not in ("invalid_blocks", "msg_blocks_too_long"):
+                    raise
                 formatted_content = markdown_to_slack_mrkdwn(content)
                 fallback_blocks = split_text_into_blocks(
                     f"*{title}*\n\n{formatted_content}", max_length=MAX_TEXT_LENGTH
                 )
-                fallback_kwargs = {
-                    "channel": channel_id,
-                    "text": title,
-                    "blocks": fallback_blocks,
-                }
-                if thread_ts:
-                    fallback_kwargs["thread_ts"] = thread_ts
-                return await client.chat_postMessage(**fallback_kwargs)
-            raise
+                for fb_start in range(0, len(fallback_blocks), max_blocks):
+                    fb_chunk = fallback_blocks[fb_start : fb_start + max_blocks]
+                    fb_kwargs = {
+                        "channel": channel_id,
+                        "text": title,
+                        "blocks": fb_chunk,
+                    }
+                    if thread_ts:
+                        fb_kwargs["thread_ts"] = thread_ts
+                    result = await client.chat_postMessage(**fb_kwargs)
+                return result
+        return result
 
     # For code blocks (format_as_text=False), use the existing logic
     code_block_overhead = 6  # "```...```"

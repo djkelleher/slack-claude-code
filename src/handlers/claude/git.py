@@ -6,7 +6,7 @@ from src.config import config
 from src.git.service import GitError, GitService
 from src.utils.formatting import SlackFormatter
 
-from .base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, slack_command
 
 
 def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:

@@ -3,13 +3,14 @@
 import asyncio
 import signal
 import uuid
+from pathlib import Path
 
 from slack_bolt.async_app import AsyncApp
 
-from src.config import config
+from src.config import config, get_backend_for_model, CLAUDE_MODELS, CODEX_MODELS
 from src.utils.formatting import SlackFormatter
 
-from .base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, slack_command
 
 
 def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
@@ -62,6 +63,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 execution_id=str(uuid.uuid4()),
                 permission_mode=session.permission_mode,
                 model=session.model,
+                channel_id=ctx.channel_id,
             )
 
             # Update session if needed
@@ -117,14 +119,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_clear(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /clear command - cancel processes and reset Claude conversation."""
         # Step 1: Cancel all active executor processes for this channel
-        cancelled_count = 0
-        active_processes = deps.executor._active_processes
-        # Cancel processes where execution_id contains channel_id
-        for exec_id, process in list(active_processes.items()):
-            if ctx.channel_id in exec_id:
-                process.terminate()
-                cancelled_count += 1
-                ctx.logger.info(f"Terminated process: {exec_id}")
+        cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
+        if deps.codex_executor:
+            cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
 
         # Brief wait for graceful shutdown
         if cancelled_count > 0:
@@ -161,18 +158,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_esc(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /esc command - interrupt current operation (like pressing Escape)."""
         # Cancel all active executor processes for this channel
-        cancelled_count = 0
-        active_processes = deps.executor._active_processes
-        # Cancel processes where execution_id contains channel_id
-        for exec_id, process in list(active_processes.items()):
-            if ctx.channel_id in exec_id:
-                # Send SIGINT first (like Ctrl+C / Escape)
-                try:
-                    process.send_signal(signal.SIGINT)
-                except (ProcessLookupError, OSError):
-                    ctx.logger.debug(f"Process {exec_id} already terminated")
-                cancelled_count += 1
-                ctx.logger.info(f"Sent interrupt to process: {exec_id}")
+        cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
+        if deps.codex_executor:
+            cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
 
         if cancelled_count > 0:
             await ctx.client.chat_postMessage(
@@ -191,13 +179,32 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         """Handle /add-dir <path> command - add directory to context."""
         directory = ctx.text.strip()
 
-        # Add directory to session's added_dirs list
-        added_dirs = await deps.db.add_session_dir(ctx.channel_id, ctx.thread_ts, directory)
+        # Resolve and validate path
+        resolved_dir = Path(directory).expanduser().resolve()
+        if not resolved_dir.exists():
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Path does not exist: {resolved_dir}",
+                blocks=SlackFormatter.error_message(f"Path does not exist: `{resolved_dir}`"),
+            )
+            return
+        if not resolved_dir.is_dir():
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Not a directory: {resolved_dir}",
+                blocks=SlackFormatter.error_message(f"Not a directory: `{resolved_dir}`"),
+            )
+            return
+
+        # Add resolved directory to session's added_dirs list
+        added_dirs = await deps.db.add_session_dir(
+            ctx.channel_id, ctx.thread_ts, str(resolved_dir)
+        )
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             thread_ts=ctx.thread_ts,
-            text=f"Added directory: {directory}",
+            text=f"Added directory: {resolved_dir}",
             blocks=[
                 {
                     "type": "section",
@@ -205,7 +212,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                         "type": "mrkdwn",
                         "text": (
                             f":file_folder: *Directory Added*\n\n"
-                            f"Added `{directory}` to context.\n\n"
+                            f"Added `{resolved_dir}` to context.\n\n"
                             f"*Current directories ({len(added_dirs)}):*\n"
                             + "\n".join(f"• `{d}`" for d in added_dirs)
                         ),
@@ -364,28 +371,56 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         if ctx.text:
             # Direct model selection via command argument
             model_name = ctx.text.strip().lower()
-            # Normalize model names
-            model_map = {
+
+            # Normalize model names (support both Claude and Codex models)
+            # Base model aliases (without effort suffix)
+            base_model_map = {
+                # Claude models
                 "opus": "opus",
                 "opus-4": "opus",
-                "opus-4.5": "opus",
+                "opus-4.5": "claude-opus-4-5-20250929",
+                "opus-4.6": "opus",
                 "sonnet": "sonnet",
                 "sonnet-4": "sonnet",
                 "sonnet-4.5": "sonnet",
                 "haiku": "haiku",
                 "haiku-4": "haiku",
+                # Codex models
+                "codex": "gpt-5.3-codex",
+                "gpt-5.3-codex": "gpt-5.3-codex",
+                "gpt-5.2-codex": "gpt-5.2-codex",
+                "gpt-5.1-codex-max": "gpt-5.1-codex-max",
+                "gpt-5.2": "gpt-5.2",
+                "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
+                "gpt-5-codex": "gpt-5-codex",
+                "gpt-5": "gpt-5",
+                "o3": "o3",
+                "o4-mini": "o4-mini",
             }
-            normalized = model_map.get(model_name, model_name)
+
+            # Check if model name has an effort suffix (e.g., "codex-high")
+            from src.config import EFFORT_LEVELS, parse_model_effort
+
+            base_name, effort = parse_model_effort(model_name)
+            resolved_base = base_model_map.get(base_name, base_name)
+            if effort:
+                normalized = f"{resolved_base}-{effort}"
+            else:
+                normalized = base_model_map.get(model_name, model_name)
+            backend = get_backend_for_model(normalized)
+
             await deps.db.update_session_model(ctx.channel_id, ctx.thread_ts, normalized)
+
+            backend_label = "Claude Code" if backend == "claude" else "OpenAI Codex"
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
-                text=f":heavy_check_mark: Model changed to *{normalized}*",
+                text=f":heavy_check_mark: Model changed to *{normalized}* ({backend_label})",
                 blocks=[
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":heavy_check_mark: Model changed to *{normalized}*",
+                            "text": f":heavy_check_mark: Model changed to *{normalized}*\n_Backend: {backend_label}_",
                         },
                     }
                 ],
@@ -394,27 +429,53 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             # Show current model and allow selection via buttons
             # Get current model from session (default to opus)
             current_model = session.model or "opus"
+            current_backend = get_backend_for_model(current_model)
 
-            # Available models (opus first as default)
-            models = [
-                {"name": "opus", "display": "Claude Opus 4.5", "desc": "Most capable model"},
-                {
-                    "name": "sonnet",
-                    "display": "Claude Sonnet 4.5",
-                    "desc": "Balanced performance and speed",
-                },
-                {
-                    "name": "haiku",
-                    "display": "Claude Haiku 4",
-                    "desc": "Fastest and most cost-effective",
-                },
+            # Available models (organized by backend)
+            claude_models = [
+                {"name": "opus", "display": "Claude Opus 4.6", "desc": "Most capable model"},
+                {"name": "claude-opus-4-5-20250929", "display": "Claude Opus 4.5", "desc": "Previous generation Opus"},
+                {"name": "sonnet", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
+                {"name": "haiku", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
             ]
 
+            # Generate Codex models with effort level variants
+            codex_base_models = [
+                ("gpt-5.3-codex", "GPT-5.3 Codex", "Latest frontier agentic coding model"),
+                ("gpt-5.2-codex", "GPT-5.2 Codex", "Frontier agentic coding model"),
+                ("gpt-5.1-codex-max", "GPT-5.1 Codex Max", "Deep and fast reasoning"),
+                ("gpt-5.2", "GPT-5.2", "Latest frontier model"),
+                ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", "Cheaper, faster, less capable"),
+            ]
+            effort_labels = {
+                "low": "Low",
+                "medium": "Med",
+                "high": "High",
+                "xhigh": "XHigh",
+            }
+            codex_models = []
+            for base_name, display, desc in codex_base_models:
+                for effort_key, effort_label in effort_labels.items():
+                    codex_models.append({
+                        "name": f"{base_name}-{effort_key}",
+                        "display": f"{display} ({effort_label})",
+                        "desc": desc,
+                    })
+            # Legacy models (no effort levels)
+            codex_models.extend([
+                {"name": "gpt-5-codex", "display": "GPT-5 Codex (Legacy)", "desc": "Legacy coding model"},
+                {"name": "o3", "display": "O3 (Legacy)", "desc": "OpenAI reasoning model"},
+                {"name": "o4-mini", "display": "O4 Mini (Legacy)", "desc": "Fast and efficient"},
+            ])
+
             # Get display name for current model
+            all_models = claude_models + codex_models
             current_display = next(
-                (m["display"] for m in models if m["name"] == current_model),
+                (m["display"] for m in all_models if m["name"] == current_model),
                 current_model,
             )
+
+            backend_label = "Claude Code" if current_backend == "claude" else "OpenAI Codex"
 
             # Build button blocks
             blocks = [
@@ -422,13 +483,17 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*Current Model:* {current_display}\n\nSelect a model:",
+                        "text": f"*Current Model:* {current_display}\n*Backend:* {backend_label}\n\nSelect a model:",
                     },
                 },
                 {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "*Claude Code Models*"},
+                },
             ]
 
-            for model in models:
+            for model in claude_models:
                 is_current = model["name"] == current_model
                 button_text = f"{'✓ ' if is_current else ''}{model['display']}"
 
@@ -458,6 +523,75 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                         "accessory": button_accessory,
                     }
                 )
+
+            blocks.append({"type": "divider"})
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "*OpenAI Codex Models*"},
+                }
+            )
+
+            for model in codex_models:
+                is_current = model["name"] == current_model
+                button_text = f"{'✓ ' if is_current else ''}{model['display']}"
+
+                # Build button accessory
+                button_accessory = {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": button_text,
+                        "emoji": True,
+                    },
+                    "action_id": f"select_model_{model['name']}",
+                    "value": f"{ctx.channel_id}|{ctx.thread_ts or ''}",
+                }
+
+                # Only add style if it's the current model
+                if is_current:
+                    button_accessory["style"] = "primary"
+
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*{model['display']}*\n{model['desc']}",
+                        },
+                        "accessory": button_accessory,
+                    }
+                )
+
+            # Add custom model option
+            blocks.append({"type": "divider"})
+
+            # Check if current model is a custom one (not in predefined lists)
+            predefined_models = {m["name"] for m in all_models}
+            is_custom_model = current_model not in predefined_models
+
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*Custom Model*\nEnter any model ID (e.g., `claude-opus-4-6-20250101`)"
+                            + (f"\n_Currently using: `{current_model}`_" if is_custom_model else "")
+                        ),
+                    },
+                    "accessory": {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Enter Custom Model",
+                            "emoji": True,
+                        },
+                        "action_id": "select_model_custom",
+                        "value": f"{ctx.channel_id}|{ctx.thread_ts or ''}",
+                    },
+                }
+            )
 
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,

@@ -323,7 +323,10 @@ class DatabaseRepository:
         """Get a session by its database ID."""
         async with self._get_connection() as db:
             cursor = await db.execute(
-                "SELECT * FROM sessions WHERE id = ?",
+                """SELECT id, channel_id, thread_ts, working_directory,
+                          claude_session_id, permission_mode, created_at, last_active,
+                          model, added_dirs, codex_session_id, sandbox_mode, approval_mode
+                   FROM sessions WHERE id = ?""",
                 (session_id,),
             )
             row = await cursor.fetchone()
@@ -809,3 +812,90 @@ class DatabaseRepository:
 
         # Return the updated settings
         return await self.get_notification_settings(channel_id)
+
+    # -------------------------------------------------------------------------
+    # Codex-specific Session Operations
+    # -------------------------------------------------------------------------
+
+    async def update_session_codex_id(
+        self, channel_id: str, thread_ts: Optional[str], codex_session_id: str
+    ) -> None:
+        """Update the Codex session ID for resume functionality."""
+        async with self._transact() as db:
+            await db.execute(
+                """UPDATE sessions SET codex_session_id = ?, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    codex_session_id,
+                    datetime.now(timezone.utc).isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )
+
+    async def clear_session_codex_id(
+        self, channel_id: str, thread_ts: Optional[str] = None
+    ) -> None:
+        """Clear the Codex session ID to start fresh."""
+        async with self._transact() as db:
+            await db.execute(
+                """UPDATE sessions SET codex_session_id = NULL, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )
+
+    async def update_session_sandbox_mode(
+        self, channel_id: str, thread_ts: Optional[str], sandbox_mode: str
+    ) -> None:
+        """Update the sandbox mode for a session (Codex)."""
+        async with self._transact() as db:
+            await db.execute(
+                """UPDATE sessions SET sandbox_mode = ?, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    sandbox_mode,
+                    datetime.now(timezone.utc).isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )
+
+    async def update_session_approval_mode(
+        self, channel_id: str, thread_ts: Optional[str], approval_mode: str
+    ) -> None:
+        """Update the approval mode for a session (Codex)."""
+        async with self._transact() as db:
+            await db.execute(
+                """UPDATE sessions SET approval_mode = ?, last_active = ?
+                   WHERE channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )""",
+                (
+                    approval_mode,
+                    datetime.now(timezone.utc).isoformat(),
+                    channel_id,
+                    thread_ts,
+                    thread_ts,
+                    thread_ts,
+                ),
+            )

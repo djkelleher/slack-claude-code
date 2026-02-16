@@ -9,7 +9,7 @@ from src.config import config
 from src.tasks.manager import TaskManager
 from src.utils.formatting import SlackFormatter
 
-from .base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, slack_command
 
 # Default timeout for queue processors (1 hour)
 QUEUE_PROCESSOR_TIMEOUT = 3600
@@ -240,6 +240,7 @@ async def _process_queue(
                 execution_id=f"queue_{item.id}",
                 permission_mode=session.permission_mode,
                 model=session.model,
+                channel_id=channel_id,
             )
 
             # Update Claude session for next item

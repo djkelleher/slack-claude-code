@@ -5,9 +5,40 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.claude.streaming import ToolActivity
+from src.claude.streaming import ToolActivity, _concat_with_spacing
 from src.config import PLANS_DIR
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
+
+
+class TestConcatWithSpacing:
+    """Tests for _concat_with_spacing helper."""
+
+    def test_separates_adjacent_sentences(self):
+        """Sentences without whitespace get paragraph break."""
+        result = _concat_with_spacing("Found it.", "Now let me check.")
+        assert result == "Found it.\n\nNow let me check."
+
+    def test_preserves_existing_newline(self):
+        """Chunks that already end with newline are not double-spaced."""
+        result = _concat_with_spacing("Found it.\n", "Now let me check.")
+        assert result == "Found it.\nNow let me check."
+
+    def test_preserves_existing_leading_newline(self):
+        """Chunks starting with newline are not double-spaced."""
+        result = _concat_with_spacing("Found it.", "\nNow let me check.")
+        assert result == "Found it.\nNow let me check."
+
+    def test_empty_existing(self):
+        """Empty existing string just returns new."""
+        assert _concat_with_spacing("", "hello") == "hello"
+
+    def test_empty_new(self):
+        """Empty new string just returns existing."""
+        assert _concat_with_spacing("hello", "") == "hello"
+
+    def test_both_empty(self):
+        """Both empty returns empty."""
+        assert _concat_with_spacing("", "") == ""
 
 
 class TestStreamingMessageState:

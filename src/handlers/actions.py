@@ -247,6 +247,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 permission_mode=session.permission_mode,
                 db_session_id=session.id,  # Smart context tracking
                 model=session.model,  # Per-session model
+                channel_id=channel_id,
             )
 
             if result.session_id:
@@ -777,16 +778,15 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         # Set the answer for this question
         await QuestionManager.set_answer(question_id, question_index, [selected_label])
 
-        # Check if all questions are answered
-        if await QuestionManager.is_complete(question_id):
-            # Resolve the question
+        # For single-question single-select, auto-resolve on click.
+        # For multi-question, wait for the confirm button.
+        if len(pending.questions) == 1:
             resolved = await QuestionManager.resolve(question_id)
             if resolved:
                 user_id = body["user"]["id"]
                 channel_id = body["channel"]["id"]
                 message_ts = body["message"]["ts"]
 
-                # Update the message to show answered state
                 try:
                     await client.chat_update(
                         channel=channel_id,
@@ -798,6 +798,15 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     logger.warning(f"Failed to update question message: {e}")
 
                 logger.info(f"Question {question_id} answered by {user_id}: {resolved.answers}")
+        else:
+            # Multi-question: show ephemeral confirmation, wait for Confirm button
+            answered_count = len(pending.answers)
+            total_count = len(pending.questions)
+            await client.chat_postEphemeral(
+                channel=body["channel"]["id"],
+                user=body["user"]["id"],
+                text=f"Answer recorded ({answered_count}/{total_count}). Click *Confirm* when done.",
+            )
 
     @app.action(re.compile(r"^question_multiselect_\d+$"))
     async def handle_question_multiselect(ack, action, body, client, logger):
@@ -836,9 +845,9 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         # For multi-select, the user needs to click "Submit Selections" button
         # to complete the question (see question_multiselect_submit handler below)
 
-    @app.action("question_multiselect_submit")
-    async def handle_question_multiselect_submit(ack, action, body, client, logger):
-        """Handle multi-select submit button click."""
+    @app.action("question_confirm_submit")
+    async def handle_question_confirm_submit(ack, action, body, client, logger):
+        """Handle the single confirm button for multi-question or multi-select responses."""
         await ack()
 
         from src.question.manager import QuestionManager
@@ -862,11 +871,12 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         # Check if all questions have been answered
         if not await QuestionManager.is_complete(question_id):
-            # Some single-select questions haven't been answered yet
+            answered_count = len(pending.answers)
+            total_count = len(pending.questions)
             await client.chat_postEphemeral(
                 channel=body["channel"]["id"],
                 user=body["user"]["id"],
-                text="Please answer all questions before submitting.",
+                text=f"Please answer all questions before confirming ({answered_count}/{total_count} answered).",
             )
             return
 
@@ -877,7 +887,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             channel_id = body["channel"]["id"]
             message_ts = body["message"]["ts"]
 
-            # Update the message to show answered state
             try:
                 await client.chat_update(
                     channel=channel_id,
@@ -888,7 +897,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             except Exception as e:
                 logger.warning(f"Failed to update question message: {e}")
 
-            logger.info(f"Question {question_id} submitted by {user_id}: {resolved.answers}")
+            logger.info(f"Question {question_id} confirmed by {user_id}: {resolved.answers}")
 
     @app.view("question_custom_submit")
     async def handle_question_custom_submit(ack, body, client, view, logger):
@@ -919,14 +928,12 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         # Set custom answer for the specific question
         await QuestionManager.set_answer(question_id, question_index, [custom_answer])
 
-        # Check if all questions are answered
-        if await QuestionManager.is_complete(question_id):
-            # Resolve the question
+        # For single-question, auto-resolve. For multi-question, wait for confirm button.
+        if len(pending.questions) == 1:
             resolved = await QuestionManager.resolve(question_id)
             if resolved and resolved.message_ts:
                 user_id = body["user"]["id"]
 
-                # Update the original message
                 try:
                     await client.chat_update(
                         channel=resolved.channel_id,
@@ -941,13 +948,13 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     f"Question {question_id} custom answered by {user_id}: {custom_answer[:50]}..."
                 )
         else:
-            # Not all questions answered yet - post ephemeral feedback
+            # Multi-question - post ephemeral feedback, wait for confirm button
             try:
-                # Get channel from the original message context
-                # We need to find the channel - it's stored in the pending question
+                answered_count = len(pending.answers)
+                total_count = len(pending.questions)
                 msg = (
-                    f"Answer recorded for question {question_index + 1}. "
-                    "Please answer the remaining questions."
+                    f"Answer recorded ({answered_count}/{total_count}). "
+                    "Click *Confirm* when done."
                 )
                 await client.chat_postEphemeral(
                     channel=pending.channel_id,
@@ -1043,7 +1050,100 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
     # Model selection handlers
     # -------------------------------------------------------------------------
 
-    @app.action(re.compile(r"^select_model_.*$"))
+    @app.action("select_model_custom")
+    async def handle_custom_model_button(ack, action, body, client, logger):
+        """Handle custom model button click - open modal for input."""
+        await ack()
+
+        # Parse channel_id and thread_ts from value
+        value_parts = action["value"].split("|")
+        channel_id = value_parts[0]
+        thread_ts = value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
+
+        # Open modal for custom model input
+        await client.views_open(
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "callback_id": "custom_model_submit",
+                "private_metadata": json.dumps({"channel_id": channel_id, "thread_ts": thread_ts}),
+                "title": {"type": "plain_text", "text": "Custom Model"},
+                "submit": {"type": "plain_text", "text": "Set Model"},
+                "close": {"type": "plain_text", "text": "Cancel"},
+                "blocks": [
+                    {
+                        "type": "input",
+                        "block_id": "custom_model_block",
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "custom_model_input",
+                            "placeholder": {
+                                "type": "plain_text",
+                                "text": "e.g., claude-opus-4-6-20250101",
+                            },
+                        },
+                        "label": {"type": "plain_text", "text": "Model ID"},
+                        "hint": {
+                            "type": "plain_text",
+                            "text": "Enter the full model identifier",
+                        },
+                    }
+                ],
+            },
+        )
+
+    @app.view("custom_model_submit")
+    async def handle_custom_model_submit(ack, body, client, view, logger):
+        """Handle custom model modal submission."""
+        await ack()
+
+        # Parse channel info from private_metadata
+        try:
+            metadata = json.loads(view["private_metadata"])
+            channel_id = metadata["channel_id"]
+            thread_ts = metadata.get("thread_ts")
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Invalid custom model modal metadata: {e}")
+            return
+
+        # Get the custom model value
+        model_name = view["state"]["values"]["custom_model_block"]["custom_model_input"]["value"]
+        model_name = model_name.strip()
+
+        if not model_name:
+            return
+
+        try:
+            # Update session with the custom model
+            await deps.db.update_session_model(channel_id, thread_ts, model_name)
+
+            # Post confirmation message
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f"Model changed to {model_name}",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f":heavy_check_mark: Model changed to *{model_name}*",
+                        },
+                    }
+                ],
+            )
+            logger.info(f"Custom model changed to {model_name} for channel {channel_id}")
+
+        except Exception as e:
+            logger.error(f"Custom model change failed: {e}")
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f"Error changing model: {str(e)}",
+                blocks=SlackFormatter.error_message(str(e)),
+            )
+
+    @app.action(re.compile(r"^select_model_(?!custom$).*$"))
     async def handle_model_selection(ack, action, body, client, logger):
         """Handle model selection button click."""
         await ack()
@@ -1059,7 +1159,8 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         # Model display names
         model_display = {
-            "opus": "Claude Opus 4.5",
+            "opus": "Claude Opus 4.6",
+            "claude-opus-4-5-20250929": "Claude Opus 4.5",
             "sonnet": "Claude Sonnet 4.5",
             "haiku": "Claude Haiku 4",
         }
