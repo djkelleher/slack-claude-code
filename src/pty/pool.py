@@ -6,15 +6,16 @@ Uses a simple dict-based registry with async-safe operations.
 import asyncio
 import threading
 from datetime import datetime, timedelta
-from typing import Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from loguru import logger
 
-from src.codex.streaming import StreamMessage
-from src.codex.subprocess_executor import ExecutionResult
-
 from .session import PTYSession
 from .types import PTYSessionConfig, SessionState
+
+if TYPE_CHECKING:
+    from src.codex.subprocess_executor import ExecutionResult
+    from src.codex.streaming import StreamMessage
 
 
 class PTYSessionPool:
@@ -160,15 +161,38 @@ class PTYSessionPool:
         return False
 
     @classmethod
+    async def remove_by_channel(cls, channel_id: str) -> int:
+        """Stop and remove all sessions for a channel (including thread sessions)."""
+        lock = cls._get_lock()
+        prefix = f"{channel_id}:"
+
+        async with lock:
+            sessions_to_remove = [
+                (key, session)
+                for key, session in cls._sessions.items()
+                if key == channel_id or key.startswith(prefix)
+            ]
+            for key, _ in sessions_to_remove:
+                cls._sessions.pop(key, None)
+
+        removed_count = 0
+        for key, session in sessions_to_remove:
+            await session.stop()
+            logger.info(f"Removed PTY session: {key}")
+            removed_count += 1
+
+        return removed_count
+
+    @classmethod
     async def send_to_session(
         cls,
         channel_id: str,
         thread_ts: Optional[str],
         prompt: str,
         config: PTYSessionConfig,
-        on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]] = None,
+        on_chunk: Optional[Callable[["StreamMessage"], Awaitable[None]]] = None,
         timeout: float = 216000.0,
-    ) -> ExecutionResult:
+    ) -> "ExecutionResult":
         """Send a prompt to a session, creating it if needed.
 
         Args:
@@ -201,6 +225,26 @@ class PTYSessionPool:
         if session:
             return await session.interrupt()
         return False
+
+    @classmethod
+    async def interrupt_by_channel(cls, channel_id: str) -> int:
+        """Send interrupt (Ctrl+C) to all sessions in a channel."""
+        lock = cls._get_lock()
+        prefix = f"{channel_id}:"
+
+        async with lock:
+            sessions = [
+                session
+                for key, session in cls._sessions.items()
+                if key == channel_id or key.startswith(prefix)
+            ]
+
+        interrupted_count = 0
+        for session in sessions:
+            if await session.interrupt():
+                interrupted_count += 1
+
+        return interrupted_count
 
     @classmethod
     def get_session_info(

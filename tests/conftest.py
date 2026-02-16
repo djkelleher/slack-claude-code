@@ -64,6 +64,15 @@ def slack_bot_token() -> str:
 
 
 @pytest.fixture
+def slack_user_token() -> str:
+    """Get Slack user token from environment (required for live app endpoint tests)."""
+    token = os.environ.get("SLACK_USER_TOKEN", "")
+    if not token:
+        pytest.skip("SLACK_USER_TOKEN environment variable not set")
+    return token
+
+
+@pytest.fixture
 def slack_test_channel() -> str:
     """Get test channel ID from environment."""
     channel = os.environ.get("SLACK_TEST_CHANNEL", "")
@@ -76,3 +85,16 @@ def slack_test_channel() -> str:
 def slack_client(slack_bot_token: str) -> AsyncWebClient:
     """Create an async Slack WebClient for live tests."""
     return AsyncWebClient(token=slack_bot_token)
+
+
+@pytest.fixture
+def slack_user_client(slack_user_token: str) -> AsyncWebClient:
+    """Create an async Slack WebClient using a real user token."""
+    return AsyncWebClient(token=slack_user_token)
+
+
+@pytest.fixture
+async def slack_bot_user_id(slack_client: AsyncWebClient) -> str:
+    """Resolve the bot user ID for mention tests."""
+    response = await slack_client.auth_test()
+    return response["user_id"]

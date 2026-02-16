@@ -26,6 +26,40 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         Shared handler dependencies.
     """
 
+    async def _interrupt_codex_operations(
+        ctx: CommandContext,
+        deps: HandlerDependencies,
+    ) -> int:
+        """Interrupt active Codex operations for this channel/thread."""
+        interrupted_count = 0
+
+        # Subprocess-based Codex executions
+        if deps.codex_executor:
+            interrupted_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
+
+        # PTY-based Codex session (interactive shell)
+        if deps.pty_executor:
+            interrupted_count += await deps.pty_executor.cancel_by_channel(ctx.channel_id)
+
+        return interrupted_count
+
+    async def _stop_codex_sessions(
+        ctx: CommandContext,
+        deps: HandlerDependencies,
+    ) -> int:
+        """Stop Codex sessions so the next message starts fresh."""
+        stopped_count = 0
+
+        # Subprocess-based Codex executions
+        if deps.codex_executor:
+            stopped_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
+
+        # PTY-based Codex session (interactive shell)
+        if deps.pty_executor:
+            stopped_count += await deps.pty_executor.stop_by_channel(ctx.channel_id)
+
+        return stopped_count
+
     async def _send_claude_command(
         ctx: CommandContext,
         claude_command: str,
@@ -117,19 +151,19 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @app.command("/clear")
     @slack_command()
     async def handle_clear(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /clear command - cancel processes and reset Claude conversation."""
-        # Step 1: Cancel all active executor processes for this channel
+        """Handle /clear command - cancel processes and reset conversation sessions."""
+        # Step 1: Cancel/stop active executions for this channel
         cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
-        if deps.codex_executor:
-            cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
+        cancelled_count += await _stop_codex_sessions(ctx, deps)
 
         # Brief wait for graceful shutdown
         if cancelled_count > 0:
             await asyncio.sleep(0.5)
 
-        # Step 2: Clear the Claude session ID so next message starts fresh
+        # Step 2: Clear backend session IDs so next message starts fresh
         await deps.db.clear_session_claude_id(ctx.channel_id, ctx.thread_ts)
-        ctx.logger.info("Cleared Claude session ID")
+        await deps.db.clear_session_codex_id(ctx.channel_id, ctx.thread_ts)
+        ctx.logger.info("Cleared Claude and Codex session IDs")
 
         # Note: We don't send /clear to Claude CLI because it only works in
         # interactive mode, not with -p flag. Clearing the session ID above
@@ -157,10 +191,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @slack_command()
     async def handle_esc(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /esc command - interrupt current operation (like pressing Escape)."""
-        # Cancel all active executor processes for this channel
+        # Interrupt all active executions for this channel
         cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
-        if deps.codex_executor:
-            cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
+        cancelled_count += await _interrupt_codex_operations(ctx, deps)
 
         if cancelled_count > 0:
             await ctx.client.chat_postMessage(

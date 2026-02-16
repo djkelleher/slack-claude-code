@@ -234,21 +234,36 @@ async def _execute_codex_message(
             await streaming_state.append_and_update(content or "", tools)
 
     try:
-        # Codex interactive mode is a TUI that doesn't support --json output,
-        # so always use subprocess executor (codex exec --json) with session resume.
-        result = await deps.codex_executor.execute(
-            prompt=prompt,
-            working_directory=session.working_directory,
-            session_id=channel_id,
-            resume_session_id=session.codex_session_id,
-            execution_id=execution_id,
-            on_chunk=on_chunk,
-            sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
-            approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
-            db_session_id=session.id,
-            model=session.model,
-            channel_id=channel_id,
-        )
+        # Prefer persistent PTY sessions for Codex interactive shell behavior.
+        if config.USE_PTY_SESSIONS and deps.pty_executor:
+            logger.info("Executing Codex prompt via PTY session")
+            result = await deps.pty_executor.execute(
+                prompt=prompt,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                working_directory=session.working_directory,
+                on_chunk=on_chunk,
+                sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
+                approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
+                model=session.model,
+            )
+        else:
+            if not deps.codex_executor:
+                raise RuntimeError("Codex executor is not configured")
+            logger.info("Executing Codex prompt via subprocess executor")
+            result = await deps.codex_executor.execute(
+                prompt=prompt,
+                working_directory=session.working_directory,
+                session_id=channel_id,
+                resume_session_id=session.codex_session_id,
+                execution_id=execution_id,
+                on_chunk=on_chunk,
+                sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
+                approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
+                db_session_id=session.id,
+                model=session.model,
+                channel_id=channel_id,
+            )
 
         # Update session with Codex session ID for resume
         if result.session_id:

@@ -113,6 +113,10 @@ class PTYExecutor:
         """
         return await PTYSessionPool.interrupt_session(channel_id, thread_ts)
 
+    async def cancel_by_channel(self, channel_id: str) -> int:
+        """Interrupt all PTY sessions for a channel."""
+        return await PTYSessionPool.interrupt_by_channel(channel_id)
+
     async def stop_session(self, channel_id: str, thread_ts: Optional[str] = None) -> bool:
         """Stop and remove a PTY session.
 
@@ -124,6 +128,10 @@ class PTYExecutor:
             True if session was found and stopped
         """
         return await PTYSessionPool.remove(channel_id, thread_ts)
+
+    async def stop_by_channel(self, channel_id: str) -> int:
+        """Stop and remove all PTY sessions for a channel."""
+        return await PTYSessionPool.remove_by_channel(channel_id)
 
     def get_session_info(
         self, channel_id: Optional[str] = None, thread_ts: Optional[str] = None

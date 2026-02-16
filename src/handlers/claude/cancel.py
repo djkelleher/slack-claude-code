@@ -19,6 +19,10 @@ def register_cancel_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     async def _handle_cancel(ctx: CommandContext, deps: HandlerDependencies) -> None:
         """Cancel all active executions in the current channel."""
         cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
+        if deps.codex_executor:
+            cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
+        if deps.pty_executor:
+            cancelled_count += await deps.pty_executor.cancel_by_channel(ctx.channel_id)
 
         if cancelled_count > 0:
             await ctx.client.chat_postMessage(
