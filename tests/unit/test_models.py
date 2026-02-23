@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pytest
 
-from src.config import parse_model_effort
+from src.config import is_supported_codex_model, parse_model_effort
 from src.database.models import (
     CommandHistory,
     GitCheckpoint,
@@ -57,7 +57,7 @@ class TestSession:
             "plan",  # permission_mode
             "2024-01-15T10:30:00",  # created_at
             "2024-01-15T11:00:00",  # last_active
-            "gpt-5-codex",  # model
+            "gpt-5.3-codex",  # model
             "[]",  # added_dirs (JSON)
             "codex-session-456",  # codex_session_id
             "danger-full-access",  # sandbox_mode
@@ -67,7 +67,7 @@ class TestSession:
         session = Session.from_row(row)
 
         assert session.id == 1
-        assert session.model == "gpt-5-codex"
+        assert session.model == "gpt-5.3-codex"
         assert session.codex_session_id == "codex-session-456"
         assert session.sandbox_mode == "danger-full-access"
         assert session.approval_mode == "never"
@@ -88,10 +88,10 @@ class TestSession:
 
     def test_get_backend_codex(self):
         """get_backend returns 'codex' for Codex models."""
-        session = Session(channel_id="C123", model="gpt-5-codex")
+        session = Session(channel_id="C123", model="gpt-5.3-codex")
         assert session.get_backend() == "codex"
 
-        session = Session(channel_id="C123", model="o3")
+        session = Session(channel_id="C123", model="gpt-5.3-codex-spark")
         assert session.get_backend() == "codex"
 
         session = Session(channel_id="C123", model="gpt-5.3-codex")
@@ -100,12 +100,19 @@ class TestSession:
         session = Session(channel_id="C123", model="gpt-5.1-codex-max")
         assert session.get_backend() == "codex"
 
-        # Effort-suffixed models should also route to codex
+        session = Session(channel_id="C123", model="gpt-5.2")
+        assert session.get_backend() == "codex"
+
         session = Session(channel_id="C123", model="gpt-5.3-codex-high")
         assert session.get_backend() == "codex"
 
-        session = Session(channel_id="C123", model="gpt-5.1-codex-max-xhigh")
+        session = Session(channel_id="C123", model="gpt-5.3-codex-extra-high")
         assert session.get_backend() == "codex"
+
+    def test_get_backend_unknown_gpt_defaults_to_claude(self):
+        """Unsupported gpt-* model IDs should not route to codex."""
+        session = Session(channel_id="C123", model="gpt-5")
+        assert session.get_backend() == "claude"
 
     def test_get_backend_default(self):
         """get_backend returns 'claude' for None model."""
@@ -192,6 +199,27 @@ class TestParseModelEffort:
     def test_case_insensitive(self):
         """Parsing is case-insensitive."""
         assert parse_model_effort("GPT-5.3-CODEX-HIGH") == ("GPT-5.3-CODEX", "high")
+        assert parse_model_effort("GPT-5.3-CODEX-EXTRA-HIGH") == ("GPT-5.3-CODEX", "xhigh")
+
+
+class TestSupportedCodexModels:
+    """Tests for supported codex model validation."""
+
+    def test_supported_models_without_effort(self):
+        """Base codex models are accepted."""
+        assert is_supported_codex_model("gpt-5.3-codex")
+        assert is_supported_codex_model("gpt-5.3-codex-spark")
+
+    def test_supported_models_with_effort(self):
+        """Supported codex models accept effort suffixes."""
+        assert is_supported_codex_model("gpt-5.3-codex-high")
+        assert is_supported_codex_model("gpt-5.3-codex-extra-high")
+        assert is_supported_codex_model("gpt-5.2-codex-xhigh")
+
+    def test_unsupported_models_are_rejected(self):
+        """Unsupported codex-like model IDs are rejected."""
+        assert not is_supported_codex_model("gpt-5")
+        assert not is_supported_codex_model("gpt-5.3-codex-unknown")
 
 
 class TestCommandHistory:

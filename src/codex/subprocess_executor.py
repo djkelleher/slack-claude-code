@@ -74,7 +74,7 @@ class SubprocessExecutor:
             sandbox_mode: Sandbox mode (read-only, workspace-write, danger-full-access)
             approval_mode: Approval mode (untrusted, on-request, never)
             db_session_id: Database session ID for tracking (optional)
-            model: Model to use (e.g., "gpt-5-codex", "gpt-5")
+            model: Model to use (e.g., "gpt-5.3-codex", "gpt-5.2")
             channel_id: Slack channel ID (for process tracking)
             _recursion_depth: Internal parameter to track retry depth (max 3)
 

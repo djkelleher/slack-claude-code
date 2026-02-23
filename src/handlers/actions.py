@@ -11,7 +11,13 @@ from src.approval.handler import PermissionManager
 from src.approval.plan_manager import PlanApprovalManager
 from src.approval.slack_ui import build_approval_result_blocks, build_plan_result_blocks
 from src.claude.streaming import ToolActivity
-from src.config import config
+from src.config import (
+    CODEX_MODELS,
+    EFFORT_LEVELS,
+    config,
+    is_supported_codex_model,
+    parse_model_effort,
+)
 from src.utils.formatters.base import markdown_to_mrkdwn
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.formatting import SlackFormatter
@@ -19,6 +25,12 @@ from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from .base import HandlerDependencies
 from .command_router import execute_for_session
+
+
+def _looks_like_codex_model(model_name: str) -> bool:
+    """Best-effort classifier for codex-like model IDs."""
+    normalized = (model_name or "").strip().lower()
+    return normalized.startswith("gpt-") or normalized.startswith("codex")
 
 
 async def _get_git_commit_hash(working_directory: str) -> str | None:
@@ -1081,7 +1093,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                         "label": {"type": "plain_text", "text": "Model ID"},
                         "hint": {
                             "type": "plain_text",
-                            "text": "Enter the full model identifier",
+                            "text": "Enter a model ID (Codex supports -low/-medium/-high/-extra-high)",
                         },
                     }
                 ],
@@ -1103,10 +1115,29 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         # Get the custom model value
-        model_name = view["state"]["values"]["custom_model_block"]["custom_model_input"]["value"]
-        model_name = model_name.strip()
+        model_name_raw = view["state"]["values"]["custom_model_block"]["custom_model_input"]["value"]
+        model_name = model_name_raw.strip().lower()
 
         if not model_name:
+            return
+
+        base_name, effort = parse_model_effort(model_name)
+        if base_name == "codex":
+            model_name = f"gpt-5.3-codex-{effort}" if effort else "gpt-5.3-codex"
+
+        if _looks_like_codex_model(model_name) and not is_supported_codex_model(model_name):
+            supported = "\n".join(f"• `{model}`" for model in sorted(CODEX_MODELS))
+            effort_levels = ", ".join(f"`{level}`" for level in EFFORT_LEVELS)
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f"Unsupported Codex model: {model_name}",
+                blocks=SlackFormatter.error_message(
+                    f"Unsupported Codex model: `{model_name}`\n\n"
+                    f"Supported Codex models:\n{supported}\n\n"
+                    f"Optional effort suffixes: {effort_levels}, `extra-high`"
+                ),
+            )
             return
 
         try:

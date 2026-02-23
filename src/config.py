@@ -25,15 +25,11 @@ CLAUDE_MODELS: set[str] = {
 
 CODEX_MODELS: set[str] = {
     "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
     "gpt-5.2-codex",
     "gpt-5.1-codex-max",
     "gpt-5.2",
     "gpt-5.1-codex-mini",
-    "gpt-5-codex",
-    "gpt-5",
-    "codex",
-    "o3",
-    "o4-mini",
 }
 
 
@@ -46,19 +42,39 @@ def parse_model_effort(model: str) -> tuple[str, Optional[str]]:
     Parameters
     ----------
     model : str
-        Model name, possibly with effort suffix (e.g., "gpt-5.3-codex-high").
+        Model name, possibly with effort suffix
+        (e.g., "gpt-5.3-codex-high", "gpt-5.3-codex-extra-high").
 
     Returns
     -------
     tuple[str, Optional[str]]
         (base_model, effort_level) — effort_level is None if no suffix found.
     """
-    model_lower = model.lower()
-    # Check xhigh before high since "-high" is a suffix of "-xhigh"
-    for suffix in ("-xhigh", "-medium", "-high", "-low"):
+    model_clean = model.strip()
+    model_lower = model_clean.lower()
+    suffix_map = {
+        "-extra-high": "xhigh",
+        "-extra_high": "xhigh",
+        "-extrahigh": "xhigh",
+        "-xhigh": "xhigh",
+        "-medium": "medium",
+        "-high": "high",
+        "-low": "low",
+    }
+    for suffix, level in suffix_map.items():
         if model_lower.endswith(suffix):
-            return model[: -len(suffix)], suffix[1:]
-    return model, None
+            return model_clean[: -len(suffix)], level
+    return model_clean, None
+
+
+def is_supported_codex_model(model: str) -> bool:
+    """Return True when model is one of the supported Codex models, with optional effort."""
+    base_model, effort = parse_model_effort(model)
+    if base_model.lower() not in CODEX_MODELS:
+        return False
+    if effort is None:
+        return True
+    return effort in EFFORT_LEVELS
 
 
 def get_backend_for_model(model: Optional[str]) -> str:
@@ -66,7 +82,7 @@ def get_backend_for_model(model: Optional[str]) -> str:
     Determine which backend to use based on the model name.
 
     Args:
-        model: The model name (e.g., "opus", "gpt-5-codex")
+        model: The model name (e.g., "opus", "gpt-5.3-codex")
 
     Returns:
         "claude" or "codex"
@@ -79,15 +95,12 @@ def get_backend_for_model(model: Optional[str]) -> str:
     # Check exact matches first
     if model_lower in CLAUDE_MODELS:
         return "claude"
-    if model_lower in CODEX_MODELS:
+    if is_supported_codex_model(model_lower):
         return "codex"
 
     # Check prefixes for extended model names
     if model_lower.startswith("claude"):
         return "claude"
-    if model_lower.startswith("gpt") or model_lower.startswith("codex") or (model_lower.startswith("o") and len(model_lower) > 1 and model_lower[1:2].isdigit()):
-        return "codex"
-
     # Default to Claude for unknown models
     return "claude"
 

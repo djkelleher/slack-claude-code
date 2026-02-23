@@ -12,10 +12,23 @@ from src.codex.capabilities import (
     is_claude_only_slash_command,
     normalize_codex_approval_mode,
 )
-from src.config import config, get_backend_for_model
+from src.config import (
+    CODEX_MODELS,
+    EFFORT_LEVELS,
+    config,
+    get_backend_for_model,
+    is_supported_codex_model,
+    parse_model_effort,
+)
 from src.utils.formatting import SlackFormatter
 
 from ..base import CommandContext, HandlerDependencies, slack_command
+
+
+def _looks_like_codex_model(model_name: str) -> bool:
+    """Best-effort classifier for codex-like model IDs."""
+    normalized = (model_name or "").strip().lower()
+    return normalized.startswith("gpt-") or normalized.startswith("codex")
 
 
 def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
@@ -412,7 +425,6 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             model_name = ctx.text.strip().lower()
 
             # Normalize model names (support both Claude and Codex models)
-            # Base model aliases (without effort suffix)
             base_model_map = {
                 # Claude models
                 "opus": "opus",
@@ -427,25 +439,29 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 # Codex models
                 "codex": "gpt-5.3-codex",
                 "gpt-5.3-codex": "gpt-5.3-codex",
+                "gpt-5.3-codex-spark": "gpt-5.3-codex-spark",
                 "gpt-5.2-codex": "gpt-5.2-codex",
                 "gpt-5.1-codex-max": "gpt-5.1-codex-max",
                 "gpt-5.2": "gpt-5.2",
                 "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
-                "gpt-5-codex": "gpt-5-codex",
-                "gpt-5": "gpt-5",
-                "o3": "o3",
-                "o4-mini": "o4-mini",
             }
-
-            # Check if model name has an effort suffix (e.g., "codex-high")
-            from src.config import EFFORT_LEVELS, parse_model_effort
-
             base_name, effort = parse_model_effort(model_name)
             resolved_base = base_model_map.get(base_name, base_name)
-            if effort:
-                normalized = f"{resolved_base}-{effort}"
-            else:
-                normalized = base_model_map.get(model_name, model_name)
+            normalized = f"{resolved_base}-{effort}" if effort else resolved_base
+            if _looks_like_codex_model(normalized) and not is_supported_codex_model(normalized):
+                supported = "\n".join(f"• `{model}`" for model in sorted(CODEX_MODELS))
+                effort_levels = ", ".join(f"`{level}`" for level in EFFORT_LEVELS)
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    text=f"Unsupported Codex model: {normalized}",
+                    blocks=SlackFormatter.error_message(
+                        f"Unsupported Codex model: `{normalized}`\n\n"
+                        f"Supported Codex models:\n{supported}\n\n"
+                        f"Optional effort suffixes: {effort_levels}, `extra-high`"
+                    ),
+                )
+                return
+
             backend = get_backend_for_model(normalized)
 
             await deps.db.update_session_model(ctx.channel_id, ctx.thread_ts, normalized)
@@ -478,34 +494,29 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 {"name": "haiku", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
             ]
 
-            # Generate Codex models with effort level variants
-            codex_base_models = [
-                ("gpt-5.3-codex", "GPT-5.3 Codex", "Latest frontier agentic coding model"),
-                ("gpt-5.2-codex", "GPT-5.2 Codex", "Frontier agentic coding model"),
-                ("gpt-5.1-codex-max", "GPT-5.1 Codex Max", "Deep and fast reasoning"),
-                ("gpt-5.2", "GPT-5.2", "Latest frontier model"),
-                ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", "Cheaper, faster, less capable"),
+            codex_models = [
+                {"name": "gpt-5.3-codex", "display": "GPT-5.3 Codex", "desc": "Latest frontier agentic coding model"},
+                {"name": "gpt-5.3-codex-spark", "display": "GPT-5.3 Codex Spark", "desc": "Ultra-fast coding model"},
+                {"name": "gpt-5.2-codex", "display": "GPT-5.2 Codex", "desc": "Frontier agentic coding model"},
+                {"name": "gpt-5.1-codex-max", "display": "GPT-5.1 Codex Max", "desc": "Codex-optimized flagship for deep and fast reasoning"},
+                {"name": "gpt-5.2", "display": "GPT-5.2", "desc": "Latest frontier model with improvements across knowledge, reasoning and coding"},
+                {"name": "gpt-5.1-codex-mini", "display": "GPT-5.1 Codex Mini", "desc": "Optimized for codex. Cheaper, faster, but less capable"},
             ]
             effort_labels = {
                 "low": "Low",
-                "medium": "Med",
+                "medium": "Medium",
                 "high": "High",
-                "xhigh": "XHigh",
+                "xhigh": "Extra-High",
             }
-            codex_models = []
-            for base_name, display, desc in codex_base_models:
+            effort_variants = []
+            for model in codex_models:
                 for effort_key, effort_label in effort_labels.items():
-                    codex_models.append({
-                        "name": f"{base_name}-{effort_key}",
-                        "display": f"{display} ({effort_label})",
-                        "desc": desc,
+                    effort_variants.append({
+                        "name": f"{model['name']}-{effort_key}",
+                        "display": f"{model['display']} ({effort_label})",
+                        "desc": model["desc"],
                     })
-            # Legacy models (no effort levels)
-            codex_models.extend([
-                {"name": "gpt-5-codex", "display": "GPT-5 Codex (Legacy)", "desc": "Legacy coding model"},
-                {"name": "o3", "display": "O3 (Legacy)", "desc": "OpenAI reasoning model"},
-                {"name": "o4-mini", "display": "O4 Mini (Legacy)", "desc": "Fast and efficient"},
-            ])
+            codex_models = codex_models + effort_variants
 
             # Get display name for current model
             all_models = claude_models + codex_models
@@ -615,7 +626,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f"*Custom Model*\nEnter any model ID (e.g., `claude-opus-4-6-20250101`)"
+                            f"*Custom Model*\nEnter any model ID (e.g., `claude-opus-4-6-20250101` or `gpt-5.3-codex-extra-high`)"
                             + (f"\n_Currently using: `{current_model}`_" if is_custom_model else "")
                         ),
                     },

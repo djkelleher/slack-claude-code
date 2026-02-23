@@ -74,6 +74,20 @@ Use these when your session model is a Codex model.
 - `/mode ask` and `/mode default` -> `approval=on-request`
 - `/mode plan`, `/mode accept`, `/mode delegate` are not supported for Codex
 
+Supported Codex models:
+- `gpt-5.3-codex`
+- `gpt-5.3-codex-spark`
+- `gpt-5.2-codex`
+- `gpt-5.1-codex-max`
+- `gpt-5.2`
+- `gpt-5.1-codex-mini`
+
+Optional Codex effort suffixes:
+- `-low`
+- `-medium`
+- `-high`
+- `-xhigh` (alias: `-extra-high`)
+
 #### Session Management
 Each Slack thread maintains an isolated Claude session with its own context.
 
