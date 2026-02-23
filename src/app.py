@@ -25,13 +25,11 @@ from slack_sdk.errors import SlackApiError
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.subprocess_executor import SubprocessExecutor as ClaudeExecutor
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
-from src.codex.pty_executor import PTYExecutor
 from src.config import PLANS_DIR, config, get_backend_for_model
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
-from src.pty.pool import PTYSessionPool
 from src.question.manager import QuestionManager
 from src.utils.detail_cache import DetailCache
 from src.utils.file_downloader import (
@@ -96,9 +94,6 @@ async def shutdown(
     await claude_executor.shutdown()
     if codex_executor:
         await codex_executor.shutdown()
-    # Cleanup PTY sessions if enabled
-    if config.USE_PTY_SESSIONS:
-        await PTYSessionPool.cleanup_all()
     logger.info("All processes terminated")
 
 
@@ -234,36 +229,22 @@ async def _execute_codex_message(
             await streaming_state.append_and_update(content or "", tools)
 
     try:
-        # Prefer persistent PTY sessions for Codex interactive shell behavior.
-        if config.USE_PTY_SESSIONS and deps.pty_executor:
-            logger.info("Executing Codex prompt via PTY session")
-            result = await deps.pty_executor.execute(
-                prompt=prompt,
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                working_directory=session.working_directory,
-                on_chunk=on_chunk,
-                sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
-                approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
-                model=session.model,
-            )
-        else:
-            if not deps.codex_executor:
-                raise RuntimeError("Codex executor is not configured")
-            logger.info("Executing Codex prompt via subprocess executor")
-            result = await deps.codex_executor.execute(
-                prompt=prompt,
-                working_directory=session.working_directory,
-                session_id=channel_id,
-                resume_session_id=session.codex_session_id,
-                execution_id=execution_id,
-                on_chunk=on_chunk,
-                sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
-                approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
-                db_session_id=session.id,
-                model=session.model,
-                channel_id=channel_id,
-            )
+        if not deps.codex_executor:
+            raise RuntimeError("Codex executor is not configured")
+        logger.info("Executing Codex prompt via subprocess executor")
+        result = await deps.codex_executor.execute(
+            prompt=prompt,
+            working_directory=session.working_directory,
+            session_id=channel_id,
+            resume_session_id=session.codex_session_id,
+            execution_id=execution_id,
+            on_chunk=on_chunk,
+            sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
+            approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
+            db_session_id=session.id,
+            model=session.model,
+            channel_id=channel_id,
+        )
 
         # Update session with Codex session ID for resume
         if result.session_id:
@@ -404,13 +385,6 @@ async def main():
     # Initialize Codex executor (optional)
     codex_executor = CodexExecutor(db=db)
 
-    # Initialize PTY executor for persistent Codex sessions (if enabled)
-    pty_executor = PTYExecutor() if config.USE_PTY_SESSIONS else None
-
-    # Start PTY cleanup loop if enabled
-    if config.USE_PTY_SESSIONS:
-        await PTYSessionPool.start_cleanup_loop(config.PTY_CLEANUP_INTERVAL_SECONDS)
-
     # Create Slack app
     app = AsyncApp(
         token=config.SLACK_BOT_TOKEN,
@@ -421,7 +395,6 @@ async def main():
     deps = register_commands(
         app, db, claude_executor,
         codex_executor=codex_executor,
-        pty_executor=pty_executor,
     )
     register_actions(app, deps)
 

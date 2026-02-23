@@ -3,7 +3,7 @@
 import json
 import time
 from dataclasses import dataclass
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from loguru import logger
 
@@ -109,13 +109,9 @@ class StreamParser:
     """Parser for Codex CLI stream-json output format.
 
     Codex uses newline-delimited JSON events when run with --json flag.
-    Event types include:
-    - session_start: Session initialization
-    - message: Assistant messages (text content)
-    - tool_call: Tool invocation
-    - tool_result: Tool execution result
-    - done: Completion event
-    - error: Error event
+    Supports both legacy and current schemas, including:
+    - Legacy: session_start, message/assistant, tool_call/tool_result, done/result
+    - Current: thread.started, turn.started/completed, item.started/completed, turn.failed
     """
 
     def __init__(self):
@@ -125,6 +121,133 @@ class StreamParser:
         self.accumulated_detailed = ""
         # Track pending tool uses to link with results
         self.pending_tools: dict[str, ToolActivity] = {}  # tool_use_id -> ToolActivity
+
+    def _append_assistant_content(self, content: str) -> None:
+        """Append assistant text to accumulated output buffers."""
+        if not content:
+            return
+        self.accumulated_content = _concat_with_spacing(self.accumulated_content, content)
+        self.accumulated_detailed = _concat_with_spacing(self.accumulated_detailed, content)
+
+    def _create_tool_call(
+        self,
+        tool_id: str,
+        tool_name: str,
+        tool_input: Any,
+        raw_data: dict,
+    ) -> StreamMessage:
+        """Create a normalized tool-call StreamMessage."""
+        tool_input = self._normalize_tool_input(tool_input)
+
+        tool_activity = ToolActivity(
+            id=tool_id,
+            name=tool_name,
+            input=tool_input,
+            input_summary=ToolActivity.create_input_summary(tool_name, tool_input),
+            started_at=time.monotonic(),
+            timestamp=time.time(),
+        )
+
+        if tool_id in self.pending_tools:
+            logger.warning(
+                f"Tool ID collision detected: {tool_id} already tracked. "
+                "This may indicate duplicate tool invocations."
+            )
+        self.pending_tools[tool_id] = tool_activity
+
+        detailed_addition = f"\n\n[Tool: {tool_name}]\n"
+        for key, value in tool_input.items():
+            if isinstance(value, str) and len(value) > 100:
+                value_preview = value[:100] + "..."
+            else:
+                value_preview = value
+            detailed_addition += f"  {key}: {value_preview}\n"
+
+        self.accumulated_detailed += detailed_addition
+
+        return StreamMessage(
+            type="tool_call",
+            tool_activities=[tool_activity],
+            session_id=self.session_id,
+            raw=raw_data,
+        )
+
+    @staticmethod
+    def _normalize_tool_input(tool_input: Any) -> dict:
+        """Normalize tool input payload into a dictionary."""
+        if isinstance(tool_input, str):
+            try:
+                tool_input = json.loads(tool_input)
+            except json.JSONDecodeError:
+                return {"raw": tool_input}
+
+        if isinstance(tool_input, dict):
+            return tool_input
+
+        if tool_input is None:
+            return {}
+
+        return {"raw": tool_input}
+
+    def _create_tool_result(
+        self,
+        tool_use_id: str,
+        content: str,
+        is_error: bool,
+        raw_data: dict,
+    ) -> StreamMessage:
+        """Create a normalized tool-result StreamMessage."""
+        full_content = content or ""
+        content_preview = full_content[:500] + "..." if len(full_content) > 500 else full_content
+        tool_activities = []
+
+        if tool_use_id in self.pending_tools:
+            tool_activity = self.pending_tools.pop(tool_use_id)
+            tool_activity.result = content_preview
+            tool_activity.full_result = full_content
+            tool_activity.is_error = is_error
+            if tool_activity.started_at:
+                tool_activity.duration_ms = int(
+                    (time.monotonic() - tool_activity.started_at) * 1000
+                )
+            tool_activities.append(tool_activity)
+        else:
+            tool_activity = ToolActivity(
+                id=tool_use_id,
+                name="unknown",
+                input={},
+                input_summary="",
+                result=content_preview,
+                full_result=full_content,
+                is_error=is_error,
+            )
+            tool_activities.append(tool_activity)
+
+        status = "ERROR" if is_error else "SUCCESS"
+        detailed_addition = f"\n\n[Tool Result: {status}]\n{content_preview}\n"
+        self.accumulated_detailed += detailed_addition
+
+        return StreamMessage(
+            type="tool_result",
+            detailed_content=detailed_addition,
+            tool_activities=tool_activities,
+            session_id=self.session_id,
+            raw=raw_data,
+        )
+
+    def _create_result_message(self, raw_data: dict) -> StreamMessage:
+        """Create a normalized final-result StreamMessage."""
+        self.pending_tools.clear()
+        return StreamMessage(
+            type="result",
+            content=self.accumulated_content,
+            detailed_content=self.accumulated_detailed,
+            session_id=raw_data.get("session_id", self.session_id),
+            is_final=True,
+            cost_usd=raw_data.get("cost_usd", raw_data.get("usage", {}).get("cost")),
+            duration_ms=raw_data.get("duration_ms", raw_data.get("duration")),
+            raw=raw_data,
+        )
 
     def parse_line(self, line: str) -> Optional[StreamMessage]:
         """Parse a single line of stream-json output."""
@@ -158,7 +281,87 @@ class StreamParser:
         # Determine event type - Codex uses different event structure
         event_type = data.get("type", data.get("event", "unknown"))
 
-        if event_type == "session_start":
+        if event_type == "thread.started":
+            # New stream format: thread id acts as session id.
+            self.session_id = data.get("thread_id", self.session_id)
+            return StreamMessage(
+                type="init",
+                session_id=self.session_id,
+                raw=data,
+            )
+
+        elif event_type == "turn.started":
+            return StreamMessage(type="turn_started", session_id=self.session_id, raw=data)
+
+        elif event_type == "item.started":
+            # New stream format: item lifecycle events.
+            item = data.get("item", {})
+            item_type = item.get("type")
+            if item_type == "command_execution":
+                tool_id = str(item.get("id", "unknown"))
+                command = item.get("command", "")
+                return self._create_tool_call(
+                    tool_id=tool_id,
+                    tool_name="run_command",
+                    tool_input={"command": command},
+                    raw_data=data,
+                )
+            return StreamMessage(type="item_started", session_id=self.session_id, raw=data)
+
+        elif event_type == "item.completed":
+            # New stream format: completed items include assistant messages and command results.
+            item = data.get("item", {})
+            item_type = item.get("type")
+            if item_type == "agent_message":
+                content = item.get("text", "")
+                self._append_assistant_content(content)
+                return StreamMessage(
+                    type="assistant",
+                    content=content,
+                    detailed_content=content,
+                    session_id=self.session_id,
+                    raw=data,
+                )
+            if item_type == "command_execution":
+                tool_id = str(item.get("id", "unknown"))
+                command_output = item.get("aggregated_output", item.get("output", ""))
+                exit_code = item.get("exit_code")
+                status = str(item.get("status", "")).lower()
+                item_error = item.get("error")
+                is_error = (
+                    exit_code not in (0, None)
+                    or status in {"failed", "error", "cancelled"}
+                    or bool(item_error)
+                )
+                if not command_output and item_error:
+                    command_output = (
+                        item_error.get("message", str(item_error))
+                        if isinstance(item_error, dict)
+                        else str(item_error)
+                    )
+                return self._create_tool_result(
+                    tool_use_id=tool_id,
+                    content=command_output,
+                    is_error=is_error,
+                    raw_data=data,
+                )
+            return StreamMessage(type="item_completed", session_id=self.session_id, raw=data)
+
+        elif event_type == "turn.completed":
+            return self._create_result_message(data)
+
+        elif event_type == "turn.failed":
+            error_obj = data.get("error", {})
+            error_msg = error_obj.get("message") if isinstance(error_obj, dict) else str(error_obj)
+            return StreamMessage(
+                type="error",
+                content=str(error_msg or "Codex turn failed"),
+                session_id=self.session_id,
+                is_final=True,
+                raw=data,
+            )
+
+        elif event_type == "session_start":
             # Session initialization
             self.session_id = data.get("session_id", data.get("id"))
             return StreamMessage(
@@ -180,11 +383,7 @@ class StreamParser:
                         text_parts.append(block)
                 content = "".join(text_parts)
 
-            if content:
-                self.accumulated_content = _concat_with_spacing(
-                    self.accumulated_content, content
-                )
-                self.accumulated_detailed += content
+            self._append_assistant_content(content)
 
             return StreamMessage(
                 type="assistant",
@@ -200,46 +399,11 @@ class StreamParser:
             tool_name = data.get("name", data.get("tool", "unknown"))
             tool_input = data.get("input", data.get("arguments", {}))
 
-            if isinstance(tool_input, str):
-                try:
-                    tool_input = json.loads(tool_input)
-                except json.JSONDecodeError:
-                    tool_input = {"raw": tool_input}
-
-            # Create ToolActivity object
-            tool_activity = ToolActivity(
-                id=tool_id,
-                name=tool_name,
-                input=tool_input,
-                input_summary=ToolActivity.create_input_summary(tool_name, tool_input),
-                started_at=time.monotonic(),
-                timestamp=time.time(),
-            )
-
-            # Track for linking with results
-            if tool_id in self.pending_tools:
-                logger.warning(
-                    f"Tool ID collision detected: {tool_id} already tracked. "
-                    "This may indicate duplicate tool invocations."
-                )
-            self.pending_tools[tool_id] = tool_activity
-
-            # Include tool use in detailed output
-            detailed_addition = f"\n\n[Tool: {tool_name}]\n"
-            for key, value in tool_input.items():
-                if isinstance(value, str) and len(value) > 100:
-                    value_preview = value[:100] + "..."
-                else:
-                    value_preview = value
-                detailed_addition += f"  {key}: {value_preview}\n"
-
-            self.accumulated_detailed += detailed_addition
-
-            return StreamMessage(
-                type="tool_call",
-                tool_activities=[tool_activity],
-                session_id=self.session_id,
-                raw=data,
+            return self._create_tool_call(
+                tool_id=tool_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                raw_data=data,
             )
 
         elif event_type == "tool_result":
@@ -264,61 +428,15 @@ class StreamParser:
             else:
                 full_content = str(content) if content else ""
 
-            content_preview = (
-                full_content[:500] + "..." if len(full_content) > 500 else full_content
-            )
-
-            tool_activities = []
-
-            # Update linked ToolActivity if we have it
-            if tool_use_id in self.pending_tools:
-                tool_activity = self.pending_tools[tool_use_id]
-                tool_activity.result = content_preview
-                tool_activity.full_result = full_content
-                tool_activity.is_error = is_error
-                if tool_activity.started_at:
-                    tool_activity.duration_ms = int(
-                        (time.monotonic() - tool_activity.started_at) * 1000
-                    )
-                tool_activities.append(tool_activity)
-            else:
-                # Create a result-only activity for untracked tools
-                tool_activity = ToolActivity(
-                    id=tool_use_id,
-                    name="unknown",
-                    input={},
-                    input_summary="",
-                    result=content_preview,
-                    full_result=full_content,
-                    is_error=is_error,
-                )
-                tool_activities.append(tool_activity)
-
-            status = "ERROR" if is_error else "SUCCESS"
-            detailed_addition = f"\n\n[Tool Result: {status}]\n{content_preview}\n"
-            self.accumulated_detailed += detailed_addition
-
-            return StreamMessage(
-                type="tool_result",
-                detailed_content=detailed_addition,
-                tool_activities=tool_activities,
-                session_id=self.session_id,
-                raw=data,
+            return self._create_tool_result(
+                tool_use_id=tool_use_id,
+                content=full_content,
+                is_error=is_error,
+                raw_data=data,
             )
 
         elif event_type == "done" or event_type == "result":
-            # Final result message
-            self.pending_tools.clear()
-            return StreamMessage(
-                type="result",
-                content=self.accumulated_content,
-                detailed_content=self.accumulated_detailed,
-                session_id=data.get("session_id", self.session_id),
-                is_final=True,
-                cost_usd=data.get("cost_usd", data.get("usage", {}).get("cost")),
-                duration_ms=data.get("duration_ms", data.get("duration")),
-                raw=data,
-            )
+            return self._create_result_message(data)
 
         elif event_type == "error":
             error_msg = data.get("error", {})

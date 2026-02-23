@@ -71,7 +71,6 @@ class HandlerDependencies:
     db: Any  # DatabaseRepository
     executor: Any  # Claude SubprocessExecutor
     codex_executor: Any = None  # Codex SubprocessExecutor
-    pty_executor: Any = None  # PTYExecutor for persistent Codex sessions
 
 
 def slack_command(

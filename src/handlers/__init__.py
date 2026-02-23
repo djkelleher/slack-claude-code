@@ -4,7 +4,6 @@ from slack_bolt.async_app import AsyncApp
 
 from src.claude.subprocess_executor import SubprocessExecutor as ClaudeExecutor
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
-from src.codex.pty_executor import PTYExecutor
 from src.database.repository import DatabaseRepository
 
 from .base import HandlerDependencies
@@ -35,7 +34,6 @@ def register_commands(
     db: DatabaseRepository,
     executor: ClaudeExecutor,
     codex_executor: CodexExecutor = None,
-    pty_executor: PTYExecutor = None,
 ) -> HandlerDependencies:
     """Register all slash command handlers.
 
@@ -49,8 +47,6 @@ def register_commands(
         Claude executor instance.
     codex_executor : CodexExecutor, optional
         Codex subprocess executor instance.
-    pty_executor : PTYExecutor, optional
-        Codex PTY executor instance.
 
     Returns
     -------
@@ -61,7 +57,6 @@ def register_commands(
         db=db,
         executor=executor,
         codex_executor=codex_executor,
-        pty_executor=pty_executor,
     )
 
     # Shared handlers (work with any backend)

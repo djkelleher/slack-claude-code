@@ -1,14 +1,18 @@
-[tool.poetry]
+[project]
 name = "slack-claude-code"
 version = "0.3.2"
 description = "Slack app for running Claude Code CLI commands"
-authors = ["Dan"]
+authors = [{name = "Dan"}]
 readme = "README.md"
-packages = [{include = "src"}]
+requires-python = ">=3.10,<4.0"
+dynamic = ["dependencies"]
 
-[tool.poetry.scripts]
+[project.scripts]
 aislack = "src.app:run"
 aislack-config = "src.cli:run"
+
+[tool.poetry]
+packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -20,7 +24,6 @@ aiofiles = "^24.1.0"
 loguru = "^0.7.0"
 cryptography = "^44.0.0"
 PyYAML = "^6.0"
-pexpect = "^4.9.0"
 
 
 [tool.poetry.group.dev.dependencies]

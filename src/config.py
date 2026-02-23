@@ -285,12 +285,6 @@ class Config(BaseSettings):
         "never",
     )
 
-    # PTY session configuration (for Codex)
-    USE_PTY_SESSIONS: bool = True
-    PTY_MAX_SESSIONS: int = 10
-    PTY_IDLE_TIMEOUT_MINUTES: int = 30
-    PTY_CLEANUP_INTERVAL_SECONDS: int = 60
-
     # Execution timeout overrides from environment
     USAGE_CHECK_TIMEOUT: int = 30
     MAX_QUESTIONS_PER_CONVERSATION: int = 10

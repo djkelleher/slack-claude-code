@@ -21,8 +21,6 @@ def register_cancel_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
         if deps.codex_executor:
             cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
-        if deps.pty_executor:
-            cancelled_count += await deps.pty_executor.cancel_by_channel(ctx.channel_id)
 
         if cancelled_count > 0:
             await ctx.client.chat_postMessage(
