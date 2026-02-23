@@ -21,7 +21,7 @@ class Session:
     # Codex-specific fields
     codex_session_id: Optional[str] = None  # For Codex resume
     sandbox_mode: str = "workspace-write"  # read-only, workspace-write, danger-full-access
-    approval_mode: str = "on-request"  # untrusted, on-failure, on-request, never
+    approval_mode: str = "on-request"  # untrusted, on-request, never
 
     @classmethod
     def from_row(cls, row: tuple) -> "Session":

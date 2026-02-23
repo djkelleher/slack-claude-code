@@ -2,6 +2,7 @@
 
 from slack_bolt.async_app import AsyncApp
 
+from src.codex.capabilities import DEPRECATED_APPROVAL_MODES, normalize_codex_approval_mode
 from src.config import config
 from src.utils.formatting import SlackFormatter
 
@@ -84,8 +85,15 @@ def register_codex_mode_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
         if not ctx.text:
             # Show current mode and available options
-            current_mode = session.approval_mode or config.CODEX_APPROVAL_MODE
+            current_mode_raw = session.approval_mode or config.CODEX_APPROVAL_MODE
+            current_mode = normalize_codex_approval_mode(current_mode_raw)
             modes_list = "\n".join([f"• `{m}`" for m in config.VALID_APPROVAL_MODES])
+            deprecated_note = ""
+            if current_mode_raw.lower() in DEPRECATED_APPROVAL_MODES:
+                deprecated_note = (
+                    f"\n\n:warning: Stored mode `{current_mode_raw}` is deprecated; "
+                    f"using `{current_mode}`."
+                )
 
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
@@ -94,7 +102,11 @@ def register_codex_mode_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":clipboard: *Current approval mode:* `{current_mode}`\n\n*Available modes:*\n{modes_list}",
+                            "text": (
+                                f":clipboard: *Current approval mode:* `{current_mode}`\n\n"
+                                f"*Available modes:*\n{modes_list}"
+                                f"{deprecated_note}"
+                            ),
                         },
                     },
                     {
@@ -111,6 +123,15 @@ def register_codex_mode_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             return
 
         new_mode = ctx.text.lower().strip()
+        if new_mode in DEPRECATED_APPROVAL_MODES:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                blocks=SlackFormatter.error_message(
+                    f"Approval mode `{new_mode}` is deprecated.\n\n"
+                    "Use `on-request` or `never`."
+                ),
+            )
+            return
 
         if new_mode not in config.VALID_APPROVAL_MODES:
             await ctx.client.chat_postMessage(

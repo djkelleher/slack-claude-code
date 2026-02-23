@@ -7,7 +7,12 @@ from pathlib import Path
 
 from slack_bolt.async_app import AsyncApp
 
-from src.config import config, get_backend_for_model, CLAUDE_MODELS, CODEX_MODELS
+from src.codex.capabilities import (
+    get_codex_hint_for_claude_command,
+    is_claude_only_slash_command,
+    normalize_codex_approval_mode,
+)
+from src.config import config, get_backend_for_model
 from src.utils.formatting import SlackFormatter
 
 from ..base import CommandContext, HandlerDependencies, slack_command
@@ -58,6 +63,28 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         session = await deps.db.get_or_create_session(
             ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
+        command_name = claude_command.strip().split(" ", 1)[0]
+        if session.get_backend() == "codex" and is_claude_only_slash_command(command_name):
+            hint = get_codex_hint_for_claude_command(command_name)
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text=f"{command_name} is not supported for Codex sessions.",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f":warning: `{command_name}` is Claude-specific and not available "
+                                "for Codex sessions.\n\n"
+                                f"{hint}"
+                            ),
+                        },
+                    },
+                ],
+            )
+            return
 
         # Send processing message
         response = await ctx.client.chat_postMessage(
@@ -639,6 +666,35 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         session = await deps.db.get_or_create_session(
             ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
+        if session.get_backend() == "codex":
+            current_approval = normalize_codex_approval_mode(
+                session.approval_mode or config.CODEX_APPROVAL_MODE
+            )
+            current_sandbox = session.sandbox_mode or config.CODEX_SANDBOX_MODE
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Codex permission settings",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                ":lock: *Codex Permissions*\n\n"
+                                f"*Approval mode:* `{current_approval}`\n"
+                                f"*Sandbox mode:* `{current_sandbox}`\n\n"
+                                "Use:\n"
+                                "• `/approval <mode>` to control approvals\n"
+                                "• `/sandbox <mode>` to control filesystem access\n"
+                                "• `/mode bypass|ask|default` for compatibility aliases"
+                            ),
+                        },
+                    }
+                ],
+            )
+            return
+
         current_mode = session.permission_mode or "default"
 
         await ctx.client.chat_postMessage(
@@ -651,18 +707,18 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            ":lock: *Permissions*\n\n"
-                            f"*Current mode:* `{current_mode}`\n\n"
-                            "Use `/mode` to change permission modes:\n"
-                            "• `/mode default` - Ask for approval on sensitive operations\n"
-                            "• `/mode plan` - Plan-only mode (no execution)\n"
-                            "• `/mode acceptEdits` - Auto-approve file edits\n"
-                            "• `/mode bypassPermissions` - Skip all permission checks"
-                        ),
-                    },
-                }
-            ],
-        )
+                                ":lock: *Permissions*\n\n"
+                                f"*Current mode:* `{current_mode}`\n\n"
+                                "Use `/mode` to change permission modes:\n"
+                                "• `/mode ask` - Ask for approval on sensitive operations\n"
+                                "• `/mode plan` - Plan-only mode (no execution)\n"
+                                "• `/mode accept` - Auto-approve file edits\n"
+                                "• `/mode bypass` - Skip all permission checks"
+                            ),
+                        },
+                    }
+                ],
+            )
 
     @app.command("/stats")
     @slack_command()

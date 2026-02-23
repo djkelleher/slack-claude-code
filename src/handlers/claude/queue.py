@@ -10,6 +10,7 @@ from src.tasks.manager import TaskManager
 from src.utils.formatting import SlackFormatter
 
 from ..base import CommandContext, HandlerDependencies, slack_command
+from ..command_router import execute_for_session
 
 # Default timeout for queue processors (1 hour)
 QUEUE_PROCESSOR_TIMEOUT = 3600
@@ -189,7 +190,7 @@ async def _process_queue(
 ) -> None:
     """Process queue items for a channel sequentially.
 
-    Maintains Claude session continuity across queue items.
+    Maintains backend-specific session continuity across queue items.
 
     Parameters
     ----------
@@ -225,27 +226,20 @@ async def _process_queue(
         message_ts = response["ts"]
 
         try:
-            # Get session for working directory and claude session continuity
-            # Note: Queue processing uses channel-level session (no thread_ts)
+            # Queue processing uses channel-level sessions (no thread_ts).
             session = await deps.db.get_or_create_session(
                 channel_id, thread_ts=None, default_cwd=config.DEFAULT_WORKING_DIR
             )
 
-            # Execute with session resume for continuity
-            result = await deps.executor.execute(
+            route = await execute_for_session(
+                deps=deps,
+                session=session,
                 prompt=item.prompt,
-                working_directory=session.working_directory,
-                session_id=channel_id,
-                resume_session_id=session.claude_session_id,
-                execution_id=f"queue_{item.id}",
-                permission_mode=session.permission_mode,
-                model=session.model,
                 channel_id=channel_id,
+                thread_ts=None,
+                execution_id=f"queue_{item.id}",
             )
-
-            # Update Claude session for next item
-            if result.session_id:
-                await deps.db.update_session_claude_id(channel_id, None, result.session_id)
+            result = route.result
 
             # Update queue item
             if result.success:

@@ -280,7 +280,6 @@ class Config(BaseSettings):
     # Valid approval modes for Codex CLI
     VALID_APPROVAL_MODES: tuple[str, ...] = (
         "untrusted",
-        "on-failure",
         "on-request",
         "never",
     )

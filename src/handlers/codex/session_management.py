@@ -2,6 +2,7 @@
 
 from slack_bolt.async_app import AsyncApp
 
+from src.codex.capabilities import normalize_codex_approval_mode
 from src.config import config
 from src.utils.formatting import SlackFormatter
 
@@ -72,7 +73,9 @@ def register_codex_session_commands(app: AsyncApp, deps: HandlerDependencies) ->
         )
 
         sandbox_mode = session.sandbox_mode or config.CODEX_SANDBOX_MODE
-        approval_mode = session.approval_mode or config.CODEX_APPROVAL_MODE
+        approval_mode = normalize_codex_approval_mode(
+            session.approval_mode or config.CODEX_APPROVAL_MODE
+        )
         model = session.model or config.DEFAULT_MODEL or "(default)"
         has_session = ":white_check_mark:" if session.codex_session_id else ":x:"
 

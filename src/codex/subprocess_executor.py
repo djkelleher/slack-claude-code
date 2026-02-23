@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from loguru import logger
 
+from src.codex.capabilities import normalize_codex_approval_mode
 from src.config import config, parse_model_effort
 
 from src.claude.streaming import _concat_with_spacing
@@ -71,7 +72,7 @@ class SubprocessExecutor:
             execution_id: Unique ID for this execution (for cancellation)
             on_chunk: Async callback for each streamed message
             sandbox_mode: Sandbox mode (read-only, workspace-write, danger-full-access)
-            approval_mode: Approval mode (untrusted, on-failure, on-request, never)
+            approval_mode: Approval mode (untrusted, on-request, never)
             db_session_id: Database session ID for tracking (optional)
             model: Model to use (e.g., "gpt-5-codex", "gpt-5")
             channel_id: Slack channel ID (for process tracking)
@@ -140,7 +141,12 @@ class SubprocessExecutor:
 
         # Determine approval mode: explicit > session > config default
         # Codex CLI doesn't support --ask-for-approval; map to equivalent flags
-        approval = approval_mode or config.CODEX_APPROVAL_MODE
+        approval_raw = approval_mode or config.CODEX_APPROVAL_MODE
+        approval = normalize_codex_approval_mode(approval_raw)
+        if approval != (approval_raw or "").strip().lower():
+            logger.warning(
+                f"{log_prefix}Deprecated approval mode `{approval_raw}` mapped to `{approval}`"
+            )
         if approval == "never":
             cmd.append("--full-auto")
             logger.info(f"{log_prefix}Using --full-auto (approval=never)")

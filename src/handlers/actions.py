@@ -18,6 +18,7 @@ from src.utils.formatting import SlackFormatter
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from .base import HandlerDependencies
+from .command_router import execute_for_session
 
 
 async def _get_git_commit_hash(working_directory: str) -> str | None:
@@ -237,21 +238,16 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         on_chunk = create_streaming_callback(streaming_state)
 
         try:
-            result = await deps.executor.execute(
+            route = await execute_for_session(
+                deps=deps,
+                session=session,
                 prompt=cmd.command,
-                working_directory=session.working_directory,
-                session_id=channel_id,
-                resume_session_id=session.claude_session_id,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
                 execution_id=execution_id,
                 on_chunk=on_chunk,
-                permission_mode=session.permission_mode,
-                db_session_id=session.id,  # Smart context tracking
-                model=session.model,  # Per-session model
-                channel_id=channel_id,
             )
-
-            if result.session_id:
-                await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
+            result = route.result
 
             if result.success:
                 await deps.db.update_command_status(new_cmd.id, "completed", result.output)
