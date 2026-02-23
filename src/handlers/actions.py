@@ -1087,13 +1087,13 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                             "action_id": "custom_model_input",
                             "placeholder": {
                                 "type": "plain_text",
-                                "text": "e.g., claude-opus-4-6-20250101",
+                                "text": "e.g., claude-sonnet-4-6[1m]",
                             },
                         },
                         "label": {"type": "plain_text", "text": "Model ID"},
                         "hint": {
                             "type": "plain_text",
-                            "text": "Enter a model ID (Codex supports -low/-medium/-high/-extra-high)",
+                            "text": "Enter a model ID (or `default`; Codex supports -low/-medium/-high/-extra-high)",
                         },
                     }
                 ],
@@ -1125,15 +1125,24 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         if base_name == "codex":
             model_name = f"gpt-5.3-codex-{effort}" if effort else "gpt-5.3-codex"
 
-        if _looks_like_codex_model(model_name) and not is_supported_codex_model(model_name):
+        if model_name in {"default", "recommended", "opus", "claude-opus-4-6"}:
+            model_value = None
+        else:
+            model_value = model_name
+
+        if (
+            model_value
+            and _looks_like_codex_model(model_value)
+            and not is_supported_codex_model(model_value)
+        ):
             supported = "\n".join(f"• `{model}`" for model in sorted(CODEX_MODELS))
             effort_levels = ", ".join(f"`{level}`" for level in EFFORT_LEVELS)
             await client.chat_postMessage(
                 channel=channel_id,
                 thread_ts=thread_ts,
-                text=f"Unsupported Codex model: {model_name}",
+                text=f"Unsupported Codex model: {model_value}",
                 blocks=SlackFormatter.error_message(
-                    f"Unsupported Codex model: `{model_name}`\n\n"
+                    f"Unsupported Codex model: `{model_value}`\n\n"
                     f"Supported Codex models:\n{supported}\n\n"
                     f"Optional effort suffixes: {effort_levels}, `extra-high`"
                 ),
@@ -1142,24 +1151,25 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         try:
             # Update session with the custom model
-            await deps.db.update_session_model(channel_id, thread_ts, model_name)
+            await deps.db.update_session_model(channel_id, thread_ts, model_value)
+            display_name = model_value or "Default (recommended)"
 
             # Post confirmation message
             await client.chat_postMessage(
                 channel=channel_id,
                 thread_ts=thread_ts,
-                text=f"Model changed to {model_name}",
+                text=f"Model changed to {display_name}",
                 blocks=[
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":heavy_check_mark: Model changed to *{model_name}*",
+                            "text": f":heavy_check_mark: Model changed to *{display_name}*",
                         },
                     }
                 ],
             )
-            logger.info(f"Custom model changed to {model_name} for channel {channel_id}")
+            logger.info(f"Custom model changed to {model_value} for channel {channel_id}")
 
         except Exception as e:
             logger.error(f"Custom model change failed: {e}")
@@ -1184,18 +1194,37 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         channel_id = value_parts[0]
         thread_ts = value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
 
-        # Model display names
-        model_display = {
-            "opus": "Claude Opus 4.6",
-            "claude-opus-4-5-20250929": "Claude Opus 4.5",
-            "sonnet": "Claude Sonnet 4.5",
-            "haiku": "Claude Haiku 4",
+        # Normalize Claude picker aliases to model IDs.
+        # Keep legacy aliases for old messages already posted to Slack.
+        claude_model_aliases: dict[str, str | None] = {
+            "default": None,
+            "recommended": None,
+            "opus": None,
+            "claude-opus-4-6": None,
+            "claude-opus-4-5-20250929": None,
+            "opus-1m": "claude-opus-4-6[1m]",
+            "claude-opus-4-6[1m]": "claude-opus-4-6[1m]",
+            "sonnet": "sonnet",
+            "claude-sonnet-4-6": "sonnet",
+            "sonnet-1m": "claude-sonnet-4-6[1m]",
+            "claude-sonnet-4-6[1m]": "claude-sonnet-4-6[1m]",
+            "haiku": "haiku",
+            "claude-haiku-4-5": "haiku",
         }
-        display_name = model_display.get(model_name, model_name)
+        model_value = claude_model_aliases.get(model_name, model_name)
+
+        model_display = {
+            None: "Default (recommended)",
+            "claude-opus-4-6[1m]": "Opus (1M context)",
+            "sonnet": "Sonnet",
+            "claude-sonnet-4-6[1m]": "Sonnet (1M context)",
+            "haiku": "Haiku",
+        }
+        display_name = model_display.get(model_value, model_name)
 
         try:
             # Update session with the selected model
-            await deps.db.update_session_model(channel_id, thread_ts, model_name)
+            await deps.db.update_session_model(channel_id, thread_ts, model_value)
 
             # Post confirmation message
             await client.chat_postMessage(
@@ -1212,7 +1241,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     }
                 ],
             )
-            logger.info(f"Model changed to {model_name} for channel {channel_id}")
+            logger.info(f"Model changed to {model_value} for channel {channel_id}")
 
         except Exception as e:
             logger.error(f"Model change failed: {e}")

@@ -77,13 +77,16 @@ class TestSession:
         session = Session(channel_id="C123", model="opus")
         assert session.get_backend() == "claude"
 
-        session = Session(channel_id="C123", model="claude-sonnet-4")
+        session = Session(channel_id="C123", model="default")
         assert session.get_backend() == "claude"
 
-        session = Session(channel_id="C123", model="claude-opus-4-6")
+        session = Session(channel_id="C123", model="claude-opus-4-6[1m]")
         assert session.get_backend() == "claude"
 
-        session = Session(channel_id="C123", model="claude-opus-4-5-20250929")
+        session = Session(channel_id="C123", model="claude-sonnet-4-6[1m]")
+        assert session.get_backend() == "claude"
+
+        session = Session(channel_id="C123", model="claude-haiku-4-5")
         assert session.get_backend() == "claude"
 
     def test_get_backend_codex(self):

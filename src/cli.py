@@ -134,7 +134,7 @@ def cmd_help(args: list[str]) -> int:
     print("  SLACK_APP_TOKEN       Slack app-level token (xapp-...)")
     print("  SLACK_SIGNING_SECRET  Slack signing secret")
     print("  DEFAULT_WORKING_DIR   Default working directory for Claude")
-    print("  DEFAULT_MODEL         Default Claude model (opus, sonnet, haiku)")
+    print("  DEFAULT_MODEL         Default Claude model (e.g., sonnet, haiku, claude-opus-4-6[1m])")
     return 0
 
 

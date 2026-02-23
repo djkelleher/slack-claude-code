@@ -12,15 +12,15 @@ PLANS_DIR = str(Path.home() / ".claude" / "plans")
 
 # Model-to-backend mapping
 CLAUDE_MODELS: set[str] = {
+    "default",
     "opus",
     "sonnet",
     "haiku",
-    "claude-opus-4",
-    "claude-opus-4-5-20250929",
     "claude-opus-4-6",
-    "claude-sonnet-4",
-    "claude-sonnet-4-5",
-    "claude-haiku-4",
+    "claude-opus-4-6[1m]",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-6[1m]",
+    "claude-haiku-4-5",
 }
 
 CODEX_MODELS: set[str] = {

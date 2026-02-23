@@ -419,23 +419,46 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         session = await deps.db.get_or_create_session(
             ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
+        claude_model_display: dict[str | None, str] = {
+            None: "Default (recommended)",
+            "default": "Default (recommended)",
+            "opus": "Default (recommended)",
+            "claude-opus-4-6": "Default (recommended)",
+            "claude-opus-4-6[1m]": "Opus (1M context)",
+            "sonnet": "Sonnet",
+            "claude-sonnet-4-6": "Sonnet",
+            "claude-sonnet-4-6[1m]": "Sonnet (1M context)",
+            "haiku": "Haiku",
+            "claude-haiku-4-5": "Haiku",
+        }
 
         if ctx.text:
             # Direct model selection via command argument
             model_name = ctx.text.strip().lower()
 
             # Normalize model names (support both Claude and Codex models)
-            base_model_map = {
+            claude_base_model_map: dict[str, str | None] = {
                 # Claude models
-                "opus": "opus",
-                "opus-4": "opus",
-                "opus-4.5": "claude-opus-4-5-20250929",
-                "opus-4.6": "opus",
+                "default": None,
+                "default (recommended)": None,
+                "recommended": None,
+                "opus": None,
+                "opus-4.6": None,
+                "claude-opus-4-6": None,
+                "opus-1m": "claude-opus-4-6[1m]",
+                "opus (1m context)": "claude-opus-4-6[1m]",
+                "claude-opus-4-6[1m]": "claude-opus-4-6[1m]",
                 "sonnet": "sonnet",
-                "sonnet-4": "sonnet",
-                "sonnet-4.5": "sonnet",
+                "sonnet-4.6": "sonnet",
+                "claude-sonnet-4-6": "sonnet",
+                "sonnet-1m": "claude-sonnet-4-6[1m]",
+                "sonnet (1m context)": "claude-sonnet-4-6[1m]",
+                "claude-sonnet-4-6[1m]": "claude-sonnet-4-6[1m]",
                 "haiku": "haiku",
-                "haiku-4": "haiku",
+                "haiku-4.5": "haiku",
+                "claude-haiku-4-5": "haiku",
+            }
+            codex_base_model_map = {
                 # Codex models
                 "codex": "gpt-5.3-codex",
                 "gpt-5.3-codex": "gpt-5.3-codex",
@@ -446,9 +469,22 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
             }
             base_name, effort = parse_model_effort(model_name)
-            resolved_base = base_model_map.get(base_name, base_name)
-            normalized = f"{resolved_base}-{effort}" if effort else resolved_base
-            if _looks_like_codex_model(normalized) and not is_supported_codex_model(normalized):
+            if base_name in claude_base_model_map:
+                resolved_base = claude_base_model_map[base_name]
+            else:
+                resolved_base = codex_base_model_map.get(base_name, base_name)
+            if resolved_base is None:
+                normalized = None
+            elif effort and _looks_like_codex_model(resolved_base):
+                normalized = f"{resolved_base}-{effort}"
+            else:
+                normalized = resolved_base
+
+            if (
+                normalized
+                and _looks_like_codex_model(normalized)
+                and not is_supported_codex_model(normalized)
+            ):
                 supported = "\n".join(f"• `{model}`" for model in sorted(CODEX_MODELS))
                 effort_levels = ", ".join(f"`{level}`" for level in EFFORT_LEVELS)
                 await ctx.client.chat_postMessage(
@@ -467,40 +503,108 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             await deps.db.update_session_model(ctx.channel_id, ctx.thread_ts, normalized)
 
             backend_label = "Claude Code" if backend == "claude" else "OpenAI Codex"
+            selected_display = claude_model_display.get(
+                normalized, normalized or "Default (recommended)"
+            )
+            model_id_line = ""
+            if normalized and selected_display != normalized:
+                model_id_line = f"\n_Model ID: `{normalized}`_"
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
-                text=f":heavy_check_mark: Model changed to *{normalized}* ({backend_label})",
+                text=f":heavy_check_mark: Model changed to *{selected_display}* ({backend_label})",
                 blocks=[
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":heavy_check_mark: Model changed to *{normalized}*\n_Backend: {backend_label}_",
+                            "text": (
+                                f":heavy_check_mark: Model changed to *{selected_display}*"
+                                f"{model_id_line}\n_Backend: {backend_label}_"
+                            ),
                         },
                     }
                 ],
             )
         else:
             # Show current model and allow selection via buttons
-            # Get current model from session (default to opus)
-            current_model = session.model or "opus"
-            current_backend = get_backend_for_model(current_model)
+            current_model = session.model
+            if current_model in {"default", "opus", "claude-opus-4-6"}:
+                normalized_current_model = None
+            else:
+                normalized_current_model = current_model
+            current_backend = get_backend_for_model(normalized_current_model)
 
             # Available models (organized by backend)
             claude_models = [
-                {"name": "opus", "display": "Claude Opus 4.6", "desc": "Most capable model"},
-                {"name": "claude-opus-4-5-20250929", "display": "Claude Opus 4.5", "desc": "Previous generation Opus"},
-                {"name": "sonnet", "display": "Claude Sonnet 4.5", "desc": "Balanced performance and speed"},
-                {"name": "haiku", "display": "Claude Haiku 4", "desc": "Fastest and most cost-effective"},
+                {
+                    "name": "default",
+                    "value": None,
+                    "display": "Default (recommended)",
+                    "desc": "Opus 4.6 · Most capable for complex work",
+                },
+                {
+                    "name": "opus-1m",
+                    "value": "claude-opus-4-6[1m]",
+                    "display": "Opus (1M context)",
+                    "desc": "Opus 4.6 with 1M context · Billed as extra usage · $10/$37.50 per Mtok",
+                },
+                {
+                    "name": "sonnet",
+                    "value": "sonnet",
+                    "display": "Sonnet",
+                    "desc": "Sonnet 4.6 · Best for everyday tasks",
+                },
+                {
+                    "name": "sonnet-1m",
+                    "value": "claude-sonnet-4-6[1m]",
+                    "display": "Sonnet (1M context)",
+                    "desc": "Sonnet 4.6 with 1M context · Billed as extra usage · $6/$22.50 per Mtok",
+                },
+                {
+                    "name": "haiku",
+                    "value": "haiku",
+                    "display": "Haiku",
+                    "desc": "Haiku 4.5 · Fastest for quick answers",
+                },
             ]
 
             codex_models = [
-                {"name": "gpt-5.3-codex", "display": "GPT-5.3 Codex", "desc": "Latest frontier agentic coding model"},
-                {"name": "gpt-5.3-codex-spark", "display": "GPT-5.3 Codex Spark", "desc": "Ultra-fast coding model"},
-                {"name": "gpt-5.2-codex", "display": "GPT-5.2 Codex", "desc": "Frontier agentic coding model"},
-                {"name": "gpt-5.1-codex-max", "display": "GPT-5.1 Codex Max", "desc": "Codex-optimized flagship for deep and fast reasoning"},
-                {"name": "gpt-5.2", "display": "GPT-5.2", "desc": "Latest frontier model with improvements across knowledge, reasoning and coding"},
-                {"name": "gpt-5.1-codex-mini", "display": "GPT-5.1 Codex Mini", "desc": "Optimized for codex. Cheaper, faster, but less capable"},
+                {
+                    "name": "gpt-5.3-codex",
+                    "value": "gpt-5.3-codex",
+                    "display": "GPT-5.3 Codex",
+                    "desc": "Latest frontier agentic coding model",
+                },
+                {
+                    "name": "gpt-5.3-codex-spark",
+                    "value": "gpt-5.3-codex-spark",
+                    "display": "GPT-5.3 Codex Spark",
+                    "desc": "Ultra-fast coding model",
+                },
+                {
+                    "name": "gpt-5.2-codex",
+                    "value": "gpt-5.2-codex",
+                    "display": "GPT-5.2 Codex",
+                    "desc": "Frontier agentic coding model",
+                },
+                {
+                    "name": "gpt-5.1-codex-max",
+                    "value": "gpt-5.1-codex-max",
+                    "display": "GPT-5.1 Codex Max",
+                    "desc": "Codex-optimized flagship for deep and fast reasoning",
+                },
+                {
+                    "name": "gpt-5.2",
+                    "value": "gpt-5.2",
+                    "display": "GPT-5.2",
+                    "desc": "Latest frontier model with improvements across knowledge, reasoning and coding",
+                },
+                {
+                    "name": "gpt-5.1-codex-mini",
+                    "value": "gpt-5.1-codex-mini",
+                    "display": "GPT-5.1 Codex Mini",
+                    "desc": "Optimized for codex. Cheaper, faster, but less capable",
+                },
             ]
             effort_labels = {
                 "low": "Low",
@@ -513,6 +617,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 for effort_key, effort_label in effort_labels.items():
                     effort_variants.append({
                         "name": f"{model['name']}-{effort_key}",
+                        "value": f"{model['value']}-{effort_key}",
                         "display": f"{model['display']} ({effort_label})",
                         "desc": model["desc"],
                     })
@@ -521,8 +626,11 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             # Get display name for current model
             all_models = claude_models + codex_models
             current_display = next(
-                (m["display"] for m in all_models if m["name"] == current_model),
-                current_model,
+                (m["display"] for m in all_models if m["value"] == normalized_current_model),
+                claude_model_display.get(
+                    normalized_current_model,
+                    normalized_current_model or "Default (recommended)",
+                ),
             )
 
             backend_label = "Claude Code" if current_backend == "claude" else "OpenAI Codex"
@@ -544,7 +652,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             ]
 
             for model in claude_models:
-                is_current = model["name"] == current_model
+                is_current = model["value"] == normalized_current_model
                 button_text = f"{'✓ ' if is_current else ''}{model['display']}"
 
                 # Build button accessory
@@ -583,7 +691,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             )
 
             for model in codex_models:
-                is_current = model["name"] == current_model
+                is_current = model["value"] == normalized_current_model
                 button_text = f"{'✓ ' if is_current else ''}{model['display']}"
 
                 # Build button accessory
@@ -617,8 +725,8 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             blocks.append({"type": "divider"})
 
             # Check if current model is a custom one (not in predefined lists)
-            predefined_models = {m["name"] for m in all_models}
-            is_custom_model = current_model not in predefined_models
+            predefined_models = {m["value"] for m in all_models}
+            is_custom_model = normalized_current_model not in predefined_models
 
             blocks.append(
                 {
@@ -626,8 +734,8 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f"*Custom Model*\nEnter any model ID (e.g., `claude-opus-4-6-20250101` or `gpt-5.3-codex-extra-high`)"
-                            + (f"\n_Currently using: `{current_model}`_" if is_custom_model else "")
+                            f"*Custom Model*\nEnter any model ID (e.g., `claude-sonnet-4-6[1m]` or `gpt-5.3-codex-extra-high`)"
+                            + (f"\n_Currently using: `{normalized_current_model}`_" if is_custom_model else "")
                         ),
                     },
                     "accessory": {
@@ -645,7 +753,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
-                text=f"Current model: {current_model}",
+                text=f"Current model: {current_display}",
                 blocks=blocks,
             )
 

@@ -458,7 +458,7 @@ async def _handle_create(ctx: CommandContext) -> None:
                     "text": "*Example format:*\n```\n---\n"
                     "name: my-agent\n"
                     "description: What this agent does (used for auto-selection)\n"
-                    "model: sonnet  # or opus, haiku, inherit\n"
+                    "model: sonnet  # or haiku, claude-sonnet-4-6[1m], claude-opus-4-6[1m], inherit\n"
                     "tools:\n"
                     "  - Read\n"
                     "  - Grep\n"

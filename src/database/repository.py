@@ -179,7 +179,7 @@ class DatabaseRepository:
             )
 
     async def update_session_model(
-        self, channel_id: str, thread_ts: Optional[str], model: str
+        self, channel_id: str, thread_ts: Optional[str], model: Optional[str]
     ) -> None:
         """Update the model for a session."""
         async with self._transact() as db:

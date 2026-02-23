@@ -14,7 +14,7 @@ class Session:
     working_directory: str = "~"
     claude_session_id: Optional[str] = None  # For Claude --resume flag
     permission_mode: Optional[str] = None  # Per-session permission mode override (Claude)
-    model: Optional[str] = None  # Model to use (e.g., "opus", "sonnet", "haiku", "gpt-5.3-codex")
+    model: Optional[str] = None  # Model to use (e.g., "sonnet", "claude-opus-4-6[1m]", "gpt-5.3-codex")
     added_dirs: list = field(default_factory=list)  # Directories added via /add-dir
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)

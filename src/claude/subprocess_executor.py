@@ -167,7 +167,7 @@ class SubprocessExecutor:
             on_chunk: Async callback for each streamed message
             permission_mode: Permission mode to use (overrides config default)
             db_session_id: Database session ID for smart context tracking (optional)
-            model: Model to use (e.g., "opus", "sonnet", "haiku")
+            model: Model to use (e.g., "sonnet", "haiku", "claude-opus-4-6[1m]")
             channel_id: Slack channel ID for channel-specific cancellation
             _recursion_depth: Internal parameter to track retry depth (max 3)
 

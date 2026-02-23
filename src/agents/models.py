@@ -19,7 +19,9 @@ class AgentModelChoice(Enum):
 
     INHERIT = "inherit"
     OPUS = "opus"
+    OPUS_1M = "claude-opus-4-6[1m]"
     SONNET = "sonnet"
+    SONNET_1M = "claude-sonnet-4-6[1m]"
     HAIKU = "haiku"
 
 
