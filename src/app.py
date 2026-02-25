@@ -747,6 +747,12 @@ async def main():
                 f"Cancelled {cancelled_questions} pending question(s) for session {session.id} "
                 "due to new message"
             )
+        cancelled_plan_approvals = await PlanApprovalManager.cancel_for_session(str(session.id))
+        if cancelled_plan_approvals:
+            logger.info(
+                f"Cancelled {cancelled_plan_approvals} pending plan approval(s) for session {session.id} "
+                "due to new message"
+            )
 
         # Validate working directory exists
         if not os.path.isdir(session.working_directory):
