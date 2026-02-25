@@ -84,7 +84,8 @@ class DatabaseRepository:
             # Fetch the session (guaranteed to exist now)
             cursor = await db.execute(
                 """SELECT id, channel_id, thread_ts, working_directory,
-                          claude_session_id, permission_mode, created_at, last_active, model
+                          claude_session_id, permission_mode, created_at, last_active,
+                          model, added_dirs, codex_session_id, sandbox_mode, approval_mode
                    FROM sessions
                    WHERE channel_id = ? AND (
                        (thread_ts = ? AND ? IS NOT NULL) OR

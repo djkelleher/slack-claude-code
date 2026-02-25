@@ -93,6 +93,15 @@ class TestSessionOperations:
         assert session.model == "opus"
 
     @pytest.mark.asyncio
+    async def test_update_session_codex_id(self, db_repo):
+        """update_session_codex_id persists and is readable via get_or_create_session."""
+        await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.update_session_codex_id("C123ABC", None, "codex-session-xyz")
+
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        assert session.codex_session_id == "codex-session-xyz"
+
+    @pytest.mark.asyncio
     async def test_delete_session(self, db_repo):
         """delete_session removes a session."""
         session = await db_repo.get_or_create_session("C123ABC", None)
