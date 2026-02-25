@@ -24,6 +24,7 @@ from slack_sdk.errors import SlackApiError
 
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.subprocess_executor import SubprocessExecutor as ClaudeExecutor
+from src.codex.capabilities import apply_codex_mode_to_prompt
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
 from src.config import PLANS_DIR, config, get_backend_for_model
 from src.database.migrations import init_database
@@ -232,8 +233,9 @@ async def _execute_codex_message(
         if not deps.codex_executor:
             raise RuntimeError("Codex executor is not configured")
         logger.info("Executing Codex prompt via subprocess executor")
+        execution_prompt = apply_codex_mode_to_prompt(prompt, session.permission_mode)
         result = await deps.codex_executor.execute(
-            prompt=prompt,
+            prompt=execution_prompt,
             working_directory=session.working_directory,
             session_id=channel_id,
             resume_session_id=session.codex_session_id,

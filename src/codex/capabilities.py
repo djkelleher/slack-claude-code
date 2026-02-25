@@ -54,10 +54,6 @@ _COMPAT_TO_APPROVAL: dict[str, str] = {
 }
 
 _UNSUPPORTED_COMPAT_MODE_MESSAGES: dict[str, str] = {
-    "plan": (
-        "`/mode plan` is Claude-specific. "
-        "Codex does not support Claude plan mode orchestration in Slack."
-    ),
     "accept": (
         "`/mode accept` maps to Claude file-edit approvals and has no Codex equivalent."
     ),
@@ -101,6 +97,9 @@ def resolve_codex_compat_mode(alias: str) -> CodexModeResolution:
     if normalized in _COMPAT_TO_APPROVAL:
         return CodexModeResolution(approval_mode=_COMPAT_TO_APPROVAL[normalized])
 
+    if normalized == "plan":
+        return CodexModeResolution(approval_mode="on-request")
+
     if normalized in _UNSUPPORTED_COMPAT_MODE_MESSAGES:
         return CodexModeResolution(
             approval_mode=None,
@@ -111,6 +110,20 @@ def resolve_codex_compat_mode(alias: str) -> CodexModeResolution:
     return CodexModeResolution(
         approval_mode=None,
         error=f"Unknown mode: `{normalized}`. Valid compatibility modes: {valid}.",
+    )
+
+
+def apply_codex_mode_to_prompt(prompt: str, permission_mode: Optional[str]) -> str:
+    """Adjust Codex prompt behavior based on Slack session mode."""
+    mode = (permission_mode or "").strip().lower()
+    if mode != "plan":
+        return prompt
+
+    return (
+        f"{prompt}\n\n"
+        "[Plan mode: Provide a concrete implementation plan first. "
+        "Do not execute commands or edit files yet. "
+        "Wait for user confirmation before making changes.]"
     )
 
 

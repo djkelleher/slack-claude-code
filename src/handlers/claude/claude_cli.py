@@ -806,7 +806,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                                 "Use:\n"
                                 "• `/approval <mode>` to control approvals\n"
                                 "• `/sandbox <mode>` to control filesystem access\n"
-                                "• `/mode bypass|ask|default` for compatibility aliases"
+                                "• `/mode bypass|ask|default|plan` for session mode"
                             ),
                         },
                     }

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from src.codex.capabilities import apply_codex_mode_to_prompt
 from src.config import config
 from src.database.models import Session
 
@@ -36,8 +37,9 @@ async def execute_for_session(
         if not deps.codex_executor:
             raise RuntimeError("Codex executor is not configured")
 
+        execution_prompt = apply_codex_mode_to_prompt(prompt, session.permission_mode)
         result = await deps.codex_executor.execute(
-            prompt=prompt,
+            prompt=execution_prompt,
             working_directory=session.working_directory,
             session_id=channel_id,
             resume_session_id=session.codex_session_id,

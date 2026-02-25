@@ -55,7 +55,7 @@ Customize Claude's behavior for your workflow.
 | Command | Description | Example |
 |---------|-------------|---------|
 | `/model` | Show or change AI model | `/model sonnet` |
-| `/mode` | View or set Claude mode, or Codex compatibility aliases | `/mode`, `/mode plan`, `/mode bypass` |
+| `/mode` | View or set session mode (Claude and Codex) | `/mode`, `/mode plan`, `/mode bypass` |
 | `/permissions` | View current permission mode (use `/mode` to change) | `/permissions` |
 | `/notifications` | Configure notifications | `/notifications` |
 
@@ -69,10 +69,11 @@ Use these when your session model is a Codex model.
 | `/codex-status` | Show Codex session state and modes | `/codex-status` |
 | `/codex-clear` | Reset only Codex session state | `/codex-clear` |
 
-`/mode` in Codex sessions supports compatibility aliases:
+`/mode` in Codex sessions:
 - `/mode bypass` -> `approval=never`
-- `/mode ask` and `/mode default` -> `approval=on-request`
-- `/mode plan`, `/mode accept`, `/mode delegate` are not supported for Codex
+- `/mode ask`, `/mode default`, and `/mode plan` -> `approval=on-request`
+- `/mode plan` also adds a plan-first, no-execution instruction to Codex prompts
+- `/mode accept` and `/mode delegate` remain unsupported for Codex
 
 Supported Codex models:
 - `gpt-5.3-codex`

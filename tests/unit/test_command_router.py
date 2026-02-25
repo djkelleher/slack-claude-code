@@ -102,3 +102,35 @@ class TestCommandRouter:
                 thread_ts=None,
                 execution_id="exec-3",
             )
+
+    @pytest.mark.asyncio
+    async def test_execute_for_session_codex_plan_mode_enriches_prompt(self):
+        """Codex plan mode appends plan-only guidance to the prompt."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock()),
+        )
+        deps.codex_executor.execute.return_value = SimpleNamespace(session_id="codex-new", success=True)
+
+        session = Session(
+            id=11,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            permission_mode="plan",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+
+        await execute_for_session(
+            deps=deps,
+            session=session,
+            prompt="Implement feature",
+            channel_id="C123",
+            thread_ts=None,
+            execution_id="exec-4",
+        )
+
+        called_prompt = deps.codex_executor.execute.await_args.kwargs["prompt"]
+        assert "Provide a concrete implementation plan first" in called_prompt
