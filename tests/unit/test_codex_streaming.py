@@ -95,3 +95,18 @@ def test_parse_turn_failed_as_error():
     assert error_msg.type == "error"
     assert error_msg.content == "Boom"
     assert error_msg.is_final is True
+
+
+def test_parse_request_user_input_event_as_tool_call():
+    """Parser should map request_user_input events to tool calls."""
+    parser = StreamParser()
+    msg = parser.parse_line(
+        '{"type":"request_user_input","call_id":"call_123","questions":[{"question":"Proceed?","header":"Confirm","options":[{"label":"Yes","description":"Continue"}]}]}'
+    )
+    assert msg is not None
+    assert msg.type == "tool_call"
+    assert len(msg.tool_activities) == 1
+    tool = msg.tool_activities[0]
+    assert tool.id == "call_123"
+    assert tool.name == "request_user_input"
+    assert tool.input["questions"][0]["question"] == "Proceed?"

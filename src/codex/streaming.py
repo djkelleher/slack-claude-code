@@ -64,6 +64,14 @@ class ToolActivity:
             query = input_dict.get("query", "?")
             max_len = display.truncate_text_length
             return f"`{query[:max_len]}{'...' if len(query) > max_len else ''}`"
+        elif name == "request_user_input":
+            questions = input_dict.get("questions", [])
+            if questions and isinstance(questions, list):
+                first = questions[0] if isinstance(questions[0], dict) else {}
+                first_q = first.get("question", "")
+                max_len = display.truncate_text_length
+                return f"`{first_q[:max_len]}{'...' if len(first_q) > max_len else ''}`"
+            return ""
         else:
             # Generic summary
             return ""
@@ -346,6 +354,17 @@ class StreamParser:
                     raw_data=data,
                 )
             return StreamMessage(type="item_completed", session_id=self.session_id, raw=data)
+
+        elif event_type == "request_user_input":
+            # App-server stream format: request for structured user input.
+            call_id = str(data.get("call_id", data.get("id", "request_user_input")))
+            questions = data.get("questions", [])
+            return self._create_tool_call(
+                tool_id=call_id,
+                tool_name="request_user_input",
+                tool_input={"questions": questions},
+                raw_data=data,
+            )
 
         elif event_type == "turn.completed":
             return self._create_result_message(data)
