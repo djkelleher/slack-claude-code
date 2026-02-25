@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from loguru import logger
@@ -83,6 +84,7 @@ class SubprocessExecutor:
         """
         # Create log prefix for this session
         log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
+        effective_prompt = self._build_effective_prompt(prompt, log_prefix)
 
         # Prevent infinite recursion (max 3 retries)
         MAX_RECURSION_DEPTH = 3
@@ -102,20 +104,28 @@ class SubprocessExecutor:
             # Resume existing session.
             # Important: codex exec resume requires options before positional args:
             # `codex exec resume [options] <session_id> <prompt>`
-            cmd = [
-                "codex",
-                "exec",
-                "resume",
-                "--json",  # Stream JSON events
-            ]
+            cmd = ["codex"]
+            if config.CODEX_USE_DANGEROUS_BYPASS:
+                cmd.append("--dangerously-bypass-approvals-and-sandbox")
+            cmd.extend(
+                [
+                    "exec",
+                    "resume",
+                    "--json",  # Stream JSON events
+                ]
+            )
             logger.info(f"{log_prefix}Resuming session {resume_session_id}")
         else:
             # New execution
-            cmd = [
-                "codex",
-                "exec",
-                "--json",  # Stream JSON events
-            ]
+            cmd = ["codex"]
+            if config.CODEX_USE_DANGEROUS_BYPASS:
+                cmd.append("--dangerously-bypass-approvals-and-sandbox")
+            cmd.extend(
+                [
+                    "exec",
+                    "--json",  # Stream JSON events
+                ]
+            )
 
         # Add model flag if specified, parsing out effort suffix
         effort = None
@@ -130,20 +140,25 @@ class SubprocessExecutor:
         # Determine sandbox mode: explicit > session > config default
         # `codex exec resume` does not support `--sandbox`, so only pass it for new executions.
         mode = sandbox_mode or config.CODEX_SANDBOX_MODE
-        if mode in config.VALID_SANDBOX_MODES:
-            if is_resume:
-                logger.info(
-                    f"{log_prefix}Resume mode active; not passing --sandbox (requested: {mode})"
-                )
-            else:
-                cmd.extend(["--sandbox", mode])
-                logger.info(f"{log_prefix}Using --sandbox {mode}")
-        else:
-            logger.warning(
-                f"{log_prefix}Invalid sandbox mode: {mode}, using {config.CODEX_SANDBOX_MODE}"
+        if config.CODEX_USE_DANGEROUS_BYPASS:
+            logger.info(
+                f"{log_prefix}Dangerous bypass enabled; not passing --sandbox (requested: {mode})"
             )
-            if not is_resume:
-                cmd.extend(["--sandbox", config.CODEX_SANDBOX_MODE])
+        else:
+            if mode in config.VALID_SANDBOX_MODES:
+                if is_resume:
+                    logger.info(
+                        f"{log_prefix}Resume mode active; not passing --sandbox (requested: {mode})"
+                    )
+                else:
+                    cmd.extend(["--sandbox", mode])
+                    logger.info(f"{log_prefix}Using --sandbox {mode}")
+            else:
+                logger.warning(
+                    f"{log_prefix}Invalid sandbox mode: {mode}, using {config.CODEX_SANDBOX_MODE}"
+                )
+                if not is_resume:
+                    cmd.extend(["--sandbox", config.CODEX_SANDBOX_MODE])
 
         # Determine approval mode: explicit > session > config default
         # Codex CLI doesn't support --ask-for-approval; map to equivalent flags
@@ -153,7 +168,11 @@ class SubprocessExecutor:
             logger.warning(
                 f"{log_prefix}Deprecated approval mode `{approval_raw}` mapped to `{approval}`"
             )
-        if approval == "never":
+        if config.CODEX_USE_DANGEROUS_BYPASS:
+            logger.info(
+                f"{log_prefix}Dangerous bypass enabled; ignoring approval mode `{approval}`"
+            )
+        elif approval == "never":
             cmd.append("--full-auto")
             logger.info(f"{log_prefix}Using --full-auto (approval=never)")
         else:
@@ -170,15 +189,17 @@ class SubprocessExecutor:
         if is_resume:
             resume_id = resume_session_id or ""
             cmd.append(resume_id)
-            if prompt:
-                cmd.append(prompt)
-        elif prompt:
-            cmd.append(prompt)
+            if effective_prompt:
+                cmd.append(effective_prompt)
+        elif effective_prompt:
+            cmd.append(effective_prompt)
 
         # Log full command with all flags, but truncate prompt for readability
-        if prompt:
+        if effective_prompt:
             cmd_preview = " ".join(cmd[:-1])
-            prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+            prompt_preview = (
+                effective_prompt[:100] + "..." if len(effective_prompt) > 100 else effective_prompt
+            )
             logger.info(f"{log_prefix}Executing: {cmd_preview} '{prompt_preview}'")
         else:
             logger.info(f"{log_prefix}Executing: {' '.join(cmd)}")
@@ -380,6 +401,27 @@ class SubprocessExecutor:
             async with self._lock:
                 self._active_processes.pop(track_id, None)
                 self._process_channels.pop(track_id, None)
+
+    def _build_effective_prompt(self, prompt: str, log_prefix: str) -> str:
+        """Apply Codex default instructions preamble, if configured."""
+        if not config.CODEX_PREPEND_DEFAULT_INSTRUCTIONS:
+            return prompt
+
+        preamble_path = Path(config.CODEX_DEFAULT_INSTRUCTIONS_FILE).expanduser()
+        try:
+            preamble = preamble_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            logger.debug(f"{log_prefix}No default Codex instructions file at {preamble_path}")
+            return prompt
+        except Exception as e:
+            logger.warning(f"{log_prefix}Failed reading Codex instructions file {preamble_path}: {e}")
+            return prompt
+
+        if not preamble:
+            return prompt
+        if prompt:
+            return f"{preamble}\n\n{prompt}"
+        return preamble
 
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""
