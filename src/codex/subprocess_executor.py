@@ -97,18 +97,17 @@ class SubprocessExecutor:
             )
 
         # Build command - use codex exec for non-interactive execution
-        if resume_session_id:
-            # Resume existing session
+        is_resume = bool(resume_session_id)
+        if is_resume:
+            # Resume existing session.
+            # Important: codex exec resume requires options before positional args:
+            # `codex exec resume [options] <session_id> <prompt>`
             cmd = [
                 "codex",
                 "exec",
                 "resume",
-                resume_session_id,
                 "--json",  # Stream JSON events
             ]
-            # Add the prompt as follow-up
-            if prompt:
-                cmd.append(prompt)
             logger.info(f"{log_prefix}Resuming session {resume_session_id}")
         else:
             # New execution
@@ -129,15 +128,22 @@ class SubprocessExecutor:
                 logger.info(f"{log_prefix}Using reasoning effort: {effort}")
 
         # Determine sandbox mode: explicit > session > config default
+        # `codex exec resume` does not support `--sandbox`, so only pass it for new executions.
         mode = sandbox_mode or config.CODEX_SANDBOX_MODE
         if mode in config.VALID_SANDBOX_MODES:
-            cmd.extend(["--sandbox", mode])
-            logger.info(f"{log_prefix}Using --sandbox {mode}")
+            if is_resume:
+                logger.info(
+                    f"{log_prefix}Resume mode active; not passing --sandbox (requested: {mode})"
+                )
+            else:
+                cmd.extend(["--sandbox", mode])
+                logger.info(f"{log_prefix}Using --sandbox {mode}")
         else:
             logger.warning(
                 f"{log_prefix}Invalid sandbox mode: {mode}, using {config.CODEX_SANDBOX_MODE}"
             )
-            cmd.extend(["--sandbox", config.CODEX_SANDBOX_MODE])
+            if not is_resume:
+                cmd.extend(["--sandbox", config.CODEX_SANDBOX_MODE])
 
         # Determine approval mode: explicit > session > config default
         # Codex CLI doesn't support --ask-for-approval; map to equivalent flags
@@ -153,17 +159,29 @@ class SubprocessExecutor:
         else:
             logger.info(f"{log_prefix}Approval mode: {approval} (no extra flag needed)")
 
-        # Add working directory
-        cmd.extend(["--cd", working_directory])
+        # Add working directory.
+        # `codex exec resume` does not support --cd; rely on subprocess cwd for resume.
+        if is_resume:
+            logger.info(f"{log_prefix}Resume mode uses process cwd: {working_directory}")
+        else:
+            cmd.extend(["--cd", working_directory])
 
-        # Add the prompt (for new executions)
-        if not resume_session_id and prompt:
+        # Add positional args after options.
+        if is_resume:
+            resume_id = resume_session_id or ""
+            cmd.append(resume_id)
+            if prompt:
+                cmd.append(prompt)
+        elif prompt:
             cmd.append(prompt)
 
         # Log full command with all flags, but truncate prompt for readability
-        cmd_preview = " ".join(cmd[:-1] if prompt else cmd)
-        prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
-        logger.info(f"{log_prefix}Executing: {cmd_preview} '{prompt_preview}'")
+        if prompt:
+            cmd_preview = " ".join(cmd[:-1])
+            prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+            logger.info(f"{log_prefix}Executing: {cmd_preview} '{prompt_preview}'")
+        else:
+            logger.info(f"{log_prefix}Executing: {' '.join(cmd)}")
 
         # Start subprocess with increased line limit
         limit = 200 * 1024 * 1024  # 200MB limit for large file reads
@@ -253,9 +271,7 @@ class SubprocessExecutor:
 
                 # Accumulate content
                 if msg.type == "assistant" and msg.content:
-                    accumulated_output = _concat_with_spacing(
-                        accumulated_output, msg.content
-                    )
+                    accumulated_output = _concat_with_spacing(accumulated_output, msg.content)
 
                 # Track result metadata
                 if msg.type == "result":

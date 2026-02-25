@@ -13,6 +13,14 @@ COMPAT_MODE_ALIASES: tuple[str, ...] = (
     "delegate",
 )
 
+# `/mode` aliases that Codex actually supports.
+SUPPORTED_COMPAT_MODE_ALIASES: tuple[str, ...] = (
+    "bypass",
+    "ask",
+    "default",
+    "plan",
+)
+
 # Codex approval mode values we still normalize for backwards compatibility.
 DEPRECATED_APPROVAL_MODES: tuple[str, ...] = ("on-failure",)
 
@@ -54,12 +62,8 @@ _COMPAT_TO_APPROVAL: dict[str, str] = {
 }
 
 _UNSUPPORTED_COMPAT_MODE_MESSAGES: dict[str, str] = {
-    "accept": (
-        "`/mode accept` maps to Claude file-edit approvals and has no Codex equivalent."
-    ),
-    "delegate": (
-        "`/mode delegate` is Claude-specific and has no Codex equivalent."
-    ),
+    "accept": ("`/mode accept` maps to Claude file-edit approvals and has no Codex equivalent."),
+    "delegate": ("`/mode delegate` is Claude-specific and has no Codex equivalent."),
 }
 
 
@@ -106,7 +110,7 @@ def resolve_codex_compat_mode(alias: str) -> CodexModeResolution:
             error=_UNSUPPORTED_COMPAT_MODE_MESSAGES[normalized],
         )
 
-    valid = ", ".join(f"`{name}`" for name in COMPAT_MODE_ALIASES)
+    valid = ", ".join(f"`{name}`" for name in SUPPORTED_COMPAT_MODE_ALIASES)
     return CodexModeResolution(
         approval_mode=None,
         error=f"Unknown mode: `{normalized}`. Valid compatibility modes: {valid}.",

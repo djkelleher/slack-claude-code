@@ -33,6 +33,18 @@ class TestCodexModeMappings:
         assert resolved.approval_mode == "on-request"
         assert resolved.error is None
 
+    def test_unknown_mode_lists_codex_supported_modes(self):
+        """Unknown mode errors list only Codex-supported compatibility aliases."""
+        resolved = resolve_codex_compat_mode("random")
+        assert resolved.approval_mode is None
+        assert resolved.error is not None
+        assert "`bypass`" in resolved.error
+        assert "`ask`" in resolved.error
+        assert "`default`" in resolved.error
+        assert "`plan`" in resolved.error
+        assert "`accept`" not in resolved.error
+        assert "`delegate`" not in resolved.error
+
     def test_approval_mode_normalization(self):
         """Deprecated approvals are normalized to supported values."""
         assert normalize_codex_approval_mode("on-failure") == "on-request"
