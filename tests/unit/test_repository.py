@@ -1,5 +1,6 @@
 """Unit tests for database repository."""
 
+import aiosqlite
 import pytest
 import pytest_asyncio
 
@@ -35,6 +36,56 @@ class TestSessionOperations:
         session2 = await db_repo.get_or_create_session("C123ABC", None)
 
         assert session1.id == session2.id
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_channel_level_does_not_duplicate(self, db_repo):
+        """Channel-level sessions should reuse one row even with thread_ts=None."""
+        session1 = await db_repo.get_or_create_session("C123ABC", None)
+        session2 = await db_repo.get_or_create_session("C123ABC", None)
+        session3 = await db_repo.get_or_create_session("C123ABC", None)
+
+        assert session1.id == session2.id == session3.id
+
+        async with aiosqlite.connect(db_repo.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM sessions WHERE channel_id = ? AND thread_ts IS NULL",
+                ("C123ABC",),
+            )
+            count = (await cursor.fetchone())[0]
+
+        assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_prefers_populated_duplicate_row(self, db_repo):
+        """If duplicate NULL-thread rows exist, choose the most populated one."""
+        async with aiosqlite.connect(db_repo.db_path) as db:
+            await db.execute(
+                """INSERT INTO sessions (
+                       channel_id, thread_ts, working_directory, model, permission_mode,
+                       codex_session_id, last_active
+                   ) VALUES (?, NULL, ?, NULL, NULL, NULL, ?)""",
+                ("C123ABC", "/tmp/empty", "2026-01-01T00:00:00+00:00"),
+            )
+            await db.execute(
+                """INSERT INTO sessions (
+                       channel_id, thread_ts, working_directory, model, permission_mode,
+                       codex_session_id, last_active
+                   ) VALUES (?, NULL, ?, ?, ?, ?, ?)""",
+                (
+                    "C123ABC",
+                    "/tmp/populated",
+                    "gpt-5.3-codex",
+                    "plan",
+                    "codex-session-123",
+                    "2026-01-02T00:00:00+00:00",
+                ),
+            )
+            await db.commit()
+
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        assert session.working_directory == "/tmp/populated"
+        assert session.model == "gpt-5.3-codex"
+        assert session.codex_session_id == "codex-session-123"
 
     @pytest.mark.asyncio
     async def test_get_or_create_session_thread_isolation(self, db_repo):
@@ -322,9 +373,7 @@ class TestParallelJobOperations:
         """create_parallel_job creates a job."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         config = {"n_instances": 3, "commands": ["cmd1", "cmd2"]}
-        job = await db_repo.create_parallel_job(
-            session.id, "C123ABC", "parallel_analysis", config
-        )
+        job = await db_repo.create_parallel_job(session.id, "C123ABC", "parallel_analysis", config)
 
         assert job.id is not None
         assert job.job_type == "parallel_analysis"
@@ -467,9 +516,7 @@ class TestGitCheckpointOperations:
         """get_checkpoints excludes auto checkpoints by default."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         await db_repo.create_checkpoint(session.id, "C123ABC", "manual", "stash@{0}")
-        await db_repo.create_checkpoint(
-            session.id, "C123ABC", "auto", "stash@{1}", is_auto=True
-        )
+        await db_repo.create_checkpoint(session.id, "C123ABC", "auto", "stash@{1}", is_auto=True)
 
         checkpoints = await db_repo.get_checkpoints("C123ABC", include_auto=False)
 
@@ -505,12 +552,8 @@ class TestGitCheckpointOperations:
         """delete_auto_checkpoints removes only auto checkpoints."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         await db_repo.create_checkpoint(session.id, "C123ABC", "manual", "stash@{0}")
-        await db_repo.create_checkpoint(
-            session.id, "C123ABC", "auto1", "stash@{1}", is_auto=True
-        )
-        await db_repo.create_checkpoint(
-            session.id, "C123ABC", "auto2", "stash@{2}", is_auto=True
-        )
+        await db_repo.create_checkpoint(session.id, "C123ABC", "auto1", "stash@{1}", is_auto=True)
+        await db_repo.create_checkpoint(session.id, "C123ABC", "auto2", "stash@{2}", is_auto=True)
 
         count = await db_repo.delete_auto_checkpoints("C123ABC")
 

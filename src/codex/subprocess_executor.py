@@ -252,7 +252,10 @@ class SubprocessExecutor:
                             f"{log_prefix}Tool result [{tool.id[:8] if tool.id else '?'}]: {status}"
                         )
                 elif msg.type == "init":
-                    logger.info(f"{log_prefix}Session initialized: {msg.session_id}")
+                    if is_resume and msg.session_id == resume_session_id:
+                        logger.info(f"{log_prefix}Session resumed: {msg.session_id}")
+                    else:
+                        logger.info(f"{log_prefix}Session initialized: {msg.session_id}")
                 elif msg.type == "error":
                     logger.error(f"{log_prefix}Error: {msg.content}")
                 elif msg.type == "result":

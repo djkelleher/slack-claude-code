@@ -60,8 +60,10 @@ class DatabaseRepository:
     ) -> Session:
         """Get existing session for channel/thread or create a new one.
 
-        Uses UPSERT (INSERT ... ON CONFLICT DO UPDATE) for atomic operation
-        that handles concurrent requests safely.
+        Important: SQLite UNIQUE constraints allow multiple NULL values, so
+        channel-level sessions (`thread_ts IS NULL`) cannot rely on UPSERT
+        conflict behavior. We therefore select first, then insert only when no
+        matching row exists.
 
         Args:
             channel_id: Slack channel ID
@@ -71,17 +73,8 @@ class DatabaseRepository:
         async with self._transact() as db:
             now_iso = datetime.now(timezone.utc).isoformat()
 
-            # UPSERT: Insert new session or update existing one's last_active
-            # This is atomic and handles concurrent requests properly
-            await db.execute(
-                """INSERT INTO sessions (channel_id, thread_ts, working_directory, model, last_active)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(channel_id, thread_ts) DO UPDATE SET
-                       last_active = excluded.last_active""",
-                (channel_id, thread_ts, default_cwd, config.DEFAULT_MODEL, now_iso),
-            )
-
-            # Fetch the session (guaranteed to exist now)
+            # Find best existing session for this channel/thread pair.
+            # If duplicate NULL-thread rows exist, prefer the most populated one.
             cursor = await db.execute(
                 """SELECT id, channel_id, thread_ts, working_directory,
                           claude_session_id, permission_mode, created_at, last_active,
@@ -90,12 +83,64 @@ class DatabaseRepository:
                    WHERE channel_id = ? AND (
                        (thread_ts = ? AND ? IS NOT NULL) OR
                        (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                   )
+                   ORDER BY
+                       ((CASE WHEN model IS NOT NULL THEN 1 ELSE 0 END) +
+                        (CASE WHEN codex_session_id IS NOT NULL THEN 1 ELSE 0 END) +
+                        (CASE WHEN claude_session_id IS NOT NULL THEN 1 ELSE 0 END) +
+                        (CASE WHEN permission_mode IS NOT NULL THEN 1 ELSE 0 END)) DESC,
+                       last_active DESC,
+                       id DESC
+                   LIMIT 1""",
                 (channel_id, thread_ts, thread_ts, thread_ts),
             )
             row = await cursor.fetchone()
+
+            # Update existing session activity and return it.
+            if row is not None:
+                await db.execute(
+                    "UPDATE sessions SET last_active = ? WHERE id = ?",
+                    (now_iso, row[0]),
+                )
+                # Refresh to return DB-normalized values.
+                cursor = await db.execute(
+                    """SELECT id, channel_id, thread_ts, working_directory,
+                              claude_session_id, permission_mode, created_at, last_active,
+                              model, added_dirs, codex_session_id, sandbox_mode, approval_mode
+                       FROM sessions
+                       WHERE id = ?""",
+                    (row[0],),
+                )
+                updated_row = await cursor.fetchone()
+                if updated_row is None:
+                    raise RuntimeError(
+                        f"Failed to load updated session {row[0]} for channel {channel_id}"
+                    )
+                return Session.from_row(updated_row)
+
+            # Create new session when none exists.
+            cursor = await db.execute(
+                """INSERT INTO sessions (channel_id, thread_ts, working_directory, model, last_active)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (channel_id, thread_ts, default_cwd, config.DEFAULT_MODEL, now_iso),
+            )
+            session_id = cursor.lastrowid
+            if session_id is None:
+                raise RuntimeError(f"Failed to create session for channel {channel_id}")
+
+            cursor = await db.execute(
+                """SELECT id, channel_id, thread_ts, working_directory,
+                          claude_session_id, permission_mode, created_at, last_active,
+                          model, added_dirs, codex_session_id, sandbox_mode, approval_mode
+                   FROM sessions
+                   WHERE id = ?""",
+                (session_id,),
+            )
+            row = await cursor.fetchone()
             if row is None:
-                raise RuntimeError(f"Failed to get/create session for channel {channel_id}")
+                raise RuntimeError(
+                    f"Failed to load created session {session_id} for channel {channel_id}"
+                )
             return Session.from_row(row)
 
     async def update_session_cwd(self, channel_id: str, thread_ts: Optional[str], cwd: str) -> None:
@@ -284,9 +329,7 @@ class DatabaseRepository:
             )
             return current_dirs
 
-    async def clear_session_dirs(
-        self, channel_id: str, thread_ts: Optional[str]
-    ) -> None:
+    async def clear_session_dirs(self, channel_id: str, thread_ts: Optional[str]) -> None:
         """Clear all added directories from a session."""
         async with self._transact() as db:
             await db.execute(
@@ -304,9 +347,7 @@ class DatabaseRepository:
                 ),
             )
 
-    async def get_session_dirs(
-        self, channel_id: str, thread_ts: Optional[str]
-    ) -> list:
+    async def get_session_dirs(self, channel_id: str, thread_ts: Optional[str]) -> list:
         """Get the list of added directories for a session."""
         async with self._get_connection() as db:
             cursor = await db.execute(
@@ -377,7 +418,13 @@ class DatabaseRepository:
                     """UPDATE command_history
                        SET status = ?, output = ?, error_message = ?, completed_at = ?
                        WHERE id = ?""",
-                    (status, output, error_message, datetime.now(timezone.utc).isoformat(), command_id),
+                    (
+                        status,
+                        output,
+                        error_message,
+                        datetime.now(timezone.utc).isoformat(),
+                        command_id,
+                    ),
                 )
             else:
                 await db.execute(
@@ -595,7 +642,13 @@ class DatabaseRepository:
                     """UPDATE queue_items
                        SET status = ?, output = ?, error_message = ?, completed_at = ?
                        WHERE id = ?""",
-                    (status, output, error_message, datetime.now(timezone.utc).isoformat(), item_id),
+                    (
+                        status,
+                        output,
+                        error_message,
+                        datetime.now(timezone.utc).isoformat(),
+                        item_id,
+                    ),
                 )
             else:
                 await db.execute(
