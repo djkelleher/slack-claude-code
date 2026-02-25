@@ -166,6 +166,47 @@ async def post_channel_notification(
         logger.error(f"Failed to post channel notification after {max_retries} attempts: {e}")
 
 
+def _is_codex_question_tool(tool_name: str) -> bool:
+    """Return True when a Codex tool invocation requests user input."""
+    normalized = (tool_name or "").strip().lower()
+    return normalized in {"askuserquestion", "ask_user_question", "request_user_input"}
+
+
+def _normalize_codex_question_input(tool_name: str, tool_input: dict) -> dict:
+    """Normalize Codex question tool input into AskUserQuestion-compatible shape."""
+    normalized_input = tool_input if isinstance(tool_input, dict) else {}
+    if normalized_input.get("questions"):
+        return normalized_input
+
+    # Some tool variants may provide a single question payload.
+    if normalized_input.get("question"):
+        return {
+            "questions": [
+                {
+                    "question": normalized_input.get("question", ""),
+                    "header": normalized_input.get("header", "Question"),
+                    "options": normalized_input.get("options", []),
+                    "multiSelect": normalized_input.get("multiSelect", False),
+                }
+            ]
+        }
+
+    # Fallback when request_user_input is called with unexpected shape.
+    if (tool_name or "").strip().lower() == "request_user_input":
+        return {
+            "questions": [
+                {
+                    "question": "Please provide additional input.",
+                    "header": "Input Needed",
+                    "options": [],
+                    "multiSelect": False,
+                }
+            ]
+        }
+
+    return {"questions": []}
+
+
 async def _execute_codex_message(
     client,
     deps,
@@ -174,11 +215,11 @@ async def _execute_codex_message(
     thread_ts: str | None,
     prompt: str,
     logger,
+    user_id: str | None = None,
 ) -> None:
     """Execute a message using the Codex backend.
 
-    This is a simpler execution flow than Claude - no question handling,
-    no plan mode, just direct execution with streaming output.
+    Mirrors Claude workflow for question handling and plan approval in Slack.
     """
     from src.codex.streaming import StreamMessage as CodexStreamMessage
 
@@ -221,13 +262,154 @@ async def _execute_codex_message(
         on_error=on_streaming_error,
     )
     streaming_state.start_heartbeat()
+    pending_question = None
 
-    # Create on_chunk callback for Codex streaming
-    async def on_chunk(msg: CodexStreamMessage) -> None:
-        content = msg.content if msg.type == "assistant" else ""
-        tools = msg.tool_activities
-        if content or tools:
-            await streaming_state.append_and_update(content or "", tools)
+    def create_on_chunk_callback(state: StreamingMessageState):
+        async def on_chunk(msg: CodexStreamMessage) -> None:
+            nonlocal pending_question
+
+            if msg.tool_activities:
+                for tool in msg.tool_activities:
+                    logger.debug(
+                        f"Tool activity: {tool.name} (id={tool.id[:8]}..., "
+                        f"result={'has result' if tool.result else 'None'})"
+                    )
+                    if _is_codex_question_tool(tool.name) and tool.result is None:
+                        if tool.id not in state.tool_activities:
+                            question_input = _normalize_codex_question_input(tool.name, tool.input)
+                            pending_question = await QuestionManager.create_pending_question(
+                                session_id=str(session.id),
+                                channel_id=channel_id,
+                                thread_ts=thread_ts,
+                                tool_use_id=tool.id,
+                                tool_input=question_input,
+                            )
+                            logger.info(
+                                f"Detected {tool.name} tool, "
+                                f"created pending question {pending_question.question_id}"
+                            )
+                        else:
+                            logger.debug(
+                                f"Question tool {tool.id[:8]}... already tracked, skipping"
+                            )
+
+            content = msg.content if msg.type == "assistant" else ""
+            tools = msg.tool_activities
+            if content or tools:
+                await state.append_and_update(content or "", tools)
+
+        return on_chunk
+
+    on_chunk = create_on_chunk_callback(streaming_state)
+
+    async def handle_question_loop(
+        current_result,
+        current_state: StreamingMessageState,
+        current_message_ts: str,
+    ):
+        nonlocal pending_question
+        question_count = 0
+        max_questions = config.timeouts.execution.max_questions_per_conversation
+
+        while pending_question and current_result.session_id and question_count < max_questions:
+            question_count += 1
+            logger.info("Codex asked a question, posting to Slack and waiting for response")
+
+            try:
+                text_preview = (
+                    current_state.accumulated_output[:100] + "..."
+                    if len(current_state.accumulated_output) > 100
+                    else current_state.accumulated_output
+                )
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=current_message_ts,
+                    text=text_preview,
+                    blocks=SlackFormatter.streaming_update(
+                        prompt,
+                        current_state.accumulated_output + "\n\n_Waiting for your response..._",
+                        tool_activities=current_state.get_tool_list(),
+                    ),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update message: {e}")
+
+            await QuestionManager.post_question_to_slack(
+                pending_question,
+                client,
+                deps.db,
+                context_text=current_state.accumulated_output,
+            )
+            answers = await QuestionManager.wait_for_answer(pending_question.question_id)
+
+            if not answers:
+                logger.info("Question was cancelled")
+                current_result.output = (
+                    current_state.accumulated_output + "\n\n_Question was cancelled._"
+                )
+                current_result.success = False
+                pending_question = None
+                break
+
+            answer_text = QuestionManager.format_answer_for_claude(pending_question)
+            logger.info(f"User answered question, sending to Codex: {answer_text[:100]}")
+            pending_question = None
+
+            await current_state.stop_heartbeat()
+            continue_response = await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text="Continuing...",
+                blocks=SlackFormatter.processing_message("Processing your answer..."),
+            )
+            new_message_ts = continue_response["ts"]
+
+            current_state = StreamingMessageState(
+                channel_id=channel_id,
+                message_ts=new_message_ts,
+                prompt=prompt,
+                client=client,
+                logger=logger,
+                track_tools=True,
+                smart_concat=True,
+                db_session_id=session.id,
+                on_error=on_streaming_error,
+            )
+            current_state.start_heartbeat()
+            followup_on_chunk = create_on_chunk_callback(current_state)
+
+            current_result = await deps.codex_executor.execute(
+                prompt=answer_text,
+                working_directory=session.working_directory,
+                session_id=channel_id,
+                resume_session_id=current_result.session_id,
+                execution_id=str(uuid.uuid4()),
+                on_chunk=followup_on_chunk,
+                sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
+                approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
+                db_session_id=session.id,
+                model=session.model,
+                channel_id=channel_id,
+            )
+
+            current_message_ts = new_message_ts
+            if current_result.session_id:
+                await deps.db.update_session_codex_id(
+                    channel_id, thread_ts, current_result.session_id
+                )
+
+        if question_count >= max_questions and pending_question:
+            logger.warning(f"Hit maximum question limit ({max_questions}), stopping question loop")
+            current_result.output = (
+                current_state.accumulated_output
+                + f"\n\n_Reached maximum question limit ({max_questions}). "
+                "Please start a new conversation._"
+            )
+            current_result.success = False
+            await QuestionManager.cancel(pending_question.question_id)
+            pending_question = None
+
+        return current_result, current_state, current_message_ts
 
     try:
         if not deps.codex_executor:
@@ -252,7 +434,99 @@ async def _execute_codex_message(
         if result.session_id:
             await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
 
-        # Update command history
+        # Handle AskUserQuestion/request_user_input loop
+        result, streaming_state, message_ts = await handle_question_loop(
+            result, streaming_state, message_ts
+        )
+
+        # Plan mode approval for Codex mirrors Claude plan mode UX:
+        # show plan + approve/reject buttons, then auto-execute on approval.
+        if session.permission_mode == "plan" and result.success and result.output:
+            logger.info("Codex plan response ready, requesting user approval")
+            approved = await PlanApprovalManager.request_approval(
+                session_id=str(session.id),
+                channel_id=channel_id,
+                plan_content=result.output,
+                claude_session_id=result.session_id or "",
+                prompt=prompt,
+                user_id=user_id,
+                thread_ts=thread_ts,
+                slack_client=client,
+                plan_file_path=None,
+            )
+
+            if approved:
+                logger.info("Plan approved, switching session to bypass mode")
+                await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
+                session.permission_mode = config.DEFAULT_BYPASS_MODE
+
+                exec_response = await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text="Plan approved - executing...",
+                    blocks=SlackFormatter.processing_message(
+                        ":white_check_mark: *Plan approved!* Executing implementation..."
+                    ),
+                )
+                exec_message_ts = exec_response["ts"]
+                message_ts = exec_message_ts
+
+                streaming_state = StreamingMessageState(
+                    channel_id=channel_id,
+                    message_ts=exec_message_ts,
+                    prompt="[Plan Execution]",
+                    client=client,
+                    logger=logger,
+                    track_tools=True,
+                    smart_concat=True,
+                    db_session_id=session.id,
+                    on_error=on_streaming_error,
+                )
+                streaming_state.start_heartbeat()
+                on_chunk = create_on_chunk_callback(streaming_state)
+
+                result = await deps.codex_executor.execute(
+                    prompt="Plan approved. Please proceed with the implementation.",
+                    working_directory=session.working_directory,
+                    session_id=channel_id,
+                    resume_session_id=result.session_id,
+                    execution_id=str(uuid.uuid4()),
+                    on_chunk=on_chunk,
+                    sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
+                    approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
+                    db_session_id=session.id,
+                    model=session.model,
+                    channel_id=channel_id,
+                )
+
+                if result.session_id:
+                    await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
+
+                result, streaming_state, message_ts = await handle_question_loop(
+                    result, streaming_state, message_ts
+                )
+            else:
+                logger.info("Plan rejected or timed out, staying in plan mode")
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text="Plan not approved - staying in plan mode",
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": (
+                                    ":x: *Plan not approved.* Staying in plan mode.\n\n"
+                                    "_Provide feedback to revise the plan, or use `/mode bypass` "
+                                    "to switch modes manually._"
+                                ),
+                            },
+                        }
+                    ],
+                )
+
+        # Update command history after any question loops / plan execution.
         if result.success:
             await deps.db.update_command_status(cmd_history.id, "completed", result.output)
         else:
@@ -331,6 +605,8 @@ async def _execute_codex_message(
 
     except asyncio.CancelledError:
         logger.info("Codex command execution was cancelled")
+        if pending_question:
+            await QuestionManager.cancel(pending_question.question_id)
         await streaming_state.stop_heartbeat()
         await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
         await client.chat_update(
@@ -341,6 +617,8 @@ async def _execute_codex_message(
         )
     except SlackApiError as e:
         logger.error(f"Slack API error executing Codex command: {e}\n{traceback.format_exc()}")
+        if pending_question:
+            await QuestionManager.cancel(pending_question.question_id)
         await streaming_state.stop_heartbeat()
         await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         try:
@@ -353,7 +631,11 @@ async def _execute_codex_message(
         except Exception as notify_error:
             logger.error(f"Failed to post Slack API error notification: {notify_error}")
     except Exception as e:
-        logger.error(f"Error executing Codex command: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        logger.error(
+            f"Error executing Codex command: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+        if pending_question:
+            await QuestionManager.cancel(pending_question.question_id)
         await streaming_state.stop_heartbeat()
         await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         await client.chat_update(
@@ -395,7 +677,9 @@ async def main():
 
     # Register handlers (both Claude and Codex)
     deps = register_commands(
-        app, db, claude_executor,
+        app,
+        db,
+        claude_executor,
         codex_executor=codex_executor,
     )
     register_actions(app, deps)
@@ -584,6 +868,7 @@ async def main():
                 thread_ts=thread_ts,
                 prompt=prompt,
                 logger=logger,
+                user_id=user_id,
             )
             return
 
@@ -815,8 +1100,7 @@ async def main():
                     # Question was cancelled - update message and break
                     logger.info("Question was cancelled")
                     result.output = (
-                        streaming_state.accumulated_output
-                        + "\n\n_Question was cancelled._"
+                        streaming_state.accumulated_output + "\n\n_Question was cancelled._"
                     )
                     result.success = False
                     break
@@ -1180,7 +1464,9 @@ async def main():
             await streaming_state.stop_heartbeat()
             if pending_question:
                 await QuestionManager.cancel(pending_question.question_id)
-            await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
+            await deps.db.update_command_status(
+                cmd_history.id, "cancelled", error_message="Cancelled"
+            )
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
@@ -1217,7 +1503,9 @@ async def main():
             )
         except Exception as e:
             # Catch remaining unexpected errors to prevent crash, but log details
-            logger.error(f"Unexpected error executing command: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+            logger.error(
+                f"Unexpected error executing command: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+            )
             await streaming_state.stop_heartbeat()
             if pending_question:
                 await QuestionManager.cancel(pending_question.question_id)
@@ -1260,7 +1548,9 @@ async def main():
 
 def run():
     # Check for subcommands (e.g., aislack config ...)
-    if len(sys.argv) > 1 and sys.argv[0].endswith(("aislack", "aislack.exe", "ccslack", "ccslack.exe")):
+    if len(sys.argv) > 1 and sys.argv[0].endswith(
+        ("aislack", "aislack.exe", "ccslack", "ccslack.exe")
+    ):
         subcommand = sys.argv[1].lower()
         if subcommand == "config":
             # Forward to config CLI with remaining args
