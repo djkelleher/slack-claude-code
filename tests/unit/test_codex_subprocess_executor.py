@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.config import config
-from src.codex.subprocess_executor import SubprocessExecutor
+from src.codex.subprocess_executor import ExecutionResult, SubprocessExecutor
 
 
 class _DummyStdout:
@@ -162,3 +162,65 @@ class TestCodexSubprocessExecutor:
         args = mock_exec.await_args.args
         assert args[-1] == "ALWAYS BE CONCISE\n\ndo a repo review"
         assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_plan_mode_uses_native_app_server_when_enabled(self, monkeypatch):
+        """Plan mode routes to native app-server flow when feature flag is enabled."""
+        monkeypatch.setattr(config, "CODEX_NATIVE_PLAN_MODE_ENABLED", True)
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        executor = SubprocessExecutor()
+        native_result = ExecutionResult(success=True, output="native-ok")
+
+        with (
+            patch.object(
+                executor,
+                "_execute_via_app_server",
+                new=AsyncMock(return_value=native_result),
+            ) as mock_native,
+            patch.object(
+                executor,
+                "_execute_legacy",
+                new=AsyncMock(),
+            ) as mock_legacy,
+        ):
+            result = await executor.execute(
+                prompt="plan this change",
+                working_directory="/tmp/workspace",
+                permission_mode="plan",
+            )
+
+        assert result is native_result
+        mock_native.assert_awaited_once()
+        mock_legacy.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_plan_mode_falls_back_to_legacy_when_native_fails(self, monkeypatch):
+        """Native app-server failure falls back to legacy codex exec flow."""
+        monkeypatch.setattr(config, "CODEX_NATIVE_PLAN_MODE_ENABLED", True)
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        executor = SubprocessExecutor()
+        legacy_result = ExecutionResult(success=True, output="legacy-ok")
+
+        with (
+            patch.object(
+                executor,
+                "_execute_via_app_server",
+                new=AsyncMock(side_effect=RuntimeError("app-server failed")),
+            ) as mock_native,
+            patch.object(
+                executor,
+                "_execute_legacy",
+                new=AsyncMock(return_value=legacy_result),
+            ) as mock_legacy,
+        ):
+            result = await executor.execute(
+                prompt="plan this change",
+                working_directory="/tmp/workspace",
+                permission_mode="plan",
+            )
+
+        assert result is legacy_result
+        mock_native.assert_awaited_once()
+        mock_legacy.assert_awaited_once()

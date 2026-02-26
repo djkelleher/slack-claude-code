@@ -302,6 +302,54 @@ async def _execute_codex_message(
 
     on_chunk = create_on_chunk_callback(streaming_state)
 
+    async def on_user_input_request(tool_use_id: str, tool_input: dict) -> dict | None:
+        """Handle native Codex app-server request_user_input prompts."""
+        nonlocal pending_question, streaming_state, message_ts
+
+        if not pending_question or pending_question.tool_use_id != tool_use_id:
+            pending_question = await QuestionManager.create_pending_question(
+                session_id=str(session.id),
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                tool_use_id=tool_use_id,
+                tool_input=_normalize_codex_question_input("request_user_input", tool_input),
+            )
+
+        try:
+            text_preview = (
+                streaming_state.accumulated_output[:100] + "..."
+                if len(streaming_state.accumulated_output) > 100
+                else streaming_state.accumulated_output
+            )
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=text_preview,
+                blocks=SlackFormatter.streaming_update(
+                    prompt,
+                    streaming_state.accumulated_output + "\n\n_Waiting for your response..._",
+                    tool_activities=streaming_state.get_tool_list(),
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to update message while waiting for input: {e}")
+
+        await QuestionManager.post_question_to_slack(
+            pending_question,
+            client,
+            deps.db,
+            context_text=streaming_state.accumulated_output,
+        )
+        answers = await QuestionManager.wait_for_answer(pending_question.question_id)
+        if not answers:
+            logger.info("Question was cancelled")
+            pending_question = None
+            return None
+
+        response_payload = QuestionManager.format_answer_for_codex_request(pending_question)
+        pending_question = None
+        return response_payload
+
     async def handle_question_loop(
         current_result,
         current_state: StreamingMessageState,
@@ -385,8 +433,10 @@ async def _execute_codex_message(
                 resume_session_id=current_result.session_id,
                 execution_id=str(uuid.uuid4()),
                 on_chunk=followup_on_chunk,
+                on_user_input_request=on_user_input_request,
                 sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
                 approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
+                permission_mode=session.permission_mode,
                 db_session_id=session.id,
                 model=session.model,
                 channel_id=channel_id,
@@ -423,8 +473,10 @@ async def _execute_codex_message(
             resume_session_id=session.codex_session_id,
             execution_id=execution_id,
             on_chunk=on_chunk,
+            on_user_input_request=on_user_input_request,
             sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
             approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
+            permission_mode=session.permission_mode,
             db_session_id=session.id,
             model=session.model,
             channel_id=channel_id,
@@ -492,8 +544,10 @@ async def _execute_codex_message(
                     resume_session_id=result.session_id,
                     execution_id=str(uuid.uuid4()),
                     on_chunk=on_chunk,
+                    on_user_input_request=on_user_input_request,
                     sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
                     approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
+                    permission_mode=session.permission_mode,
                     db_session_id=session.id,
                     model=session.model,
                     channel_id=channel_id,

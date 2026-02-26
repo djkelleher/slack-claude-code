@@ -284,9 +284,8 @@ class Config(BaseSettings):
     CODEX_APPROVAL_MODE: str = "on-request"
     CODEX_USE_DANGEROUS_BYPASS: bool = True
     CODEX_PREPEND_DEFAULT_INSTRUCTIONS: bool = True
-    CODEX_DEFAULT_INSTRUCTIONS_FILE: str = str(
-        Path.home() / ".codex" / "default_instructions.txt"
-    )
+    CODEX_DEFAULT_INSTRUCTIONS_FILE: str = str(Path.home() / ".codex" / "default_instructions.txt")
+    CODEX_NATIVE_PLAN_MODE_ENABLED: bool = False
 
     # Valid sandbox modes for Codex CLI
     VALID_SANDBOX_MODES: tuple[str, ...] = (

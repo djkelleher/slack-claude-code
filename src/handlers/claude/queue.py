@@ -238,6 +238,8 @@ async def _process_queue(
                 channel_id=channel_id,
                 thread_ts=None,
                 execution_id=f"queue_{item.id}",
+                slack_client=client,
+                logger=log,
             )
             result = route.result
 

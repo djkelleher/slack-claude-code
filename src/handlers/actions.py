@@ -48,7 +48,9 @@ async def _get_git_commit_hash(working_directory: str) -> str | None:
     """
     try:
         process = await asyncio.create_subprocess_exec(
-            "git", "rev-parse", "HEAD",
+            "git",
+            "rev-parse",
+            "HEAD",
             cwd=working_directory,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -89,7 +91,7 @@ async def _get_github_file_url(tool: ToolActivity, working_directory: str) -> st
 
     # Get relative path from working directory
     if file_path.startswith(working_directory):
-        relative_path = file_path[len(working_directory):].lstrip("/")
+        relative_path = file_path[len(working_directory) :].lstrip("/")
     else:
         relative_path = file_path.lstrip("/")
 
@@ -258,6 +260,9 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 thread_ts=thread_ts,
                 execution_id=execution_id,
                 on_chunk=on_chunk,
+                slack_client=client,
+                user_id=body.get("user", {}).get("id"),
+                logger=logger,
             )
             result = route.result
 
@@ -1115,7 +1120,9 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         # Get the custom model value
-        model_name_raw = view["state"]["values"]["custom_model_block"]["custom_model_input"]["value"]
+        model_name_raw = view["state"]["values"]["custom_model_block"]["custom_model_input"][
+            "value"
+        ]
         model_name = model_name_raw.strip().lower()
 
         if not model_name:

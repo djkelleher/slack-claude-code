@@ -32,6 +32,7 @@ class QuestionOption:
 class Question:
     """A single question from AskUserQuestion."""
 
+    id: str
     question: str
     header: str
     options: list[QuestionOption]
@@ -113,6 +114,7 @@ class QuestionManager:
 
             questions.append(
                 Question(
+                    id=q.get("id", ""),
                     question=q.get("question", ""),
                     header=q.get("header", ""),
                     options=options,
@@ -411,6 +413,15 @@ class QuestionManager:
                 response_parts.append(", ".join(selected))
 
         return "\n".join(response_parts)
+
+    @classmethod
+    def format_answer_for_codex_request(cls, pending: PendingQuestion) -> dict:
+        """Format answers for Codex app-server `item/tool/requestUserInput` response."""
+        answers: dict[str, dict[str, list[str]]] = {}
+        for i, question in enumerate(pending.questions):
+            question_id = question.id or f"q_{i + 1}"
+            answers[question_id] = {"answers": pending.answers.get(i, [])}
+        return {"answers": answers}
 
     @classmethod
     async def count_pending(cls) -> int:
