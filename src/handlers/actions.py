@@ -16,6 +16,7 @@ from src.config import (
     EFFORT_LEVELS,
     config,
     is_supported_codex_model,
+    looks_like_codex_model,
     parse_model_effort,
 )
 from src.utils.formatters.base import markdown_to_mrkdwn
@@ -27,13 +28,6 @@ from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from .base import HandlerDependencies
 from .command_router import execute_for_session
-
-
-def _looks_like_codex_model(model_name: str) -> bool:
-    """Best-effort classifier for codex-like model IDs."""
-    normalized = (model_name or "").strip().lower()
-    return normalized.startswith("gpt-") or normalized.startswith("codex")
-
 
 async def _get_git_commit_hash(working_directory: str) -> str | None:
     """Get the current git commit hash asynchronously.
@@ -1141,7 +1135,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         if (
             model_value
-            and _looks_like_codex_model(model_value)
+            and looks_like_codex_model(model_value)
             and not is_supported_codex_model(model_value)
         ):
             supported = "\n".join(f"• `{model}`" for model in sorted(CODEX_MODELS))

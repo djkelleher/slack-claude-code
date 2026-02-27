@@ -1,6 +1,8 @@
 """Agent executor for running agents with proper restrictions."""
 
 import asyncio
+from collections import OrderedDict
+from dataclasses import replace
 from datetime import datetime
 from typing import Awaitable, Callable, Optional
 from uuid import uuid4
@@ -24,7 +26,11 @@ class AgentExecutor:
     Each agent runs in its own subprocess session with isolated context.
     """
 
-    def __init__(self, subprocess_executor: SubprocessExecutor) -> None:
+    def __init__(
+        self,
+        subprocess_executor: SubprocessExecutor,
+        completed_history_limit: int = 200,
+    ) -> None:
         """Initialize executor.
 
         Parameters
@@ -35,6 +41,15 @@ class AgentExecutor:
         self.subprocess_executor = subprocess_executor
         self._active_executions: dict[str, AgentExecution] = {}
         self._background_tasks: dict[str, asyncio.Task] = {}
+        self._completed_executions: OrderedDict[str, AgentExecution] = OrderedDict()
+        self._completed_history_limit = completed_history_limit
+
+    def _cache_completed_execution(self, execution: AgentExecution) -> None:
+        """Store completed execution metadata for follow-up resume requests."""
+        self._completed_executions[execution.execution_id] = replace(execution)
+        self._completed_executions.move_to_end(execution.execution_id)
+        while len(self._completed_executions) > self._completed_history_limit:
+            self._completed_executions.popitem(last=False)
 
     async def run(
         self,
@@ -231,7 +246,9 @@ class AgentExecutor:
             )
 
         finally:
-            self._active_executions.pop(execution.execution_id, None)
+            completed = self._active_executions.pop(execution.execution_id, None)
+            if completed is not None:
+                self._cache_completed_execution(completed)
             self._background_tasks.pop(execution.execution_id, None)
 
     def _build_prompt(self, agent: AgentConfig, task: str) -> str:
@@ -367,6 +384,10 @@ class AgentExecutor:
             Result of resumed execution.
         """
         execution = self._active_executions.get(execution_id)
+        if execution is None:
+            execution = self._completed_executions.get(execution_id)
+            if execution is not None:
+                self._completed_executions.move_to_end(execution_id)
         if not execution or not execution.session_id:
             return AgentRunResult(
                 execution_id=execution_id,

@@ -1,12 +1,13 @@
 """Unit tests for Codex app-server subprocess executor."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.config import config
-from src.codex.subprocess_executor import SubprocessExecutor
+from src.codex.subprocess_executor import SubprocessExecutor, _terminate_process_safely
 
 
 class _DummyStdout:
@@ -60,6 +61,28 @@ class _DummyProcess:
 
     def kill(self) -> None:
         self.returncode = -9
+
+
+class _HangingProcess:
+    """Subprocess mock that ignores terminate until kill is called."""
+
+    def __init__(self) -> None:
+        self.returncode = None
+        self.terminated = False
+        self.killed = False
+
+    async def wait(self) -> int:
+        if self.killed:
+            self.returncode = -9
+            return -9
+        await asyncio.sleep(1)
+        return 0
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
 
 
 def _json_line(payload: dict) -> str:
@@ -448,3 +471,29 @@ class TestCodexSubprocessExecutor:
             turn_start["params"]["input"][0]["text"]
             == "ALWAYS BE CONCISE\n\ndo a repo review"
         )
+
+    @pytest.mark.asyncio
+    async def test_cancel_resolves_channel_prefixed_track_id(self):
+        """cancel() should find executions by execution_id even with channel-prefixed track ids."""
+        process = _DummyProcess([])
+        executor = SubprocessExecutor()
+        executor._active_processes["C123_exec-1"] = process
+        executor._process_channels["C123_exec-1"] = "C123"
+        executor._execution_track_ids["exec-1"] = "C123_exec-1"
+
+        cancelled = await executor.cancel("exec-1")
+
+        assert cancelled is True
+        assert process.returncode == 0
+        assert "C123_exec-1" not in executor._active_processes
+        assert "exec-1" not in executor._execution_track_ids
+
+    @pytest.mark.asyncio
+    async def test_terminate_process_safely_kills_unresponsive_process(self):
+        """_terminate_process_safely should kill processes that ignore terminate."""
+        process = _HangingProcess()
+
+        await _terminate_process_safely(process, timeout=0.01)
+
+        assert process.terminated is True
+        assert process.killed is True

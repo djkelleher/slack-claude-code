@@ -246,7 +246,7 @@ class DatabaseRepository:
                 current_dirs.append(directory)
 
             # Update database
-            await db.execute(
+            cursor = await db.execute(
                 f"""UPDATE sessions SET added_dirs = ?, last_active = ?
                    WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
@@ -255,6 +255,10 @@ class DatabaseRepository:
                     *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
+            if cursor.rowcount == 0:
+                raise RuntimeError(
+                    f"Session not found for channel {channel_id} thread {thread_ts}"
+                )
             return current_dirs
 
     async def remove_session_dir(
@@ -279,7 +283,7 @@ class DatabaseRepository:
                 current_dirs.remove(directory)
 
             # Update database
-            await db.execute(
+            cursor = await db.execute(
                 f"""UPDATE sessions SET added_dirs = ?, last_active = ?
                    WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
@@ -288,6 +292,10 @@ class DatabaseRepository:
                     *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
+            if cursor.rowcount == 0:
+                raise RuntimeError(
+                    f"Session not found for channel {channel_id} thread {thread_ts}"
+                )
             return current_dirs
 
     async def clear_session_dirs(self, channel_id: str, thread_ts: Optional[str]) -> None:

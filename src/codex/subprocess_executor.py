@@ -35,6 +35,25 @@ class ExecutionResult:
     was_cancelled: bool = False
 
 
+async def _terminate_process_safely(
+    process: asyncio.subprocess.Process,
+    timeout: float = 5.0,
+) -> None:
+    """Terminate a process safely, falling back to kill if needed."""
+    if process.returncode is not None:
+        return
+
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        process.kill()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning("Codex process did not respond to kill signal")
+
+
 class SubprocessExecutor:
     """Execute Codex via `codex app-server` JSON-RPC over stdio."""
 
@@ -44,6 +63,7 @@ class SubprocessExecutor:
     ) -> None:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._process_channels: dict[str, str] = {}  # track_id -> channel_id
+        self._execution_track_ids: dict[str, str] = {}  # execution_id -> track_id
         self._lock: asyncio.Lock = asyncio.Lock()
         self.db = db
 
@@ -167,6 +187,8 @@ class SubprocessExecutor:
             self._active_processes[track_id] = process
             if channel_id:
                 self._process_channels[track_id] = channel_id
+            if execution_id:
+                self._execution_track_ids[execution_id] = track_id
 
         parser = StreamParser()
         accumulated_output = ""
@@ -551,13 +573,7 @@ class SubprocessExecutor:
                     f"{log_prefix}Session {resume_session_id} not found, "
                     "retrying with a new thread"
                 )
-                if process.returncode is None:
-                    process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=2)
-                    except asyncio.TimeoutError:
-                        process.kill()
-                        await process.wait()
+                await _terminate_process_safely(process, timeout=2.0)
                 return await self.execute(
                     prompt=prompt,
                     working_directory=working_directory,
@@ -600,13 +616,7 @@ class SubprocessExecutor:
                     continue
                 is_final = await process_rpc_message(rpc)
 
-            if process.returncode is None:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=2)
-                except asyncio.TimeoutError:
-                    process.kill()
-                    await process.wait()
+            await _terminate_process_safely(process, timeout=2.0)
 
             stderr = await process.stderr.read() if process.stderr else b""
             if stderr:
@@ -626,8 +636,7 @@ class SubprocessExecutor:
             )
 
         except asyncio.CancelledError:
-            process.terminate()
-            await process.wait()
+            await _terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
@@ -638,9 +647,7 @@ class SubprocessExecutor:
             )
         except Exception as e:
             logger.error(f"{log_prefix}Error during app-server execution: {e}")
-            if process.returncode is None:
-                process.terminate()
-                await process.wait()
+            await _terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
@@ -652,6 +659,8 @@ class SubprocessExecutor:
             async with self._lock:
                 self._active_processes.pop(track_id, None)
                 self._process_channels.pop(track_id, None)
+                if execution_id and self._execution_track_ids.get(execution_id) == track_id:
+                    self._execution_track_ids.pop(execution_id, None)
 
     @staticmethod
     def _resolve_sandbox_mode(mode: Optional[str], log_prefix: str) -> str:
@@ -757,11 +766,26 @@ class SubprocessExecutor:
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""
         async with self._lock:
-            process = self._active_processes.get(execution_id)
-        if process:
-            process.terminate()
-            return True
-        return False
+            process_key = None
+            if execution_id in self._active_processes:
+                process_key = execution_id
+            else:
+                track_id = self._execution_track_ids.get(execution_id)
+                if track_id and track_id in self._active_processes:
+                    process_key = track_id
+
+            if process_key is None:
+                return False
+
+            process = self._active_processes.pop(process_key)
+            self._process_channels.pop(process_key, None)
+
+            mapped_track_id = self._execution_track_ids.get(execution_id)
+            if mapped_track_id == process_key:
+                self._execution_track_ids.pop(execution_id, None)
+
+        await _terminate_process_safely(process)
+        return True
 
     async def cancel_by_channel(self, channel_id: str) -> int:
         """Cancel all active executions for a specific channel.
@@ -783,9 +807,15 @@ class SubprocessExecutor:
                 if track_id in self._active_processes:
                     processes.append(self._active_processes.pop(track_id))
                     self._process_channels.pop(track_id, None)
+            for execution_id, track_id in list(self._execution_track_ids.items()):
+                if track_id in track_ids_to_cancel:
+                    self._execution_track_ids.pop(execution_id, None)
 
-        for process in processes:
-            process.terminate()
+        if processes:
+            await asyncio.gather(
+                *(_terminate_process_safely(process) for process in processes),
+                return_exceptions=True,
+            )
         return len(processes)
 
     async def cancel_all(self) -> int:
@@ -794,8 +824,12 @@ class SubprocessExecutor:
             processes = list(self._active_processes.values())
             self._active_processes.clear()
             self._process_channels.clear()
-        for process in processes:
-            process.terminate()
+            self._execution_track_ids.clear()
+        if processes:
+            await asyncio.gather(
+                *(_terminate_process_safely(process) for process in processes),
+                return_exceptions=True,
+            )
         return len(processes)
 
     async def shutdown(self) -> None:

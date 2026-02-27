@@ -144,6 +144,18 @@ class TestSessionOperations:
         assert session.model == "opus"
 
     @pytest.mark.asyncio
+    async def test_add_session_dir_requires_existing_session(self, db_repo):
+        """add_session_dir raises when target session doesn't exist."""
+        with pytest.raises(RuntimeError, match="Session not found"):
+            await db_repo.add_session_dir("CMISSING", None, "/tmp")
+
+    @pytest.mark.asyncio
+    async def test_remove_session_dir_requires_existing_session(self, db_repo):
+        """remove_session_dir raises when target session doesn't exist."""
+        with pytest.raises(RuntimeError, match="Session not found"):
+            await db_repo.remove_session_dir("CMISSING", None, "/tmp")
+
+    @pytest.mark.asyncio
     async def test_update_session_codex_id(self, db_repo):
         """update_session_codex_id persists and is readable via get_or_create_session."""
         await db_repo.get_or_create_session("C123ABC", None)

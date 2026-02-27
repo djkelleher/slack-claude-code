@@ -77,6 +77,12 @@ def is_supported_codex_model(model: str) -> bool:
     return effort in EFFORT_LEVELS
 
 
+def looks_like_codex_model(model_name: str) -> bool:
+    """Best-effort classifier for codex-like model IDs."""
+    normalized = (model_name or "").strip().lower()
+    return normalized.startswith("gpt-") or normalized.startswith("codex")
+
+
 def get_backend_for_model(model: Optional[str]) -> str:
     """
     Determine which backend to use based on the model name.

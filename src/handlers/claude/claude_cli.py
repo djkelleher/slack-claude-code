@@ -18,19 +18,13 @@ from src.config import (
     config,
     get_backend_for_model,
     is_supported_codex_model,
+    looks_like_codex_model,
     parse_model_effort,
 )
 from src.utils.formatters.command import command_response_with_tables, error_message
 from src.utils.formatters.streaming import processing_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
-
-
-def _looks_like_codex_model(model_name: str) -> bool:
-    """Best-effort classifier for codex-like model IDs."""
-    normalized = (model_name or "").strip().lower()
-    return normalized.startswith("gpt-") or normalized.startswith("codex")
-
 
 def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register Claude CLI passthrough command handlers.
@@ -248,6 +242,10 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 blocks=error_message(f"Not a directory: `{resolved_dir}`"),
             )
             return
+
+        await deps.db.get_or_create_session(
+            ctx.channel_id, thread_ts=ctx.thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
+        )
 
         # Add resolved directory to session's added_dirs list
         added_dirs = await deps.db.add_session_dir(ctx.channel_id, ctx.thread_ts, str(resolved_dir))
@@ -472,14 +470,14 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 resolved_base = codex_base_model_map.get(base_name, base_name)
             if resolved_base is None:
                 normalized = None
-            elif effort and _looks_like_codex_model(resolved_base):
+            elif effort and looks_like_codex_model(resolved_base):
                 normalized = f"{resolved_base}-{effort}"
             else:
                 normalized = resolved_base
 
             if (
                 normalized
-                and _looks_like_codex_model(normalized)
+                and looks_like_codex_model(normalized)
                 and not is_supported_codex_model(normalized)
             ):
                 supported = "\n".join(f"• `{model}`" for model in sorted(CODEX_MODELS))

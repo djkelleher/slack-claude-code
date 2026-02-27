@@ -74,7 +74,9 @@ async def slack_api_with_retry(
     for attempt in range(max_retries):
         try:
             return await api_call()
-        except (SlackApiError, TimeoutError, asyncio.CancelledError, OSError) as e:
+        except asyncio.CancelledError:
+            raise
+        except (SlackApiError, TimeoutError, OSError) as e:
             last_error = e
             if attempt < max_retries - 1:
                 delay = base_delay * (2**attempt) + random.uniform(0, 1)
