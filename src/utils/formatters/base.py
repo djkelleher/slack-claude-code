@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from src.config import config
 
-# Re-export for backward compatibility (used by other formatters)
+# Shared formatter constants
 MAX_TEXT_LENGTH = config.SLACK_BLOCK_TEXT_LIMIT
 FILE_THRESHOLD = config.SLACK_FILE_THRESHOLD
 
@@ -386,9 +386,7 @@ def split_text_into_blocks(
 
         if chunk:
             if block_type == "context":
-                blocks.append(
-                    {"type": "context", "elements": [{"type": "mrkdwn", "text": chunk}]}
-                )
+                blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": chunk}]})
             else:
                 blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
 

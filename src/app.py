@@ -144,28 +144,14 @@ async def post_channel_notification(
             else:
                 message = "⚠️ Claude needs permission"
 
-        # Post to channel with exponential backoff retry for transient failures
-        base_delay = 1.0
-        for attempt in range(max_retries):
-            try:
-                await client.chat_postMessage(
-                    channel=channel_id,
-                    text=message,
-                )
-                logger.debug(f"Posted {notification_type} notification to channel {channel_id}")
-                return  # Success, exit
-
-            except (SlackApiError, TimeoutError, OSError) as e:
-                if attempt < max_retries - 1:
-                    # Exponential backoff with jitter: 1s, 2s, 4s + random 0-1s
-                    delay = base_delay * (2**attempt) + random.uniform(0, 1)
-                    logger.warning(
-                        f"Slack API error (attempt {attempt + 1}/{max_retries}): "
-                        f"{type(e).__name__}: {e}, retrying in {delay:.1f}s"
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    raise
+        await slack_api_with_retry(
+            lambda: client.chat_postMessage(
+                channel=channel_id,
+                text=message,
+            ),
+            max_retries=max_retries,
+        )
+        logger.debug(f"Posted {notification_type} notification to channel {channel_id}")
 
     except Exception as e:
         # Don't fail the main operation if all notification attempts fail
@@ -276,8 +262,6 @@ async def _execute_codex_message(
             )
             # Post response content
             try:
-                from src.utils.slack_helpers import post_text_snippet
-
                 await post_text_snippet(
                     client=client,
                     channel_id=channel_id,
@@ -1240,7 +1224,7 @@ async def main():
     handler = AsyncSocketModeHandler(app, config.SLACK_APP_TOKEN)
 
     # Setup shutdown handler
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
 
     def signal_handler():

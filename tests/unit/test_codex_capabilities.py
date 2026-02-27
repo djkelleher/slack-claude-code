@@ -47,8 +47,8 @@ class TestCodexModeMappings:
         assert "`delegate`" not in resolved.error
 
     def test_approval_mode_normalization(self):
-        """Deprecated approvals are normalized to supported values."""
-        assert normalize_codex_approval_mode("on-failure") == "on-request"
+        """Unknown approvals are normalized to supported values."""
+        assert normalize_codex_approval_mode("invalid-mode") == "on-request"
         assert normalize_codex_approval_mode("never") == "never"
 
     def test_mode_alias_derivation(self):

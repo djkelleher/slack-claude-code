@@ -22,9 +22,6 @@ SUPPORTED_COMPAT_MODE_ALIASES: tuple[str, ...] = (
     "plan",
 )
 
-# Codex approval mode values we still normalize for backwards compatibility.
-DEPRECATED_APPROVAL_MODES: tuple[str, ...] = ("on-failure",)
-
 # Claude slash commands that are not routed through Codex.
 CLAUDE_ONLY_SLASH_COMMANDS: tuple[str, ...] = (
     "/compact",
@@ -77,14 +74,14 @@ class CodexModeResolution:
 
 
 def normalize_codex_approval_mode(approval_mode: Optional[str]) -> str:
-    """Normalize approval mode, mapping deprecated values to supported ones."""
+    """Normalize approval mode to a supported Codex value."""
     if not approval_mode:
         return "on-request"
 
     mode = approval_mode.strip().lower()
-    if mode in DEPRECATED_APPROVAL_MODES:
-        return "on-request"
-    return mode
+    if mode in {"untrusted", "on-request", "never"}:
+        return mode
+    return "on-request"
 
 
 def codex_mode_alias_for_approval(approval_mode: Optional[str]) -> str:

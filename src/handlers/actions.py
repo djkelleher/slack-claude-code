@@ -1204,21 +1204,12 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         thread_ts = value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
 
         # Normalize Claude picker aliases to model IDs.
-        # Keep legacy aliases for old messages already posted to Slack.
         claude_model_aliases: dict[str, str | None] = {
             "default": None,
-            "recommended": None,
-            "opus": None,
-            "claude-opus-4-6": None,
-            "claude-opus-4-5-20250929": None,
             "opus-1m": "claude-opus-4-6[1m]",
-            "claude-opus-4-6[1m]": "claude-opus-4-6[1m]",
             "sonnet": "sonnet",
-            "claude-sonnet-4-6": "sonnet",
             "sonnet-1m": "claude-sonnet-4-6[1m]",
-            "claude-sonnet-4-6[1m]": "claude-sonnet-4-6[1m]",
             "haiku": "haiku",
-            "claude-haiku-4-5": "haiku",
         }
         model_value = claude_model_aliases.get(model_name, model_name)
 
