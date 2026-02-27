@@ -7,7 +7,7 @@ from slack_bolt.async_app import AsyncApp
 from src.config import config
 from src.database.models import Session
 from src.git.service import GitError, GitService
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import error_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
@@ -37,9 +37,7 @@ def register_worktree_commands(app: AsyncApp, deps: HandlerDependencies) -> None
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     text="Not a git repository",
-                    blocks=SlackFormatter.error_message(
-                        f"Not a git repository: {session.working_directory}"
-                    ),
+                    blocks=error_message(f"Not a git repository: {session.working_directory}"),
                 )
                 return
 
@@ -66,7 +64,7 @@ def register_worktree_commands(app: AsyncApp, deps: HandlerDependencies) -> None
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Git error: {e}",
-                blocks=SlackFormatter.error_message(f"Git error: {e}"),
+                blocks=error_message(f"Git error: {e}"),
             )
 
     # Register both /worktree and /wt alias
@@ -83,9 +81,7 @@ async def _handle_add(
     branch_name: str,
 ) -> None:
     """Create a new worktree and switch session to it."""
-    worktree_path = await git_service.add_worktree(
-        session.working_directory, branch_name
-    )
+    worktree_path = await git_service.add_worktree(session.working_directory, branch_name)
 
     # Update session: new cwd, clear session IDs for fresh context
     await deps.db.update_session_cwd(ctx.channel_id, ctx.thread_ts, worktree_path)
@@ -186,9 +182,8 @@ async def _handle_switch(
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             text=f"Worktree not found: {target}",
-            blocks=SlackFormatter.error_message(
-                f"No worktree found for branch `{target}`.\n"
-                f"Available: {available}"
+            blocks=error_message(
+                f"No worktree found for branch `{target}`.\n" f"Available: {available}"
             ),
         )
         return
@@ -243,7 +238,7 @@ async def _handle_merge(
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             text=f"Branch not found: {branch_name}",
-            blocks=SlackFormatter.error_message(
+            blocks=error_message(
                 f"No worktree found for branch `{branch_name}`.\n"
                 f"Available branches: {available}"
             ),
@@ -266,8 +261,7 @@ async def _handle_merge(
             cleanup_note = "\nWorktree removed after successful merge."
         except GitError:
             cleanup_note = (
-                "\nNote: Worktree was not removed. "
-                "Use `/worktree list` to see active worktrees."
+                "\nNote: Worktree was not removed. " "Use `/worktree list` to see active worktrees."
             )
 
         await ctx.client.chat_postMessage(
@@ -316,7 +310,7 @@ async def _send_usage(ctx: CommandContext) -> None:
     await ctx.client.chat_postMessage(
         channel=ctx.channel_id,
         text="Worktree usage",
-        blocks=SlackFormatter.error_message(
+        blocks=error_message(
             "Usage:\n"
             "  `/worktree add <branch-name>` - Create new worktree\n"
             "  `/worktree list` - List all worktrees\n"

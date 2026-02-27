@@ -5,7 +5,8 @@ from pathlib import Path
 from slack_bolt.async_app import AsyncApp
 
 from src.config import config
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import error_message
+from src.utils.formatters.directory import cwd_updated, directory_listing
 
 from .base import CommandContext, HandlerDependencies, slack_command
 
@@ -42,7 +43,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Error: Path does not exist: {target_path}",
-                blocks=SlackFormatter.error_message(f"Path does not exist: {target_path}"),
+                blocks=error_message(f"Path does not exist: {target_path}"),
             )
             return
 
@@ -50,7 +51,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Error: Not a directory: {target_path}",
-                blocks=SlackFormatter.error_message(f"Not a directory: {target_path}"),
+                blocks=error_message(f"Not a directory: {target_path}"),
             )
             return
 
@@ -68,16 +69,14 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Contents of {target_path}",
-                blocks=SlackFormatter.directory_listing(
-                    str(target_path), entry_tuples, is_cwd=is_cwd
-                ),
+                blocks=directory_listing(str(target_path), entry_tuples, is_cwd=is_cwd),
             )
         except OSError as e:
             # OSError is parent of PermissionError, FileNotFoundError, etc.
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Error: {e}",
-                blocks=SlackFormatter.error_message(f"Cannot access directory: {e}"),
+                blocks=error_message(f"Cannot access directory: {e}"),
             )
 
     @app.command("/cd")
@@ -105,7 +104,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Error: Path does not exist: {target_path}",
-                blocks=SlackFormatter.error_message(f"Path does not exist: {target_path}"),
+                blocks=error_message(f"Path does not exist: {target_path}"),
             )
             return
 
@@ -113,7 +112,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Error: Not a directory: {target_path}",
-                blocks=SlackFormatter.error_message(f"Not a directory: {target_path}"),
+                blocks=error_message(f"Not a directory: {target_path}"),
             )
             return
 
@@ -122,7 +121,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             text=f"Working directory updated to: {target_path}",
-            blocks=SlackFormatter.cwd_updated(str(target_path)),
+            blocks=cwd_updated(str(target_path)),
         )
 
     @app.command("/pwd")

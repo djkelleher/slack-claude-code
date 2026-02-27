@@ -19,8 +19,10 @@ from src.config import (
     parse_model_effort,
 )
 from src.utils.formatters.base import markdown_to_mrkdwn
+from src.utils.formatters.command import command_response_with_tables, error_message
+from src.utils.formatters.job import parallel_job_status, sequential_job_status
+from src.utils.formatters.streaming import processing_message
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
-from src.utils.formatting import SlackFormatter
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from .base import HandlerDependencies
@@ -234,7 +236,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         response = await client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
-            blocks=SlackFormatter.processing_message(cmd.command),
+            blocks=processing_message(cmd.command),
         )
         message_ts = response["ts"]
 
@@ -278,7 +280,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
             # Format response with table support (may produce multiple messages)
             output = result.output or result.error or "No output"
-            message_blocks_list = SlackFormatter.command_response_with_tables(
+            message_blocks_list = command_response_with_tables(
                 prompt=cmd.command,
                 output=output,
                 command_id=new_cmd.id,
@@ -310,7 +312,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
-                blocks=SlackFormatter.error_message("Command was cancelled"),
+                blocks=error_message("Command was cancelled"),
             )
         except (OSError, IOError) as e:
             logger.error(f"I/O error rerunning command: {e}")
@@ -319,7 +321,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
-                blocks=SlackFormatter.error_message(f"I/O Error: {str(e)}"),
+                blocks=error_message(f"I/O Error: {str(e)}"),
             )
         except Exception as e:
             # Catch unexpected errors to prevent handler crash
@@ -329,7 +331,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
-                blocks=SlackFormatter.error_message(str(e)),
+                blocks=error_message(str(e)),
             )
 
     @app.action("view_output")
@@ -519,9 +521,9 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             if job and job.message_ts:
                 try:
                     if job.job_type == "parallel_analysis":
-                        blocks = SlackFormatter.parallel_job_status(job)
+                        blocks = parallel_job_status(job)
                     else:
-                        blocks = SlackFormatter.sequential_job_status(job)
+                        blocks = sequential_job_status(job)
 
                     await client.chat_update(
                         channel=channel_id,
@@ -1148,7 +1150,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 channel=channel_id,
                 thread_ts=thread_ts,
                 text=f"Unsupported Codex model: {model_value}",
-                blocks=SlackFormatter.error_message(
+                blocks=error_message(
                     f"Unsupported Codex model: `{model_value}`\n\n"
                     f"Supported Codex models:\n{supported}\n\n"
                     f"Optional effort suffixes: {effort_levels}, `extra-high`"
@@ -1184,7 +1186,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 channel=channel_id,
                 thread_ts=thread_ts,
                 text=f"Error changing model: {str(e)}",
-                blocks=SlackFormatter.error_message(str(e)),
+                blocks=error_message(str(e)),
             )
 
     @app.action(re.compile(r"^select_model_(?!custom$).*$"))
@@ -1256,5 +1258,5 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 channel=channel_id,
                 thread_ts=thread_ts,
                 text=f"Error changing model: {str(e)}",
-                blocks=SlackFormatter.error_message(str(e)),
+                blocks=error_message(str(e)),
             )

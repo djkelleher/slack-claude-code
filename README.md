@@ -70,6 +70,8 @@ Use these when your session model is a Codex model.
 | `/codex-clear` | Reset only Codex session state | `/codex-clear` |
 
 Codex transport uses `codex app-server` JSON-RPC for all modes.
+See [Codex app-server JSON-RPC integration notes](CODEX_APP_SERVER_JSON_RPC.md) for
+the exact request/notification methods this app handles.
 
 `/mode` in Codex sessions:
 - `/mode bypass` -> `approval=never`

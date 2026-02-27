@@ -22,20 +22,15 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.errors import SlackApiError
 
-from src.approval.handler import PermissionManager
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.subprocess_executor import SubprocessExecutor as ClaudeExecutor
-from src.codex.approval_bridge import (
-    approval_payload_from_decision,
-    format_approval_request_for_slack,
-)
-from src.codex.capabilities import apply_codex_mode_to_prompt, is_likely_plan_content
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
 from src.config import PLANS_DIR, config, get_backend_for_model
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
+from src.handlers.command_router import execute_for_session
 from src.question.manager import QuestionManager
 from src.utils.detail_cache import DetailCache
 from src.utils.file_downloader import (
@@ -43,9 +38,15 @@ from src.utils.file_downloader import (
     FileTooLargeError,
     download_slack_file,
 )
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import (
+    command_response_with_file,
+    command_response_with_tables,
+    error_message,
+    should_attach_file,
+)
+from src.utils.formatters.streaming import processing_message, streaming_update
 from src.utils.slack_helpers import post_text_snippet
-from src.utils.streaming import StreamingMessageState
+from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 
 async def slack_api_with_retry(
@@ -132,15 +133,11 @@ async def post_channel_notification(
 
         # Build thread link if we have a thread_ts
         if thread_ts:
-            thread_link = (
-                f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
-            )
+            thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
             if notification_type == "completion":
                 message = f"✅ Claude finished • <{thread_link}|View thread>"
             else:
-                message = (
-                    f"⚠️ Claude needs permission • <{thread_link}|Respond in thread>"
-                )
+                message = f"⚠️ Claude needs permission • <{thread_link}|Respond in thread>"
         else:
             if notification_type == "completion":
                 message = "✅ Claude finished"
@@ -155,9 +152,7 @@ async def post_channel_notification(
                     channel=channel_id,
                     text=message,
                 )
-                logger.debug(
-                    f"Posted {notification_type} notification to channel {channel_id}"
-                )
+                logger.debug(f"Posted {notification_type} notification to channel {channel_id}")
                 return  # Success, exit
 
             except (SlackApiError, TimeoutError, OSError) as e:
@@ -174,50 +169,7 @@ async def post_channel_notification(
 
     except Exception as e:
         # Don't fail the main operation if all notification attempts fail
-        logger.error(
-            f"Failed to post channel notification after {max_retries} attempts: {e}"
-        )
-
-
-def _is_codex_question_tool(tool_name: str) -> bool:
-    """Return True when a Codex tool invocation requests user input."""
-    normalized = (tool_name or "").strip().lower()
-    return normalized in {"askuserquestion", "ask_user_question", "request_user_input"}
-
-
-def _normalize_codex_question_input(tool_name: str, tool_input: dict) -> dict:
-    """Normalize Codex question tool input into AskUserQuestion-compatible shape."""
-    normalized_input = tool_input if isinstance(tool_input, dict) else {}
-    if normalized_input.get("questions"):
-        return normalized_input
-
-    # Some tool variants may provide a single question payload.
-    if normalized_input.get("question"):
-        return {
-            "questions": [
-                {
-                    "question": normalized_input.get("question", ""),
-                    "header": normalized_input.get("header", "Question"),
-                    "options": normalized_input.get("options", []),
-                    "multiSelect": normalized_input.get("multiSelect", False),
-                }
-            ]
-        }
-
-    # Fallback when request_user_input is called with unexpected shape.
-    if (tool_name or "").strip().lower() == "request_user_input":
-        return {
-            "questions": [
-                {
-                    "question": "Please provide additional input.",
-                    "header": "Input Needed",
-                    "options": [],
-                    "multiSelect": False,
-                }
-            ]
-        }
-
-    return {"questions": []}
+        logger.error(f"Failed to post channel notification after {max_retries} attempts: {e}")
 
 
 async def _execute_codex_message(
@@ -230,12 +182,7 @@ async def _execute_codex_message(
     logger,
     user_id: str | None = None,
 ) -> None:
-    """Execute a message using the Codex backend.
-
-    Mirrors Claude workflow for question handling and plan approval in Slack.
-    """
-    from src.codex.streaming import StreamMessage as CodexStreamMessage
-
+    """Execute a message using the Codex backend."""
     # Create command history entry
     cmd_history = await deps.db.add_command(session.id, prompt)
     await deps.db.update_command_status(cmd_history.id, "running")
@@ -245,7 +192,7 @@ async def _execute_codex_message(
         channel=channel_id,
         thread_ts=thread_ts,
         text=f"Processing: {prompt[:100]}...",
-        blocks=SlackFormatter.processing_message(prompt),
+        blocks=processing_message(prompt),
     )
     message_ts = response["ts"]
 
@@ -275,382 +222,29 @@ async def _execute_codex_message(
         on_error=on_streaming_error,
     )
     streaming_state.start_heartbeat()
-    pending_question = None
-
-    def create_on_chunk_callback(state: StreamingMessageState):
-        async def on_chunk(msg: CodexStreamMessage) -> None:
-            nonlocal pending_question
-
-            if msg.tool_activities:
-                for tool in msg.tool_activities:
-                    logger.debug(
-                        f"Tool activity: {tool.name} (id={tool.id[:8]}..., "
-                        f"result={'has result' if tool.result else 'None'})"
-                    )
-                    if _is_codex_question_tool(tool.name) and tool.result is None:
-                        if tool.id not in state.tool_activities:
-                            question_input = _normalize_codex_question_input(
-                                tool.name, tool.input
-                            )
-                            pending_question = (
-                                await QuestionManager.create_pending_question(
-                                    session_id=str(session.id),
-                                    channel_id=channel_id,
-                                    thread_ts=thread_ts,
-                                    tool_use_id=tool.id,
-                                    tool_input=question_input,
-                                )
-                            )
-                            logger.info(
-                                f"Detected {tool.name} tool, "
-                                f"created pending question {pending_question.question_id}"
-                            )
-                        else:
-                            logger.debug(
-                                f"Question tool {tool.id[:8]}... already tracked, skipping"
-                            )
-
-            content = msg.content if msg.type == "assistant" else ""
-            tools = msg.tool_activities
-            if content or tools:
-                await state.append_and_update(content or "", tools)
-
-        return on_chunk
-
-    on_chunk = create_on_chunk_callback(streaming_state)
-
-    async def on_user_input_request(tool_use_id: str, tool_input: dict) -> dict | None:
-        """Handle native Codex app-server request_user_input prompts."""
-        nonlocal pending_question, streaming_state, message_ts
-
-        if not pending_question or pending_question.tool_use_id != tool_use_id:
-            pending_question = await QuestionManager.create_pending_question(
-                session_id=str(session.id),
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                tool_use_id=tool_use_id,
-                tool_input=_normalize_codex_question_input(
-                    "request_user_input", tool_input
-                ),
-            )
-
-        try:
-            text_preview = (
-                streaming_state.accumulated_output[:100] + "..."
-                if len(streaming_state.accumulated_output) > 100
-                else streaming_state.accumulated_output
-            )
-            await client.chat_update(
-                channel=channel_id,
-                ts=message_ts,
-                text=text_preview,
-                blocks=SlackFormatter.streaming_update(
-                    prompt,
-                    streaming_state.accumulated_output
-                    + "\n\n_Waiting for your response..._",
-                    tool_activities=streaming_state.get_tool_list(),
-                ),
-            )
-        except Exception as e:
-            logger.warning(f"Failed to update message while waiting for input: {e}")
-
-        await QuestionManager.post_question_to_slack(
-            pending_question,
-            client,
-            deps.db,
-            context_text=streaming_state.accumulated_output,
-        )
-        answers = await QuestionManager.wait_for_answer(pending_question.question_id)
-        if not answers:
-            logger.info("Question was cancelled")
-            pending_question = None
-            return None
-
-        response_payload = QuestionManager.format_answer_for_codex_request(
-            pending_question
-        )
-        pending_question = None
-        return response_payload
-
-    async def on_approval_request(method: str, approval_input: dict) -> dict | None:
-        """Handle native Codex app-server approval prompts via Slack buttons."""
-        tool_name, tool_input = format_approval_request_for_slack(
-            method, approval_input
-        )
-        approved = await PermissionManager.request_approval(
-            session_id=str(session.id),
-            channel_id=channel_id,
-            tool_name=tool_name,
-            tool_input=tool_input,
-            user_id=user_id,
-            thread_ts=thread_ts,
-            slack_client=client,
-            db=deps.db,
-            auto_approve_tools=config.AUTO_APPROVE_TOOLS,
-        )
-        return approval_payload_from_decision(method, approved)
-
-    async def handle_question_loop(
-        current_result,
-        current_state: StreamingMessageState,
-        current_message_ts: str,
-    ):
-        nonlocal pending_question
-        question_count = 0
-        max_questions = config.timeouts.execution.max_questions_per_conversation
-
-        while (
-            pending_question
-            and current_result.session_id
-            and question_count < max_questions
-        ):
-            question_count += 1
-            logger.info(
-                "Codex asked a question, posting to Slack and waiting for response"
-            )
-
-            try:
-                text_preview = (
-                    current_state.accumulated_output[:100] + "..."
-                    if len(current_state.accumulated_output) > 100
-                    else current_state.accumulated_output
-                )
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=current_message_ts,
-                    text=text_preview,
-                    blocks=SlackFormatter.streaming_update(
-                        prompt,
-                        current_state.accumulated_output
-                        + "\n\n_Waiting for your response..._",
-                        tool_activities=current_state.get_tool_list(),
-                    ),
-                )
-            except Exception as e:
-                logger.warning(f"Failed to update message: {e}")
-
-            await QuestionManager.post_question_to_slack(
-                pending_question,
-                client,
-                deps.db,
-                context_text=current_state.accumulated_output,
-            )
-            answers = await QuestionManager.wait_for_answer(
-                pending_question.question_id
-            )
-
-            if not answers:
-                logger.info("Question was cancelled")
-                current_result.output = (
-                    current_state.accumulated_output + "\n\n_Question was cancelled._"
-                )
-                current_result.success = False
-                pending_question = None
-                break
-
-            answer_text = QuestionManager.format_answer_for_claude(pending_question)
-            logger.info(
-                f"User answered question, sending to Codex: {answer_text[:100]}"
-            )
-            pending_question = None
-
-            await current_state.stop_heartbeat()
-            continue_response = await client.chat_postMessage(
-                channel=channel_id,
-                thread_ts=thread_ts,
-                text="Continuing...",
-                blocks=SlackFormatter.processing_message("Processing your answer..."),
-            )
-            new_message_ts = continue_response["ts"]
-
-            current_state = StreamingMessageState(
-                channel_id=channel_id,
-                message_ts=new_message_ts,
-                prompt=prompt,
-                client=client,
-                logger=logger,
-                track_tools=True,
-                smart_concat=True,
-                db_session_id=session.id,
-                on_error=on_streaming_error,
-            )
-            current_state.start_heartbeat()
-            followup_on_chunk = create_on_chunk_callback(current_state)
-
-            current_result = await deps.codex_executor.execute(
-                prompt=answer_text,
-                working_directory=session.working_directory,
-                session_id=channel_id,
-                resume_session_id=current_result.session_id,
-                execution_id=str(uuid.uuid4()),
-                on_chunk=followup_on_chunk,
-                on_user_input_request=on_user_input_request,
-                on_approval_request=on_approval_request,
-                sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
-                approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
-                permission_mode=session.permission_mode,
-                db_session_id=session.id,
-                model=session.model,
-                channel_id=channel_id,
-            )
-
-            current_message_ts = new_message_ts
-            if current_result.session_id:
-                await deps.db.update_session_codex_id(
-                    channel_id, thread_ts, current_result.session_id
-                )
-
-        if question_count >= max_questions and pending_question:
-            logger.warning(
-                f"Hit maximum question limit ({max_questions}), stopping question loop"
-            )
-            current_result.output = (
-                current_state.accumulated_output
-                + f"\n\n_Reached maximum question limit ({max_questions}). "
-                "Please start a new conversation._"
-            )
-            current_result.success = False
-            await QuestionManager.cancel(pending_question.question_id)
-            pending_question = None
-
-        return current_result, current_state, current_message_ts
+    on_chunk = create_streaming_callback(streaming_state)
 
     try:
         if not deps.codex_executor:
             raise RuntimeError("Codex executor is not configured")
-        logger.info("Executing Codex prompt via subprocess executor")
-        execution_prompt = apply_codex_mode_to_prompt(prompt, session.permission_mode)
-        result = await deps.codex_executor.execute(
-            prompt=execution_prompt,
-            working_directory=session.working_directory,
-            session_id=channel_id,
-            resume_session_id=session.codex_session_id,
+        logger.info("Executing Codex prompt via command router")
+        route = await execute_for_session(
+            deps=deps,
+            session=session,
+            prompt=prompt,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
             execution_id=execution_id,
             on_chunk=on_chunk,
-            on_user_input_request=on_user_input_request,
-            on_approval_request=on_approval_request,
-            sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
-            approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
-            permission_mode=session.permission_mode,
-            db_session_id=session.id,
-            model=session.model,
-            channel_id=channel_id,
+            slack_client=client,
+            user_id=user_id,
+            logger=logger,
         )
-
-        # Update session with Codex session ID for resume
-        if result.session_id:
-            await deps.db.update_session_codex_id(
-                channel_id, thread_ts, result.session_id
-            )
-
-        # Handle AskUserQuestion/request_user_input loop
-        result, streaming_state, message_ts = await handle_question_loop(
-            result, streaming_state, message_ts
-        )
-
-        # Plan mode approval for Codex mirrors Claude plan mode UX:
-        # show plan + approve/reject buttons, then auto-execute on approval.
-        if (
-            session.permission_mode == "plan"
-            and result.success
-            and is_likely_plan_content(result.output)
-        ):
-            logger.info("Codex plan response ready, requesting user approval")
-            approved = await PlanApprovalManager.request_approval(
-                session_id=str(session.id),
-                channel_id=channel_id,
-                plan_content=result.output,
-                claude_session_id=result.session_id or "",
-                prompt=prompt,
-                user_id=user_id,
-                thread_ts=thread_ts,
-                slack_client=client,
-                plan_file_path=None,
-            )
-
-            if approved:
-                logger.info("Plan approved, switching session to bypass mode")
-                await deps.db.update_session_mode(
-                    channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
-                )
-                session.permission_mode = config.DEFAULT_BYPASS_MODE
-
-                exec_response = await client.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    text="Plan approved - executing...",
-                    blocks=SlackFormatter.processing_message(
-                        ":white_check_mark: *Plan approved!* Executing implementation..."
-                    ),
-                )
-                exec_message_ts = exec_response["ts"]
-                message_ts = exec_message_ts
-
-                streaming_state = StreamingMessageState(
-                    channel_id=channel_id,
-                    message_ts=exec_message_ts,
-                    prompt="[Plan Execution]",
-                    client=client,
-                    logger=logger,
-                    track_tools=True,
-                    smart_concat=True,
-                    db_session_id=session.id,
-                    on_error=on_streaming_error,
-                )
-                streaming_state.start_heartbeat()
-                on_chunk = create_on_chunk_callback(streaming_state)
-
-                result = await deps.codex_executor.execute(
-                    prompt="Plan approved. Please proceed with the implementation.",
-                    working_directory=session.working_directory,
-                    session_id=channel_id,
-                    resume_session_id=result.session_id,
-                    execution_id=str(uuid.uuid4()),
-                    on_chunk=on_chunk,
-                    on_user_input_request=on_user_input_request,
-                    on_approval_request=on_approval_request,
-                    sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
-                    approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
-                    permission_mode=session.permission_mode,
-                    db_session_id=session.id,
-                    model=session.model,
-                    channel_id=channel_id,
-                )
-
-                if result.session_id:
-                    await deps.db.update_session_codex_id(
-                        channel_id, thread_ts, result.session_id
-                    )
-
-                result, streaming_state, message_ts = await handle_question_loop(
-                    result, streaming_state, message_ts
-                )
-            else:
-                logger.info("Plan rejected or timed out, staying in plan mode")
-                await client.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    text="Plan not approved - staying in plan mode",
-                    blocks=[
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": (
-                                    ":x: *Plan not approved.* Staying in plan mode.\n\n"
-                                    "_Provide feedback to revise the plan, or use `/mode bypass` "
-                                    "to switch modes manually._"
-                                ),
-                            },
-                        }
-                    ],
-                )
+        result = route.result
 
         # Update command history after any question loops / plan execution.
         if result.success:
-            await deps.db.update_command_status(
-                cmd_history.id, "completed", result.output
-            )
+            await deps.db.update_command_status(cmd_history.id, "completed", result.output)
         else:
             await deps.db.update_command_status(
                 cmd_history.id, "failed", result.output, result.error
@@ -662,17 +256,15 @@ async def _execute_codex_message(
         # Send final response
         output = result.output or result.error or "No output"
 
-        if SlackFormatter.should_attach_file(output):
+        if should_attach_file(output):
             # Large response - attach as file
-            blocks, file_content, file_title = (
-                SlackFormatter.command_response_with_file(
-                    prompt=prompt,
-                    output=output,
-                    command_id=cmd_history.id,
-                    duration_ms=result.duration_ms,
-                    cost_usd=result.cost_usd,
-                    is_error=not result.success,
-                )
+            blocks, file_content, file_title = command_response_with_file(
+                prompt=prompt,
+                output=output,
+                command_id=cmd_history.id,
+                duration_ms=result.duration_ms,
+                cost_usd=result.cost_usd,
+                is_error=not result.success,
             )
             await slack_api_with_retry(
                 lambda: client.chat_update(
@@ -699,7 +291,7 @@ async def _execute_codex_message(
                 logger.error(f"Failed to post snippet: {post_error}")
         else:
             # Format response with table support
-            message_blocks_list = SlackFormatter.command_response_with_tables(
+            message_blocks_list = command_response_with_tables(
                 prompt=prompt,
                 output=output,
                 command_id=cmd_history.id,
@@ -729,34 +321,26 @@ async def _execute_codex_message(
 
     except asyncio.CancelledError:
         logger.info("Codex command execution was cancelled")
-        if pending_question:
-            await QuestionManager.cancel(pending_question.question_id)
         await streaming_state.stop_heartbeat()
-        await deps.db.update_command_status(
-            cmd_history.id, "cancelled", error_message="Cancelled"
-        )
+        await QuestionManager.cancel_for_session(str(session.id))
+        await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
             text="Command cancelled",
-            blocks=SlackFormatter.error_message("Command was cancelled"),
+            blocks=error_message("Command was cancelled"),
         )
     except SlackApiError as e:
-        logger.error(
-            f"Slack API error executing Codex command: {e}\n{traceback.format_exc()}"
-        )
-        if pending_question:
-            await QuestionManager.cancel(pending_question.question_id)
+        logger.error(f"Slack API error executing Codex command: {e}\n{traceback.format_exc()}")
         await streaming_state.stop_heartbeat()
-        await deps.db.update_command_status(
-            cmd_history.id, "failed", error_message=str(e)
-        )
+        await QuestionManager.cancel_for_session(str(session.id))
+        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         try:
             await client.chat_postMessage(
                 channel=channel_id,
                 thread_ts=thread_ts,
                 text=f":x: Slack API Error: {str(e)[:200]}",
-                blocks=SlackFormatter.error_message(f"Slack API Error: {str(e)}"),
+                blocks=error_message(f"Slack API Error: {str(e)}"),
             )
         except Exception as notify_error:
             logger.error(f"Failed to post Slack API error notification: {notify_error}")
@@ -764,17 +348,14 @@ async def _execute_codex_message(
         logger.error(
             f"Error executing Codex command: {type(e).__name__}: {e}\n{traceback.format_exc()}"
         )
-        if pending_question:
-            await QuestionManager.cancel(pending_question.question_id)
         await streaming_state.stop_heartbeat()
-        await deps.db.update_command_status(
-            cmd_history.id, "failed", error_message=str(e)
-        )
+        await QuestionManager.cancel_for_session(str(session.id))
+        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
             text=f"Error: {str(e)}",
-            blocks=SlackFormatter.error_message(str(e)),
+            blocks=error_message(str(e)),
         )
 
 
@@ -820,9 +401,7 @@ async def main():
     @app.event("app_mention")
     async def handle_mention(event, say, logger):
         """Respond to @mentions."""
-        await say(
-            text="Hi! I'm Claude Code Bot. Just send me a message to run commands."
-        )
+        await say(text="Hi! I'm Claude Code Bot. Just send me a message to run commands.")
 
     @app.event("message")
     async def handle_message(event, client, logger):
@@ -881,9 +460,7 @@ async def main():
                 f"Cancelled {cancelled_questions} pending question(s) for session {session.id} "
                 "due to new message"
             )
-        cancelled_plan_approvals = await PlanApprovalManager.cancel_for_session(
-            str(session.id)
-        )
+        cancelled_plan_approvals = await PlanApprovalManager.cancel_for_session(str(session.id))
         if cancelled_plan_approvals:
             logger.info(
                 f"Cancelled {cancelled_plan_approvals} pending plan approval(s) for session {session.id} "
@@ -892,9 +469,7 @@ async def main():
 
         # Validate working directory exists
         if not os.path.isdir(session.working_directory):
-            logger.error(
-                f"Working directory does not exist: {session.working_directory}"
-            )
+            logger.error(f"Working directory does not exist: {session.working_directory}")
             await client.chat_postMessage(
                 channel=channel_id,
                 thread_ts=thread_ts,
@@ -941,9 +516,7 @@ async def main():
 
                     # For images, show thumbnail in thread
                     if file_info.get("mimetype", "").startswith("image/"):
-                        thumb_url = file_info.get("thumb_360") or file_info.get(
-                            "thumb_160"
-                        )
+                        thumb_url = file_info.get("thumb_360") or file_info.get("thumb_160")
                         if thumb_url:
                             await client.chat_postMessage(
                                 channel=channel_id,
@@ -992,9 +565,7 @@ async def main():
 
         # Enhance prompt with uploaded file references
         if uploaded_files:
-            file_refs = "\n".join(
-                [f"- {f.filename} (at {f.local_path})" for f in uploaded_files]
-            )
+            file_refs = "\n".join([f"- {f.filename} (at {f.local_path})" for f in uploaded_files])
 
             if prompt:
                 prompt = f"{prompt}\n\nUploaded files:\n{file_refs}"
@@ -1031,7 +602,7 @@ async def main():
             channel=channel_id,
             thread_ts=thread_ts,  # Reply in thread if this is a thread message
             text=f"Processing: {prompt[:100]}...",  # Fallback for notifications
-            blocks=SlackFormatter.processing_message(prompt),
+            blocks=processing_message(prompt),
         )
         message_ts = response["ts"]
 
@@ -1079,14 +650,12 @@ async def main():
                         if tool.name == "AskUserQuestion" and tool.result is None:
                             if tool.id not in state.tool_activities:
                                 # Create pending question when we first see the tool
-                                pending_question = (
-                                    await QuestionManager.create_pending_question(
-                                        session_id=str(session.id),
-                                        channel_id=channel_id,
-                                        thread_ts=thread_ts,
-                                        tool_use_id=tool.id,
-                                        tool_input=tool.input,
-                                    )
+                                pending_question = await QuestionManager.create_pending_question(
+                                    session_id=str(session.id),
+                                    channel_id=channel_id,
+                                    thread_ts=thread_ts,
+                                    tool_use_id=tool.id,
+                                    tool_input=tool.input,
                                 )
                                 logger.info(
                                     f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}"
@@ -1142,22 +711,14 @@ async def main():
 
             # Update session with Claude session ID for resume
             if result.session_id:
-                await deps.db.update_session_claude_id(
-                    channel_id, thread_ts, result.session_id
-                )
+                await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
             # Handle AskUserQuestion - loop to handle multiple questions
             question_count = 0
             max_questions = config.timeouts.execution.max_questions_per_conversation
-            while (
-                pending_question
-                and result.session_id
-                and question_count < max_questions
-            ):
+            while pending_question and result.session_id and question_count < max_questions:
                 question_count += 1
-                logger.info(
-                    "Claude asked a question, posting to Slack and waiting for response"
-                )
+                logger.info("Claude asked a question, posting to Slack and waiting for response")
 
                 # Update the main message to show Claude is waiting
                 try:
@@ -1170,7 +731,7 @@ async def main():
                         channel=channel_id,
                         ts=message_ts,
                         text=text_preview,
-                        blocks=SlackFormatter.streaming_update(
+                        blocks=streaming_update(
                             prompt,
                             streaming_state.accumulated_output
                             + "\n\n_Waiting for your response..._",
@@ -1195,12 +756,8 @@ async def main():
 
                 if answers:
                     # User answered - format and send as follow-up to Claude
-                    answer_text = QuestionManager.format_answer_for_claude(
-                        pending_question
-                    )
-                    logger.info(
-                        f"User answered question, sending to Claude: {answer_text[:100]}"
-                    )
+                    answer_text = QuestionManager.format_answer_for_claude(pending_question)
+                    logger.info(f"User answered question, sending to Claude: {answer_text[:100]}")
 
                     # Reset pending_question before continuing - on_chunk may set a new one
                     pending_question = None
@@ -1213,9 +770,7 @@ async def main():
                         channel=channel_id,
                         thread_ts=thread_ts,
                         text="Continuing...",
-                        blocks=SlackFormatter.processing_message(
-                            "Processing your answer..."
-                        ),
+                        blocks=processing_message("Processing your answer..."),
                     )
                     new_message_ts = continue_response["ts"]
 
@@ -1264,8 +819,7 @@ async def main():
                     # Question was cancelled - update message and break
                     logger.info("Question was cancelled")
                     result.output = (
-                        streaming_state.accumulated_output
-                        + "\n\n_Question was cancelled._"
+                        streaming_state.accumulated_output + "\n\n_Question was cancelled._"
                     )
                     result.success = False
                     break
@@ -1283,9 +837,7 @@ async def main():
 
             # Update command history
             if result.success:
-                await deps.db.update_command_status(
-                    cmd_history.id, "completed", result.output
-                )
+                await deps.db.update_command_status(cmd_history.id, "completed", result.output)
             else:
                 await deps.db.update_command_status(
                     cmd_history.id, "failed", result.output, result.error
@@ -1306,9 +858,7 @@ async def main():
                 plan_start_time = streaming_state.started_at
                 plan_override_path = None
                 plan_override_source = None
-                plan_override_regex = re.compile(
-                    r"(?im)^(?:Plan file|Created Plan):\s*(.+)$"
-                )
+                plan_override_regex = re.compile(r"(?im)^(?:Plan file|Created Plan):\s*(.+)$")
                 for source_label, source_text in (
                     ("Plan agent output", result.plan_subagent_result),
                     ("assistant output", result.output),
@@ -1361,9 +911,7 @@ async def main():
                             )
                             break  # Don't retry permission errors
                         except Exception as e:
-                            logger.warning(
-                                f"Failed to read plan file {plan_override_path}: {e}"
-                            )
+                            logger.warning(f"Failed to read plan file {plan_override_path}: {e}")
 
                     # Prefer any plan file written during this session via Write tools
                     candidate_path = streaming_state.get_recent_plan_write_path(
@@ -1387,9 +935,7 @@ async def main():
                             )
                             break  # Don't retry permission errors
                         except Exception as e:
-                            logger.warning(
-                                f"Failed to read plan file {candidate_path}: {e}"
-                            )
+                            logger.warning(f"Failed to read plan file {candidate_path}: {e}")
 
                     # Wait before retrying (except on last attempt)
                     if attempt < max_retries - 1:
@@ -1407,22 +953,16 @@ async def main():
                     )
                     fallback_dir = PLANS_DIR
                     os.makedirs(fallback_dir, exist_ok=True)
-                    fallback_name = (
-                        f"plan-session-{session.id}-fallback-{int(time.time())}.md"
-                    )
+                    fallback_name = f"plan-session-{session.id}-fallback-{int(time.time())}.md"
                     fallback_path = os.path.join(fallback_dir, fallback_name)
                     try:
                         with open(fallback_path, "w") as f:
                             f.write(result.plan_subagent_result)
                         plan_file_path = fallback_path
                         plan_content = result.plan_subagent_result
-                        logger.info(
-                            f"Saved Plan subagent output to fallback file {fallback_path}"
-                        )
+                        logger.info(f"Saved Plan subagent output to fallback file {fallback_path}")
                     except Exception as e:
-                        logger.warning(
-                            f"Failed to save Plan subagent output to file: {e}"
-                        )
+                        logger.warning(f"Failed to save Plan subagent output to file: {e}")
 
                 # If still no plan content, show error
                 if not plan_content:
@@ -1452,9 +992,7 @@ async def main():
                             f"(mtime={mtime:.0f}, age={age:.1f}s)"
                         )
                     except OSError as e:
-                        logger.warning(
-                            f"Failed to stat selected plan file {plan_file_path}: {e}"
-                        )
+                        logger.warning(f"Failed to stat selected plan file {plan_file_path}: {e}")
 
                 # Request approval via Slack buttons and wait for response
                 approved = await PlanApprovalManager.request_approval(
@@ -1480,7 +1018,7 @@ async def main():
                         channel=channel_id,
                         thread_ts=thread_ts,
                         text="Plan approved - executing...",
-                        blocks=SlackFormatter.processing_message(
+                        blocks=processing_message(
                             ":white_check_mark: *Plan approved!* Executing implementation..."
                         ),
                     )
@@ -1546,17 +1084,15 @@ async def main():
             # Send final response
             output = result.output or result.error or "No output"
 
-            if SlackFormatter.should_attach_file(output):
+            if should_attach_file(output):
                 # Large response - attach as file
-                blocks, file_content, file_title = (
-                    SlackFormatter.command_response_with_file(
-                        prompt=prompt,
-                        output=output,
-                        command_id=cmd_history.id,
-                        duration_ms=result.duration_ms,
-                        cost_usd=result.cost_usd,
-                        is_error=not result.success,
-                    )
+                blocks, file_content, file_title = command_response_with_file(
+                    prompt=prompt,
+                    output=output,
+                    command_id=cmd_history.id,
+                    duration_ms=result.duration_ms,
+                    cost_usd=result.cost_usd,
+                    is_error=not result.success,
                 )
                 await slack_api_with_retry(
                     lambda: client.chat_update(
@@ -1614,7 +1150,7 @@ async def main():
                     )
             else:
                 # Format response with table support (may produce multiple messages)
-                message_blocks_list = SlackFormatter.command_response_with_tables(
+                message_blocks_list = command_response_with_tables(
                     prompt=prompt,
                     output=output,
                     command_id=cmd_history.id,
@@ -1654,43 +1190,35 @@ async def main():
                 channel=channel_id,
                 ts=message_ts,
                 text="Command cancelled",
-                blocks=SlackFormatter.error_message("Command was cancelled"),
+                blocks=error_message("Command was cancelled"),
             )
         except SlackApiError as e:
-            logger.error(
-                f"Slack API error executing command: {e}\n{traceback.format_exc()}"
-            )
+            logger.error(f"Slack API error executing command: {e}\n{traceback.format_exc()}")
             await streaming_state.stop_heartbeat()
             if pending_question:
                 await QuestionManager.cancel(pending_question.question_id)
-            await deps.db.update_command_status(
-                cmd_history.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             # Try to post a new error message instead of updating (in case update is failing)
             try:
                 await client.chat_postMessage(
                     channel=channel_id,
                     thread_ts=thread_ts,
                     text=f":x: Slack API Error: {str(e)[:200]}",
-                    blocks=SlackFormatter.error_message(f"Slack API Error: {str(e)}"),
+                    blocks=error_message(f"Slack API Error: {str(e)}"),
                 )
             except Exception as notify_error:
-                logger.error(
-                    f"Failed to post Slack API error notification: {notify_error}"
-                )
+                logger.error(f"Failed to post Slack API error notification: {notify_error}")
         except (OSError, IOError) as e:
             logger.error(f"I/O error executing command: {e}\n{traceback.format_exc()}")
             await streaming_state.stop_heartbeat()
             if pending_question:
                 await QuestionManager.cancel(pending_question.question_id)
-            await deps.db.update_command_status(
-                cmd_history.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
                 text=f"I/O Error: {str(e)}",
-                blocks=SlackFormatter.error_message(f"I/O Error: {str(e)}"),
+                blocks=error_message(f"I/O Error: {str(e)}"),
             )
         except Exception as e:
             # Catch remaining unexpected errors to prevent crash, but log details
@@ -1700,14 +1228,12 @@ async def main():
             await streaming_state.stop_heartbeat()
             if pending_question:
                 await QuestionManager.cancel(pending_question.question_id)
-            await deps.db.update_command_status(
-                cmd_history.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
                 text=f"Error: {str(e)}",
-                blocks=SlackFormatter.error_message(str(e)),
+                blocks=error_message(str(e)),
             )
 
     # Start Socket Mode handler

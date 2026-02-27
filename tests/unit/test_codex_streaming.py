@@ -56,16 +56,13 @@ def test_parse_new_schema_command_execution_tool_lifecycle():
     assert "item_2" not in parser.pending_tools
 
 
-def test_parse_tool_call_with_non_dict_json_input():
-    """Parser should normalize non-dict tool input payloads."""
+def test_parse_synthetic_assistant_event():
+    """Parser should accept executor-generated assistant delta events."""
     parser = StreamParser()
-    msg = parser.parse_line(
-        '{"type":"tool_call","id":"tool_1","name":"run_command","input":"[\\"echo hi\\"]"}'
-    )
+    msg = parser.parse_line('{"type":"assistant","content":"delta text"}')
     assert msg is not None
-    assert msg.type == "tool_call"
-    assert len(msg.tool_activities) == 1
-    assert msg.tool_activities[0].input == {"raw": ["echo hi"]}
+    assert msg.type == "assistant"
+    assert msg.content == "delta text"
 
 
 def test_parse_command_execution_failed_without_exit_code():

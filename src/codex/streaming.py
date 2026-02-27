@@ -114,12 +114,11 @@ class StreamMessage:
 
 
 class StreamParser:
-    """Parser for Codex CLI stream-json output format.
+    """Parser for normalized Codex app-server stream events.
 
-    Codex uses newline-delimited JSON events when run with --json flag.
-    Supports both legacy and current schemas, including:
-    - Legacy: session_start, message/assistant, tool_call/tool_result, done/result
-    - Current: thread.started, turn.started/completed, item.started/completed, turn.failed
+    The executor maps app-server JSON-RPC notifications into line-delimited event
+    payloads consumed here (for example: thread.started, item.started/completed,
+    request_user_input, turn.completed, turn.failed).
     """
 
     def __init__(self):
@@ -380,53 +379,21 @@ class StreamParser:
                 raw=data,
             )
 
-        elif event_type == "session_start":
-            # Session initialization
-            self.session_id = data.get("session_id", data.get("id"))
-            return StreamMessage(
-                type="init",
-                session_id=self.session_id,
-                raw=data,
-            )
-
-        elif event_type == "message" or event_type == "assistant":
-            # Assistant message with content
+        elif event_type == "assistant":
+            # Synthetic assistant delta event emitted by executor.
             content = data.get("content", data.get("text", ""))
-            if isinstance(content, list):
-                # Handle array of content blocks
-                text_parts = []
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
-                    elif isinstance(block, str):
-                        text_parts.append(block)
-                content = "".join(text_parts)
-
-            self._append_assistant_content(content)
+            self._append_assistant_content(str(content))
 
             return StreamMessage(
                 type="assistant",
-                content=content,
-                detailed_content=content,
+                content=str(content),
+                detailed_content=str(content),
                 session_id=self.session_id,
                 raw=data,
             )
 
-        elif event_type == "tool_call":
-            # Tool invocation
-            tool_id = data.get("id", data.get("tool_use_id", ""))
-            tool_name = data.get("name", data.get("tool", "unknown"))
-            tool_input = data.get("input", data.get("arguments", {}))
-
-            return self._create_tool_call(
-                tool_id=tool_id,
-                tool_name=tool_name,
-                tool_input=tool_input,
-                raw_data=data,
-            )
-
         elif event_type == "tool_result":
-            # Tool execution result
+            # Synthetic tool_result event emitted by executor.
             tool_use_id = data.get("tool_use_id", data.get("id", "unknown"))
             content = data.get("content", data.get("output", data.get("result", "")))
             is_error = data.get("is_error", data.get("error", False))
@@ -453,9 +420,6 @@ class StreamParser:
                 is_error=is_error,
                 raw_data=data,
             )
-
-        elif event_type == "done" or event_type == "result":
-            return self._create_result_message(data)
 
         elif event_type == "error":
             error_msg = data.get("error", {})

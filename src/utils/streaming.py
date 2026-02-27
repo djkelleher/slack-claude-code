@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 from loguru import logger
 
 from src.config import PLANS_DIR, config
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.streaming import streaming_update
 
 if TYPE_CHECKING:
     from src.claude.streaming import ToolActivity
@@ -160,9 +160,7 @@ class StreamingMessageState:
         if self.db_session_id:
             session_plan_path = self.get_session_plan_path()
             if os.path.isfile(session_plan_path):
-                logger.info(
-                    f"Plan file found via session-specific path: {session_plan_path}"
-                )
+                logger.info(f"Plan file found via session-specific path: {session_plan_path}")
                 return session_plan_path
             logger.debug(
                 f"Session-specific plan file not found at {session_plan_path}, "
@@ -179,12 +177,16 @@ class StreamingMessageState:
                 if expanded_file_path.endswith(".md"):
                     # Prioritize files in ~/.claude/plans/
                     if expanded_file_path.startswith(plans_dir):
-                        logger.info(f"Plan file found via Write tool activity: {expanded_file_path}")
+                        logger.info(
+                            f"Plan file found via Write tool activity: {expanded_file_path}"
+                        )
                         return expanded_file_path
                     # Track other .md files as potential plan files
                     elif "plan" in expanded_file_path.lower():
                         plan_write_candidates.append(expanded_file_path)
-                        logger.debug(f"Potential plan file via Write activity: {expanded_file_path}")
+                        logger.debug(
+                            f"Potential plan file via Write activity: {expanded_file_path}"
+                        )
 
         # If we found a Write to a plan-named file outside ~/.claude/plans/, use that
         if plan_write_candidates:
@@ -198,7 +200,9 @@ class StreamingMessageState:
         # The subagent result text often contains the file path it wrote to
         for tool in self.tool_activities.values():
             if tool.name == "Task" and tool.full_result and not tool.is_error:
-                logger.debug(f"Checking Task tool result for plan file: {tool.full_result[:500]}...")
+                logger.debug(
+                    f"Checking Task tool result for plan file: {tool.full_result[:500]}..."
+                )
                 # Look for paths like ~/.claude/plans/something.md or /home/user/.claude/plans/something.md
                 # Use broader pattern to catch various filename formats (words, hyphens, underscores, dots)
                 patterns = [
@@ -237,7 +241,9 @@ class StreamingMessageState:
                         mtime = entry.stat().st_mtime
                         if now - mtime < max_age_seconds:
                             candidates.append((entry.path, mtime))
-                            logger.debug(f"Found candidate plan file: {entry.path} (age: {now - mtime:.0f}s)")
+                            logger.debug(
+                                f"Found candidate plan file: {entry.path} (age: {now - mtime:.0f}s)"
+                            )
             except OSError as e:
                 logger.warning(f"Failed to scan plans directory {plans_dir}: {e}")
         else:
@@ -253,7 +259,9 @@ class StreamingMessageState:
                             mtime = entry.stat().st_mtime
                             if now - mtime < max_age_seconds:
                                 candidates.append((entry.path, mtime))
-                                logger.debug(f"Found candidate plan file in working dir: {entry.path}")
+                                logger.debug(
+                                    f"Found candidate plan file in working dir: {entry.path}"
+                                )
             except OSError as e:
                 logger.debug(f"Failed to scan working directory {working_directory}: {e}")
 
@@ -472,7 +480,7 @@ class StreamingMessageState:
                 channel=self.channel_id,
                 ts=self.message_ts,
                 text=text_preview,
-                blocks=SlackFormatter.streaming_update(
+                blocks=streaming_update(
                     self.prompt,
                     output,
                     tool_activities=tool_list,
@@ -516,7 +524,7 @@ class StreamingMessageState:
                 channel=self.channel_id,
                 ts=self.message_ts,
                 text=text_preview,
-                blocks=SlackFormatter.streaming_update(
+                blocks=streaming_update(
                     self.prompt,
                     self.accumulated_output,
                     tool_activities=tool_list,

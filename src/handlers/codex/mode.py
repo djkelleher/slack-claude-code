@@ -4,7 +4,7 @@ from slack_bolt.async_app import AsyncApp
 
 from src.codex.capabilities import DEPRECATED_APPROVAL_MODES, normalize_codex_approval_mode
 from src.config import config
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import error_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
@@ -53,7 +53,7 @@ def register_codex_mode_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         if new_mode not in config.VALID_SANDBOX_MODES:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
-                blocks=SlackFormatter.error_message(
+                blocks=error_message(
                     f"Invalid sandbox mode: `{new_mode}`\n\n"
                     f"Valid modes: {', '.join(config.VALID_SANDBOX_MODES)}"
                 ),
@@ -126,9 +126,8 @@ def register_codex_mode_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         if new_mode in DEPRECATED_APPROVAL_MODES:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
-                blocks=SlackFormatter.error_message(
-                    f"Approval mode `{new_mode}` is deprecated.\n\n"
-                    "Use `on-request` or `never`."
+                blocks=error_message(
+                    f"Approval mode `{new_mode}` is deprecated.\n\n" "Use `on-request` or `never`."
                 ),
             )
             return
@@ -136,7 +135,7 @@ def register_codex_mode_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         if new_mode not in config.VALID_APPROVAL_MODES:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
-                blocks=SlackFormatter.error_message(
+                blocks=error_message(
                     f"Invalid approval mode: `{new_mode}`\n\n"
                     f"Valid modes: {', '.join(config.VALID_APPROVAL_MODES)}"
                 ),

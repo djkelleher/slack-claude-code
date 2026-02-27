@@ -2,7 +2,7 @@
 
 from slack_bolt.async_app import AsyncApp
 
-from ..utils.formatting import SlackFormatter
+from ..utils.formatters.command import error_message
 from .base import CommandContext, HandlerDependencies, slack_command
 
 
@@ -117,7 +117,7 @@ def register_notifications_command(app: AsyncApp, deps: HandlerDependencies) -> 
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     text="Usage: /notifications completion on|off",
-                    blocks=SlackFormatter.error_message(
+                    blocks=error_message(
                         "Usage: `/notifications completion on` or `/notifications completion off`"
                     ),
                 )
@@ -149,7 +149,7 @@ def register_notifications_command(app: AsyncApp, deps: HandlerDependencies) -> 
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     text="Usage: /notifications permission on|off",
-                    blocks=SlackFormatter.error_message(
+                    blocks=error_message(
                         "Usage: `/notifications permission on` or `/notifications permission off`"
                     ),
                 )
@@ -180,7 +180,7 @@ def register_notifications_command(app: AsyncApp, deps: HandlerDependencies) -> 
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Unknown subcommand: {subcommand}",
-                blocks=SlackFormatter.error_message(
+                blocks=error_message(
                     f"Unknown subcommand: `{subcommand}`\n\n"
                     "Valid commands:\n"
                     "• `/notifications` - Show settings\n"

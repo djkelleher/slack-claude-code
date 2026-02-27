@@ -7,7 +7,9 @@ from slack_bolt.async_app import AsyncApp
 
 from src.config import config
 from src.tasks.manager import TaskManager
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.base import escape_markdown
+from src.utils.formatters.command import error_message
+from src.utils.formatters.queue import queue_item_complete, queue_item_running, queue_status
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 from ..command_router import execute_for_session
@@ -94,7 +96,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     "text": {
                         "type": "mrkdwn",
                         "text": f":inbox_tray: Added to queue (position #{position})\n"
-                        f"> {SlackFormatter._escape_markdown(ctx.text[:200])}"
+                        f"> {escape_markdown(ctx.text[:200])}"
                         f"{'...' if len(ctx.text) > 200 else ''}",
                     },
                 },
@@ -119,7 +121,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             text="Queue status",
-            blocks=SlackFormatter.queue_status(pending, running),
+            blocks=queue_status(pending, running),
         )
 
     @app.command("/qc")
@@ -152,7 +154,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text="Invalid item ID",
-                blocks=SlackFormatter.error_message("Invalid item ID. Usage: /qr <item_id>"),
+                blocks=error_message("Invalid item ID. Usage: /qr <item_id>"),
             )
             return
 
@@ -176,9 +178,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Item #{item_id} not found or not pending",
-                blocks=SlackFormatter.error_message(
-                    f"Item #{item_id} not found or is already running/completed."
-                ),
+                blocks=error_message(f"Item #{item_id} not found or is already running/completed."),
             )
 
 
@@ -221,7 +221,7 @@ async def _process_queue(
         response = await client.chat_postMessage(
             channel=channel_id,
             text=f"Processing queue item #{item.id}",
-            blocks=SlackFormatter.queue_item_running(item),
+            blocks=queue_item_running(item),
         )
         message_ts = response["ts"]
 
@@ -256,7 +256,7 @@ async def _process_queue(
                 channel=channel_id,
                 ts=message_ts,
                 text=f"Completed queue item #{item.id}",
-                blocks=SlackFormatter.queue_item_complete(item, result),
+                blocks=queue_item_complete(item, result),
             )
 
         except Exception as e:
@@ -266,7 +266,7 @@ async def _process_queue(
                 channel=channel_id,
                 ts=message_ts,
                 text=f"Queue item #{item.id} failed",
-                blocks=SlackFormatter.error_message(f"Queue item failed: {e}"),
+                blocks=error_message(f"Queue item failed: {e}"),
             )
 
         # Small delay between items to avoid rate limits

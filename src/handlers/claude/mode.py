@@ -9,7 +9,7 @@ from src.codex.capabilities import (
 )
 from src.config import config
 from src.database.models import Session
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import error_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
@@ -94,7 +94,7 @@ def register_mode_command(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Unknown mode: {text}",
-                blocks=SlackFormatter.error_message(
+                blocks=error_message(
                     f"Unknown mode: `{text}`\n\nValid modes: {', '.join(f'`{m}`' for m in CLAUDE_MODE_ALIASES)}"
                 ),
             )
@@ -165,7 +165,7 @@ async def _handle_codex_mode(
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             text=f"Invalid Codex mode: {text}",
-            blocks=SlackFormatter.error_message(resolved.error),
+            blocks=error_message(resolved.error),
         )
         return
 

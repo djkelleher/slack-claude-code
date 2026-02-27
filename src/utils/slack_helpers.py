@@ -5,8 +5,12 @@ from typing import Any, Optional
 from src.config import config
 from slack_sdk.errors import SlackApiError
 
-from src.utils.formatting import SlackFormatter
-from src.utils.formatters.base import MAX_TEXT_LENGTH, split_text_into_blocks, text_to_rich_text_blocks
+from src.utils.formatters.command import error_message
+from src.utils.formatters.base import (
+    MAX_TEXT_LENGTH,
+    split_text_into_blocks,
+    text_to_rich_text_blocks,
+)
 from src.utils.formatters.markdown import markdown_to_slack_mrkdwn
 from src.utils.formatters.table import extract_tables_from_text, split_text_by_tables
 
@@ -91,12 +95,16 @@ def _fallback_blocks_for_table_blocks(blocks: list[dict]) -> list[dict]:
         if block_type == "table":
             table_text = _table_block_to_markdown(block)
             if table_text:
-                fallback_blocks.extend(split_text_into_blocks(table_text, max_length=MAX_TEXT_LENGTH))
+                fallback_blocks.extend(
+                    split_text_into_blocks(table_text, max_length=MAX_TEXT_LENGTH)
+                )
         elif block_type == "rich_text":
             # Convert rich_text to section blocks as fallback
             plain_text = _rich_text_to_plain_text(block)
             if plain_text:
-                fallback_blocks.extend(split_text_into_blocks(plain_text, max_length=MAX_TEXT_LENGTH))
+                fallback_blocks.extend(
+                    split_text_into_blocks(plain_text, max_length=MAX_TEXT_LENGTH)
+                )
         else:
             fallback_blocks.append(block)
     return fallback_blocks
@@ -144,7 +152,7 @@ async def post_error(
     kwargs = {
         "channel": channel_id,
         "text": f"Error: {error_message}",
-        "blocks": SlackFormatter.error_message(error_message),
+        "blocks": error_message(error_message),
     }
     if thread_ts:
         kwargs["thread_ts"] = thread_ts
@@ -175,7 +183,7 @@ async def update_with_error(
         channel=channel_id,
         ts=message_ts,
         text=f"Error: {error_message}",
-        blocks=SlackFormatter.error_message(error_message),
+        blocks=error_message(error_message),
     )
 
 

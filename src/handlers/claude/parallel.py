@@ -2,7 +2,8 @@
 
 from slack_bolt.async_app import AsyncApp
 
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import error_message
+from src.utils.formatters.job import job_status_list
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
@@ -26,7 +27,7 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
-            blocks=SlackFormatter.job_status_list(jobs),
+            blocks=job_status_list(jobs),
         )
 
     @app.command("/cc")
@@ -51,7 +52,7 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
             except ValueError:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
-                    blocks=SlackFormatter.error_message("Invalid job ID. Usage: /cc [job_id]"),
+                    blocks=error_message("Invalid job ID. Usage: /cc [job_id]"),
                 )
         else:
             # Cancel all active jobs in channel

@@ -8,7 +8,7 @@ from loguru import logger as LoguruLogger
 from slack_sdk.web.async_client import AsyncWebClient
 
 from src.config import config
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import error_message
 
 
 @dataclass
@@ -28,7 +28,9 @@ class CommandContext:
     thread_ts: str | None = None  # Thread timestamp for thread-based sessions
 
     @classmethod
-    def from_command(cls, command: dict, client: AsyncWebClient, logger: LoguruLogger) -> "CommandContext":
+    def from_command(
+        cls, command: dict, client: AsyncWebClient, logger: LoguruLogger
+    ) -> "CommandContext":
         """Create context from Slack command dict.
 
         Parameters
@@ -121,16 +123,18 @@ def slack_command(
             if require_text and not ctx.text:
                 await client.chat_postMessage(
                     channel=ctx.channel_id,
-                    blocks=SlackFormatter.error_message(f"Please provide input. {usage_hint}"),
+                    blocks=error_message(f"Please provide input. {usage_hint}"),
                 )
                 return
 
             # Validate input length to prevent resource exhaustion
-            effective_max_length = max_length if max_length is not None else config.timeouts.limits.max_prompt_length
+            effective_max_length = (
+                max_length if max_length is not None else config.timeouts.limits.max_prompt_length
+            )
             if len(ctx.text) > effective_max_length:
                 await client.chat_postMessage(
                     channel=ctx.channel_id,
-                    blocks=SlackFormatter.error_message(
+                    blocks=error_message(
                         f"Input too long ({len(ctx.text):,} chars). "
                         f"Maximum is {effective_max_length:,} characters."
                     ),
@@ -143,7 +147,7 @@ def slack_command(
                 logger.error(f"Error in {ctx.command_name}: {e}\n{traceback.format_exc()}")
                 await client.chat_postMessage(
                     channel=ctx.channel_id,
-                    blocks=SlackFormatter.error_message(str(e)),
+                    blocks=error_message(str(e)),
                 )
 
         return wrapper

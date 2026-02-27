@@ -20,7 +20,8 @@ from src.config import (
     is_supported_codex_model,
     parse_model_effort,
 )
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import command_response_with_tables, error_message
+from src.utils.formatters.streaming import processing_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
@@ -103,7 +104,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         response = await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             text=f"Running: {claude_command}",
-            blocks=SlackFormatter.processing_message(claude_command),
+            blocks=processing_message(claude_command),
         )
         message_ts = response["ts"]
 
@@ -132,7 +133,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 output = "Command completed (no output)"
 
             # Format response with table support (may produce multiple messages)
-            message_blocks_list = SlackFormatter.command_response_with_tables(
+            message_blocks_list = command_response_with_tables(
                 prompt=claude_command,
                 output=output,
                 command_id=None,
@@ -164,7 +165,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 channel=ctx.channel_id,
                 ts=message_ts,
                 text=f"Error: {str(e)}",
-                blocks=SlackFormatter.error_message(str(e)),
+                blocks=error_message(str(e)),
             )
 
     @app.command("/clear")
@@ -237,21 +238,19 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Path does not exist: {resolved_dir}",
-                blocks=SlackFormatter.error_message(f"Path does not exist: `{resolved_dir}`"),
+                blocks=error_message(f"Path does not exist: `{resolved_dir}`"),
             )
             return
         if not resolved_dir.is_dir():
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Not a directory: {resolved_dir}",
-                blocks=SlackFormatter.error_message(f"Not a directory: `{resolved_dir}`"),
+                blocks=error_message(f"Not a directory: `{resolved_dir}`"),
             )
             return
 
         # Add resolved directory to session's added_dirs list
-        added_dirs = await deps.db.add_session_dir(
-            ctx.channel_id, ctx.thread_ts, str(resolved_dir)
-        )
+        added_dirs = await deps.db.add_session_dir(ctx.channel_id, ctx.thread_ts, str(resolved_dir))
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
@@ -308,9 +307,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             return
 
         # Remove directory from session's added_dirs list
-        remaining_dirs = await deps.db.remove_session_dir(
-            ctx.channel_id, ctx.thread_ts, directory
-        )
+        remaining_dirs = await deps.db.remove_session_dir(ctx.channel_id, ctx.thread_ts, directory)
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
@@ -490,7 +487,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     text=f"Unsupported Codex model: {normalized}",
-                    blocks=SlackFormatter.error_message(
+                    blocks=error_message(
                         f"Unsupported Codex model: `{normalized}`\n\n"
                         f"Supported Codex models:\n{supported}\n\n"
                         f"Optional effort suffixes: {effort_levels}, `extra-high`"
@@ -615,12 +612,14 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             effort_variants = []
             for model in codex_models:
                 for effort_key, effort_label in effort_labels.items():
-                    effort_variants.append({
-                        "name": f"{model['name']}-{effort_key}",
-                        "value": f"{model['value']}-{effort_key}",
-                        "display": f"{model['display']} ({effort_label})",
-                        "desc": model["desc"],
-                    })
+                    effort_variants.append(
+                        {
+                            "name": f"{model['name']}-{effort_key}",
+                            "value": f"{model['value']}-{effort_key}",
+                            "display": f"{model['display']} ({effort_label})",
+                            "desc": model["desc"],
+                        }
+                    )
             codex_models = codex_models + effort_variants
 
             # Get display name for current model
@@ -735,7 +734,11 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                         "type": "mrkdwn",
                         "text": (
                             f"*Custom Model*\nEnter any model ID (e.g., `claude-sonnet-4-6[1m]` or `gpt-5.3-codex-extra-high`)"
-                            + (f"\n_Currently using: `{normalized_current_model}`_" if is_custom_model else "")
+                            + (
+                                f"\n_Currently using: `{normalized_current_model}`_"
+                                if is_custom_model
+                                else ""
+                            )
                         ),
                     },
                     "accessory": {
@@ -826,18 +829,18 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                                ":lock: *Permissions*\n\n"
-                                f"*Current mode:* `{current_mode}`\n\n"
-                                "Use `/mode` to change permission modes:\n"
-                                "• `/mode ask` - Ask for approval on sensitive operations\n"
-                                "• `/mode plan` - Plan-only mode (no execution)\n"
-                                "• `/mode accept` - Auto-approve file edits\n"
-                                "• `/mode bypass` - Skip all permission checks"
-                            ),
-                        },
-                    }
-                ],
-            )
+                            ":lock: *Permissions*\n\n"
+                            f"*Current mode:* `{current_mode}`\n\n"
+                            "Use `/mode` to change permission modes:\n"
+                            "• `/mode ask` - Ask for approval on sensitive operations\n"
+                            "• `/mode plan` - Plan-only mode (no execution)\n"
+                            "• `/mode accept` - Auto-approve file edits\n"
+                            "• `/mode bypass` - Skip all permission checks"
+                        ),
+                    },
+                }
+            ],
+        )
 
     @app.command("/stats")
     @slack_command()

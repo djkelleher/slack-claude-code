@@ -12,7 +12,7 @@ from src.agents.models import AgentExecutionStatus, AgentSource
 from src.agents.registry import get_registry
 from src.config import config
 from src.utils.formatters.base import markdown_to_mrkdwn
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import error_message
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from ..base import CommandContext, HandlerDependencies, slack_command
@@ -55,9 +55,7 @@ def register_agents_command(app: AsyncApp, deps: HandlerDependencies) -> None:
             if len(parts) < 3:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
-                    blocks=SlackFormatter.error_message(
-                        "Usage: `/agents run <agent-name> <task description>`"
-                    ),
+                    blocks=error_message("Usage: `/agents run <agent-name> <task description>`"),
                 )
                 return
             agent_name = parts[1]
@@ -71,7 +69,7 @@ def register_agents_command(app: AsyncApp, deps: HandlerDependencies) -> None:
             if len(parts) < 2:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
-                    blocks=SlackFormatter.error_message("Usage: `/agents info <agent-name>`"),
+                    blocks=error_message("Usage: `/agents info <agent-name>`"),
                 )
                 return
             agent_name = parts[1]
@@ -80,7 +78,7 @@ def register_agents_command(app: AsyncApp, deps: HandlerDependencies) -> None:
         else:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
-                blocks=SlackFormatter.error_message(
+                blocks=error_message(
                     f"Unknown subcommand: `{subcommand}`\n\n"
                     "Valid commands: `list`, `run`, `create`, `info`"
                 ),
@@ -147,7 +145,7 @@ def register_agents_command(app: AsyncApp, deps: HandlerDependencies) -> None:
             await client.chat_postMessage(
                 channel=channel_id,
                 thread_ts=thread_ts,
-                blocks=SlackFormatter.error_message(f"Agent not found: `{agent_name}`"),
+                blocks=error_message(f"Agent not found: `{agent_name}`"),
             )
             return
 
@@ -168,8 +166,7 @@ def register_agents_command(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         # Execute agent with streaming
         await _run_agent_with_streaming(
-            deps, client, logger, channel_id, thread_ts, response["ts"],
-            agent, task, session
+            deps, client, logger, channel_id, thread_ts, response["ts"], agent, task, session
         )
 
 
@@ -210,7 +207,11 @@ async def _handle_list(ctx: CommandContext, registry) -> None:
 
             for agent in source_agents:
                 model_info = f" ({agent.model.value})" if agent.model.value != "inherit" else ""
-                desc = agent.description[:100] + "..." if len(agent.description) > 100 else agent.description
+                desc = (
+                    agent.description[:100] + "..."
+                    if len(agent.description) > 100
+                    else agent.description
+                )
                 blocks.append(
                     {
                         "type": "section",
@@ -268,7 +269,7 @@ async def _handle_run(ctx, deps, registry, session, agent_name: str, task: str) 
     if not agent:
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
-            blocks=SlackFormatter.error_message(f"Agent not found: `{agent_name}`"),
+            blocks=error_message(f"Agent not found: `{agent_name}`"),
         )
         return
 
@@ -288,8 +289,15 @@ async def _handle_run(ctx, deps, registry, session, agent_name: str, task: str) 
     )
 
     await _run_agent_with_streaming(
-        deps, ctx.client, ctx.logger, ctx.channel_id, ctx.thread_ts,
-        response["ts"], agent, task, session
+        deps,
+        ctx.client,
+        ctx.logger,
+        ctx.channel_id,
+        ctx.thread_ts,
+        response["ts"],
+        agent,
+        task,
+        session,
     )
 
 
@@ -403,9 +411,7 @@ async def _run_agent_with_streaming(
             blocks.append(
                 {
                     "type": "context",
-                    "elements": [
-                        {"type": "mrkdwn", "text": " | ".join(context_parts)}
-                    ],
+                    "elements": [{"type": "mrkdwn", "text": " | ".join(context_parts)}],
                 }
             )
 
@@ -421,7 +427,7 @@ async def _run_agent_with_streaming(
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
-            blocks=SlackFormatter.error_message(f"Agent error: {e}"),
+            blocks=error_message(f"Agent error: {e}"),
         )
 
 
@@ -503,7 +509,7 @@ async def _handle_info(ctx: CommandContext, registry, agent_name: str) -> None:
     if not agent:
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
-            blocks=SlackFormatter.error_message(f"Agent not found: `{agent_name}`"),
+            blocks=error_message(f"Agent not found: `{agent_name}`"),
         )
         return
 

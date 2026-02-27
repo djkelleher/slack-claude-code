@@ -4,7 +4,7 @@ from slack_bolt.async_app import AsyncApp
 
 from src.codex.capabilities import normalize_codex_approval_mode
 from src.config import config
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.session import session_cleanup_result, session_list
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
@@ -40,7 +40,7 @@ def register_codex_session_commands(app: AsyncApp, deps: HandlerDependencies) ->
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
-            blocks=SlackFormatter.session_list(sessions),
+            blocks=session_list(sessions),
         )
 
     @app.command("/codex-cleanup")
@@ -61,7 +61,7 @@ def register_codex_session_commands(app: AsyncApp, deps: HandlerDependencies) ->
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
-            blocks=SlackFormatter.session_cleanup_result(deleted_count, days),
+            blocks=session_cleanup_result(deleted_count, days),
         )
 
     @app.command("/codex-status")

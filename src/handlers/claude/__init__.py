@@ -8,14 +8,3 @@ from .mode import register_mode_command
 from .parallel import register_parallel_commands
 from .queue import register_queue_commands
 from .worktree import register_worktree_commands
-
-__all__ = [
-    "register_agents_command",
-    "register_cancel_commands",
-    "register_claude_cli_commands",
-    "register_git_commands",
-    "register_mode_command",
-    "register_parallel_commands",
-    "register_queue_commands",
-    "register_worktree_commands",
-]

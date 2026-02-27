@@ -141,7 +141,7 @@ def is_likely_plan_content(text: Optional[str]) -> bool:
         return False
 
     normalized = text.strip()
-    if len(normalized) < 80:
+    if len(normalized) < 100:
         return False
 
     lowered = normalized.lower()
@@ -154,16 +154,15 @@ def is_likely_plan_content(text: Optional[str]) -> bool:
     if any(marker in lowered for marker in early_exit_markers):
         return False
 
-    score = 0
-
-    if re.search(r"(?im)^\s{0,3}(#{1,6}\s+\S+|implementation plan\s*:|plan\s*:)", normalized):
-        score += 1
+    has_heading = bool(
+        re.search(
+            r"(?im)^\s{0,3}(#{1,6}\s+\S+|implementation plan\s*:|plan\s*:)",
+            normalized,
+        )
+    )
 
     numbered_steps = len(re.findall(r"(?im)^\s*(?:\d+\.\s+|\d+\)\s+)", normalized))
-    if numbered_steps >= 3:
-        score += 2
-    elif numbered_steps >= 2:
-        score += 1
+    bullet_steps = len(re.findall(r"(?im)^\s*[-*]\s+", normalized))
 
     section_keywords = (
         "implementation steps",
@@ -176,10 +175,14 @@ def is_likely_plan_content(text: Optional[str]) -> bool:
         "milestones",
     )
     keyword_hits = sum(1 for keyword in section_keywords if keyword in lowered)
-    if keyword_hits >= 2:
-        score += 1
 
-    return score >= 2
+    if numbered_steps >= 3:
+        return True
+    if numbered_steps >= 2 and (has_heading or keyword_hits >= 1):
+        return True
+    if has_heading and keyword_hits >= 2 and (numbered_steps >= 1 or bullet_steps >= 3):
+        return True
+    return False
 
 
 def is_claude_only_slash_command(command: str) -> bool:

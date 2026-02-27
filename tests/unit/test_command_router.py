@@ -21,7 +21,9 @@ class TestCommandRouter:
     async def test_execute_for_session_claude(self):
         """Claude sessions call Claude executor and persist Claude session ID."""
         deps = SimpleNamespace(
-            db=SimpleNamespace(update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()),
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()
+            ),
             executor=SimpleNamespace(execute=AsyncMock()),
             codex_executor=SimpleNamespace(execute=AsyncMock()),
         )
@@ -53,11 +55,17 @@ class TestCommandRouter:
     async def test_execute_for_session_codex(self):
         """Codex sessions call Codex executor and persist Codex session ID."""
         deps = SimpleNamespace(
-            db=SimpleNamespace(update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()),
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()
+            ),
             executor=SimpleNamespace(execute=AsyncMock()),
             codex_executor=SimpleNamespace(execute=AsyncMock()),
         )
-        deps.codex_executor.execute.return_value = SimpleNamespace(session_id="codex-new", success=True)
+        deps.codex_executor.execute.return_value = SimpleNamespace(
+            session_id="codex-new",
+            success=True,
+            output="",
+        )
 
         session = Session(
             id=9,
@@ -87,7 +95,9 @@ class TestCommandRouter:
     async def test_execute_for_session_codex_without_executor(self):
         """Codex routing fails fast when no Codex executor is configured."""
         deps = SimpleNamespace(
-            db=SimpleNamespace(update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()),
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()
+            ),
             executor=SimpleNamespace(execute=AsyncMock()),
             codex_executor=None,
         )
@@ -107,11 +117,17 @@ class TestCommandRouter:
     async def test_execute_for_session_codex_plan_mode_enriches_prompt(self):
         """Codex plan mode appends plan-only guidance to the prompt."""
         deps = SimpleNamespace(
-            db=SimpleNamespace(update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()),
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()
+            ),
             executor=SimpleNamespace(execute=AsyncMock()),
             codex_executor=SimpleNamespace(execute=AsyncMock()),
         )
-        deps.codex_executor.execute.return_value = SimpleNamespace(session_id="codex-new", success=True)
+        deps.codex_executor.execute.return_value = SimpleNamespace(
+            session_id="codex-new",
+            success=True,
+            output="",
+        )
 
         session = Session(
             id=11,

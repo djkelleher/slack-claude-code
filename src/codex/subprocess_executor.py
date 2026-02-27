@@ -55,15 +55,10 @@ class SubprocessExecutor:
         resume_session_id: Optional[str] = None,
         execution_id: Optional[str] = None,
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]] = None,
-        on_user_input_request: Optional[
-            Callable[[str, dict], Awaitable[Optional[dict]]]
-        ] = None,
-        on_approval_request: Optional[
-            Callable[[str, dict], Awaitable[Optional[dict]]]
-        ] = None,
+        on_user_input_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]] = None,
+        on_approval_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]] = None,
         sandbox_mode: Optional[str] = None,
         approval_mode: Optional[str] = None,
-        permission_mode: Optional[str] = None,
         db_session_id: Optional[int] = None,
         model: Optional[str] = None,
         channel_id: Optional[str] = None,
@@ -82,7 +77,6 @@ class SubprocessExecutor:
             on_approval_request: Callback for command/file/skill approval prompts.
             sandbox_mode: Sandbox mode (read-only, workspace-write, danger-full-access).
             approval_mode: Approval mode (untrusted, on-request, never).
-            permission_mode: Session mode (plan/default/etc), retained for compatibility.
             db_session_id: Database session ID for tracking.
             model: Model to use (e.g., "gpt-5.3-codex").
             channel_id: Slack channel ID (for process tracking).
@@ -91,8 +85,6 @@ class SubprocessExecutor:
         Returns:
             ExecutionResult with command output.
         """
-        del permission_mode  # app-server transport is uniform across session modes
-
         log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
         effective_prompt = self._build_effective_prompt(prompt, log_prefix)
 
@@ -134,9 +126,7 @@ class SubprocessExecutor:
         resume_session_id: Optional[str],
         execution_id: Optional[str],
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]],
-        on_user_input_request: Optional[
-            Callable[[str, dict], Awaitable[Optional[dict]]]
-        ],
+        on_user_input_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]],
         on_approval_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]],
         sandbox_mode: Optional[str],
         approval_mode: Optional[str],
@@ -219,9 +209,7 @@ class SubprocessExecutor:
             nonlocal cost_usd, duration_ms, error_msg
 
             if msg.type == "assistant" and msg.content:
-                preview = (
-                    msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
-                )
+                preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
                 logger.debug(f"{log_prefix}Codex: {preview}")
             elif msg.type == "tool_call":
                 for tool in msg.tool_activities:
@@ -237,20 +225,14 @@ class SubprocessExecutor:
             elif msg.type == "error":
                 logger.error(f"{log_prefix}Error: {msg.content}")
             elif msg.type == "result":
-                duration_display = (
-                    msg.duration_ms if msg.duration_ms is not None else "?"
-                )
-                logger.info(
-                    f"{log_prefix}Codex Finished - completed in {duration_display}ms"
-                )
+                duration_display = msg.duration_ms if msg.duration_ms is not None else "?"
+                logger.info(f"{log_prefix}Codex Finished - completed in {duration_display}ms")
 
             if msg.session_id:
                 result_session_id = msg.session_id
 
             if msg.type == "assistant" and msg.content:
-                accumulated_output = _concat_with_spacing(
-                    accumulated_output, msg.content
-                )
+                accumulated_output = _concat_with_spacing(accumulated_output, msg.content)
 
             if msg.type == "result":
                 cost_usd = msg.cost_usd
@@ -294,9 +276,7 @@ class SubprocessExecutor:
                 if thread_id:
                     result_session_id = str(thread_id)
                     msg = parser.parse_line(
-                        json.dumps(
-                            {"type": "thread.started", "thread_id": str(thread_id)}
-                        )
+                        json.dumps({"type": "thread.started", "thread_id": str(thread_id)})
                     )
                     if msg:
                         return await handle_stream_message(msg)
@@ -367,18 +347,14 @@ class SubprocessExecutor:
                         else str(turn_error or "Codex turn failed")
                     )
                     msg = parser.parse_line(
-                        json.dumps(
-                            {"type": "turn.failed", "error": {"message": error_text}}
-                        )
+                        json.dumps({"type": "turn.failed", "error": {"message": error_text}})
                     )
                 else:
                     msg = parser.parse_line(
                         json.dumps(
                             {
                                 "type": "turn.completed",
-                                "duration_ms": int(
-                                    (time.monotonic() - started_at) * 1000
-                                ),
+                                "duration_ms": int((time.monotonic() - started_at) * 1000),
                             }
                         )
                     )
@@ -561,9 +537,7 @@ class SubprocessExecutor:
             if resume_session_id:
                 thread_method = "thread/resume"
                 thread_params["threadId"] = resume_session_id
-                logger.info(
-                    f"{log_prefix}Resuming session via app-server: {resume_session_id}"
-                )
+                logger.info(f"{log_prefix}Resuming session via app-server: {resume_session_id}")
 
             thread_req_id = await send_request(thread_method, thread_params)
             thread_resp = await await_response(thread_req_id)
@@ -766,9 +740,7 @@ class SubprocessExecutor:
         try:
             preamble = preamble_path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
-            logger.debug(
-                f"{log_prefix}No default Codex instructions file at {preamble_path}"
-            )
+            logger.debug(f"{log_prefix}No default Codex instructions file at {preamble_path}")
             return prompt
         except Exception as e:
             logger.warning(

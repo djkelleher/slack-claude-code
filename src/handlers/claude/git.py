@@ -4,7 +4,7 @@ from slack_bolt.async_app import AsyncApp
 
 from src.config import config
 from src.git.service import GitError, GitService
-from src.utils.formatting import SlackFormatter
+from src.utils.formatters.command import error_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
@@ -38,9 +38,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     text="Not a git repository",
-                    blocks=SlackFormatter.error_message(
-                        f"Not a git repository: {session.working_directory}"
-                    ),
+                    blocks=error_message(f"Not a git repository: {session.working_directory}"),
                 )
                 return
 
@@ -94,7 +92,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Git error: {e}",
-                blocks=SlackFormatter.error_message(f"Git error: {e}"),
+                blocks=error_message(f"Git error: {e}"),
             )
 
     @app.command("/status")
@@ -111,9 +109,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     text="Not a git repository",
-                    blocks=SlackFormatter.error_message(
-                        f"Not a git repository: {session.working_directory}"
-                    ),
+                    blocks=error_message(f"Not a git repository: {session.working_directory}"),
                 )
                 return
 
@@ -173,7 +169,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Git error: {e}",
-                blocks=SlackFormatter.error_message(f"Git error: {e}"),
+                blocks=error_message(f"Git error: {e}"),
             )
 
     @app.command("/commit")
@@ -190,9 +186,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     text="Not a git repository",
-                    blocks=SlackFormatter.error_message(
-                        f"Not a git repository: {session.working_directory}"
-                    ),
+                    blocks=error_message(f"Not a git repository: {session.working_directory}"),
                 )
                 return
 
@@ -217,7 +211,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Git error: {e}",
-                blocks=SlackFormatter.error_message(f"Git error: {e}"),
+                blocks=error_message(f"Git error: {e}"),
             )
 
     @app.command("/branch")
@@ -234,9 +228,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     text="Not a git repository",
-                    blocks=SlackFormatter.error_message(
-                        f"Not a git repository: {session.working_directory}"
-                    ),
+                    blocks=error_message(f"Not a git repository: {session.working_directory}"),
                 )
                 return
 
@@ -304,7 +296,7 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     text="Invalid usage",
-                    blocks=SlackFormatter.error_message(
+                    blocks=error_message(
                         "Usage: `/branch` or `/branch create <name>` or `/branch switch <name>`"
                     ),
                 )
@@ -313,5 +305,5 @@ def register_git_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 text=f"Git error: {e}",
-                blocks=SlackFormatter.error_message(f"Git error: {e}"),
+                blocks=error_message(f"Git error: {e}"),
             )
