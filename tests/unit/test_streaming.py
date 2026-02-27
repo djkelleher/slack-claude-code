@@ -41,6 +41,27 @@ class TestConcatWithSpacing:
         assert _concat_with_spacing("", "") == ""
 
 
+class TestToolInputSummary:
+    """Tests for tool input summary formatting."""
+
+    def test_create_input_summary_read_truncates_path(self):
+        """Read summary should include truncated file path."""
+        path = "/very/long/path/" + ("nested/" * 20) + "file.py"
+        summary = ToolActivity.create_input_summary("Read", {"file_path": path})
+        assert summary.startswith("`...")
+        assert summary.endswith("file.py`")
+
+    def test_create_input_summary_task_uses_description_fallback(self):
+        """Task summary should use description when available and fallback to prompt."""
+        summary_with_description = ToolActivity.create_input_summary(
+            "Task",
+            {"description": "Summarize repository state", "prompt": "ignored"},
+        )
+        summary_with_prompt = ToolActivity.create_input_summary("Task", {"prompt": "Do X"})
+        assert "Summarize repository state" in summary_with_description
+        assert "Do X" in summary_with_prompt
+
+
 class TestStreamingMessageState:
     """Tests for StreamingMessageState class."""
 

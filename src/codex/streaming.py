@@ -9,9 +9,25 @@ from loguru import logger
 
 from src.claude.streaming import _concat_with_spacing
 from src.config import config
+from src.utils.tool_input_summary import format_tool_input_summary
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
 MAX_BUFFER_SIZE = 1024 * 1024  # 1MB
+
+CODEX_TOOL_SUMMARY_RULES = {
+    "read_file": {"type": "path", "keys": ["path", "file_path"]},
+    "edit_file": {"type": "path", "keys": ["path", "file_path"]},
+    "write_file": {"type": "path", "keys": ["path", "file_path"]},
+    "shell": {"type": "cmd", "keys": ["command", "cmd"]},
+    "run_command": {"type": "cmd", "keys": ["command", "cmd"]},
+    "glob": {"type": "pattern", "keys": ["pattern"]},
+    "find_files": {"type": "pattern", "keys": ["pattern"]},
+    "grep": {"type": "pattern", "keys": ["pattern", "query"]},
+    "search": {"type": "pattern", "keys": ["pattern", "query"]},
+    "web_fetch": {"type": "url", "keys": ["url"]},
+    "web_search": {"type": "text", "keys": ["query"]},
+    "request_user_input": {"type": "first_question", "keys": ["questions"]},
+}
 
 
 @dataclass
@@ -36,60 +52,7 @@ class ToolActivity:
     def create_input_summary(cls, name: str, input_dict: dict) -> str:
         """Create a short summary of tool input for inline display."""
         display = config.timeouts.display
-        if name == "read_file":
-            path = input_dict.get("path", input_dict.get("file_path", "?"))
-            return f"`{cls._truncate_path(path, display.truncate_path_length)}`"
-        elif name == "edit_file":
-            path = input_dict.get("path", input_dict.get("file_path", "?"))
-            return f"`{cls._truncate_path(path, display.truncate_path_length)}`"
-        elif name == "write_file":
-            path = input_dict.get("path", input_dict.get("file_path", "?"))
-            return f"`{cls._truncate_path(path, display.truncate_path_length)}`"
-        elif name == "shell" or name == "run_command":
-            cmd = input_dict.get("command", input_dict.get("cmd", "?"))
-            return f"`{cls._truncate_cmd(cmd, display.truncate_cmd_length)}`"
-        elif name == "glob" or name == "find_files":
-            pattern = input_dict.get("pattern", "?")
-            max_len = display.truncate_pattern_length
-            return f"`{pattern[:max_len]}{'...' if len(pattern) > max_len else ''}`"
-        elif name == "grep" or name == "search":
-            pattern = input_dict.get("pattern", input_dict.get("query", "?"))
-            max_len = display.truncate_pattern_length
-            return f"`{pattern[:max_len]}{'...' if len(str(pattern)) > max_len else ''}`"
-        elif name == "web_fetch":
-            url = input_dict.get("url", "?")
-            max_len = display.truncate_url_length
-            return f"`{url[:max_len]}{'...' if len(url) > max_len else ''}`"
-        elif name == "web_search":
-            query = input_dict.get("query", "?")
-            max_len = display.truncate_text_length
-            return f"`{query[:max_len]}{'...' if len(query) > max_len else ''}`"
-        elif name == "request_user_input":
-            questions = input_dict.get("questions", [])
-            if questions and isinstance(questions, list):
-                first = questions[0] if isinstance(questions[0], dict) else {}
-                first_q = first.get("question", "")
-                max_len = display.truncate_text_length
-                return f"`{first_q[:max_len]}{'...' if len(first_q) > max_len else ''}`"
-            return ""
-        else:
-            # Generic summary
-            return ""
-
-    @staticmethod
-    def _truncate_path(path: str, max_len: int = 45) -> str:
-        """Truncate file path, keeping filename visible."""
-        if len(path) <= max_len:
-            return path
-        return "..." + path[-(max_len - 3) :]
-
-    @staticmethod
-    def _truncate_cmd(cmd: str, max_len: int = 50) -> str:
-        """Truncate command for display."""
-        cmd = cmd.replace("\n", " ").strip()
-        if len(cmd) <= max_len:
-            return cmd
-        return cmd[: max_len - 3] + "..."
+        return format_tool_input_summary(name, input_dict, display, CODEX_TOOL_SUMMARY_RULES)
 
 
 @dataclass

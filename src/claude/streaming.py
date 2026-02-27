@@ -6,10 +6,26 @@ from typing import Iterator, Optional
 from loguru import logger
 
 from src.config import config
+from src.utils.tool_input_summary import format_tool_input_summary
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
 # Increased to 1MB to handle large file reads and tool outputs
 MAX_BUFFER_SIZE = 1024 * 1024  # 1MB
+
+CLAUDE_TOOL_SUMMARY_RULES = {
+    "Read": {"type": "path", "keys": ["file_path"]},
+    "Edit": {"type": "path", "keys": ["file_path"]},
+    "Write": {"type": "path", "keys": ["file_path"]},
+    "Bash": {"type": "cmd", "keys": ["command"]},
+    "Glob": {"type": "pattern", "keys": ["pattern"]},
+    "Grep": {"type": "pattern", "keys": ["pattern"]},
+    "Task": {"type": "text", "keys": ["description", "prompt"]},
+    "WebFetch": {"type": "url", "keys": ["url"]},
+    "WebSearch": {"type": "text", "keys": ["query"]},
+    "LSP": {"type": "lsp", "op_key": "operation", "path_keys": ["filePath"]},
+    "TodoWrite": {"type": "count", "keys": ["todos"], "suffix": " items"},
+    "AskUserQuestion": {"type": "first_question", "keys": ["questions"]},
+}
 
 
 def _concat_with_spacing(existing: str, new: str) -> str:
@@ -50,70 +66,7 @@ class ToolActivity:
     def create_input_summary(cls, name: str, input_dict: dict) -> str:
         """Create a short summary of tool input for inline display."""
         display = config.timeouts.display
-        if name == "Read":
-            path = input_dict.get("file_path", "?")
-            return f"`{cls._truncate_path(path, display.truncate_path_length)}`"
-        elif name == "Edit":
-            path = input_dict.get("file_path", "?")
-            return f"`{cls._truncate_path(path, display.truncate_path_length)}`"
-        elif name == "Write":
-            path = input_dict.get("file_path", "?")
-            return f"`{cls._truncate_path(path, display.truncate_path_length)}`"
-        elif name == "Bash":
-            cmd = input_dict.get("command", "?")
-            return f"`{cls._truncate_cmd(cmd, display.truncate_cmd_length)}`"
-        elif name == "Glob":
-            pattern = input_dict.get("pattern", "?")
-            max_len = display.truncate_pattern_length
-            return f"`{pattern[:max_len]}{'...' if len(pattern) > max_len else ''}`"
-        elif name == "Grep":
-            pattern = input_dict.get("pattern", "?")
-            max_len = display.truncate_pattern_length
-            return f"`{pattern[:max_len]}{'...' if len(pattern) > max_len else ''}`"
-        elif name == "Task":
-            desc = input_dict.get("description", input_dict.get("prompt", "?"))
-            max_len = display.truncate_text_length
-            return f"`{desc[:max_len]}{'...' if len(str(desc)) > max_len else ''}`"
-        elif name == "WebFetch":
-            url = input_dict.get("url", "?")
-            max_len = display.truncate_url_length
-            return f"`{url[:max_len]}{'...' if len(url) > max_len else ''}`"
-        elif name == "WebSearch":
-            query = input_dict.get("query", "?")
-            max_len = display.truncate_text_length
-            return f"`{query[:max_len]}{'...' if len(query) > max_len else ''}`"
-        elif name == "LSP":
-            op = input_dict.get("operation", "?")
-            path = input_dict.get("filePath", "?")
-            return f"`{op}` on `{cls._truncate_path(path, display.truncate_path_length)}`"
-        elif name == "TodoWrite":
-            todos = input_dict.get("todos", [])
-            return f"`{len(todos)} items`"
-        elif name == "AskUserQuestion":
-            questions = input_dict.get("questions", [])
-            if questions:
-                first_q = questions[0].get("question", "?")
-                max_len = display.truncate_text_length
-                return f"`{first_q[:max_len]}{'...' if len(first_q) > max_len else ''}`"
-            return ""
-        else:
-            # Generic summary
-            return ""
-
-    @staticmethod
-    def _truncate_path(path: str, max_len: int = 45) -> str:
-        """Truncate file path, keeping filename visible."""
-        if len(path) <= max_len:
-            return path
-        return "..." + path[-(max_len - 3) :]
-
-    @staticmethod
-    def _truncate_cmd(cmd: str, max_len: int = 50) -> str:
-        """Truncate command for display."""
-        cmd = cmd.replace("\n", " ").strip()
-        if len(cmd) <= max_len:
-            return cmd
-        return cmd[: max_len - 3] + "..."
+        return format_tool_input_summary(name, input_dict, display, CLAUDE_TOOL_SUMMARY_RULES)
 
 
 @dataclass

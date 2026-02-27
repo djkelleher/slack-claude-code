@@ -1,6 +1,20 @@
 """Unit tests for Codex stream parser compatibility."""
 
-from src.codex.streaming import StreamParser
+from src.codex.streaming import StreamParser, ToolActivity
+
+
+def test_codex_tool_input_summary_formats_command_and_question():
+    """Tool summary should format both command and request_user_input payloads."""
+    command_summary = ToolActivity.create_input_summary(
+        "run_command", {"command": "echo hello from codex"}
+    )
+    question_summary = ToolActivity.create_input_summary(
+        "request_user_input",
+        {"questions": [{"question": "Proceed with deploy?"}]},
+    )
+
+    assert "echo hello from codex" in command_summary
+    assert "Proceed with deploy?" in question_summary
 
 
 def test_parse_new_schema_agent_message_and_turn_complete():

@@ -217,15 +217,17 @@ async def _process_queue(
         # Mark as running
         await deps.db.update_queue_item_status(item.id, "running")
 
-        # Notify channel
-        response = await client.chat_postMessage(
-            channel=channel_id,
-            text=f"Processing queue item #{item.id}",
-            blocks=queue_item_running(item),
-        )
-        message_ts = response["ts"]
+        message_ts = None
 
         try:
+            # Notify channel
+            response = await client.chat_postMessage(
+                channel=channel_id,
+                text=f"Processing queue item #{item.id}",
+                blocks=queue_item_running(item),
+            )
+            message_ts = response["ts"]
+
             # Queue processing uses channel-level sessions (no thread_ts).
             session = await deps.db.get_or_create_session(
                 channel_id, thread_ts=None, default_cwd=config.DEFAULT_WORKING_DIR
@@ -262,12 +264,19 @@ async def _process_queue(
         except Exception as e:
             log.error(f"Queue item {item.id} failed: {e}")
             await deps.db.update_queue_item_status(item.id, "failed", error_message=str(e))
-            await client.chat_update(
-                channel=channel_id,
-                ts=message_ts,
-                text=f"Queue item #{item.id} failed",
-                blocks=error_message(f"Queue item failed: {e}"),
-            )
+            if message_ts:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text=f"Queue item #{item.id} failed",
+                    blocks=error_message(f"Queue item failed: {e}"),
+                )
+            else:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    text=f"Queue item #{item.id} failed",
+                    blocks=error_message(f"Queue item failed: {e}"),
+                )
 
         # Small delay between items to avoid rate limits
         await asyncio.sleep(0.5)

@@ -364,3 +364,21 @@ D  deleted.py"""
 
                 with pytest.raises(GitError, match="timed out"):
                     await service._run_git_command(str(tmp_path), "status")
+
+    @pytest.mark.asyncio
+    async def test_run_git_command_preserves_zero_return_code(self, tmp_path):
+        """_run_git_command should preserve a successful exit code of 0."""
+        service = GitService()
+
+        with patch.object(service, "_validate_working_directory"):
+            with patch("asyncio.create_subprocess_exec") as mock_exec:
+                mock_process = AsyncMock()
+                mock_process.communicate = AsyncMock(return_value=(b"ok\n", b""))
+                mock_process.returncode = 0
+                mock_exec.return_value = mock_process
+
+                stdout, stderr, returncode = await service._run_git_command(str(tmp_path), "status")
+
+                assert stdout == "ok"
+                assert stderr == ""
+                assert returncode == 0

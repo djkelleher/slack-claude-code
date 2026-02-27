@@ -75,7 +75,8 @@ class GitService:
             stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
             stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
 
-            return stdout, stderr, process.returncode or -1
+            returncode = process.returncode if process.returncode is not None else -1
+            return stdout, stderr, returncode
 
         except asyncio.TimeoutError:
             if process:
@@ -382,7 +383,7 @@ class GitService:
 
         for line in stdout.split("\n"):
             if line.startswith("worktree "):
-                return line[len("worktree "):]
+                return line[len("worktree ") :]
 
         # Fallback
         stdout, stderr, returncode = await self._run_git_command(
@@ -424,9 +425,7 @@ class GitService:
                     worktrees.append(
                         Worktree(
                             path=current_wt.get("worktree", ""),
-                            branch=current_wt.get("branch", "").replace(
-                                "refs/heads/", ""
-                            ),
+                            branch=current_wt.get("branch", "").replace("refs/heads/", ""),
                             commit=current_wt.get("HEAD", ""),
                             is_main=is_first,
                         )
@@ -436,11 +435,11 @@ class GitService:
                 continue
 
             if line.startswith("worktree "):
-                current_wt["worktree"] = line[len("worktree "):]
+                current_wt["worktree"] = line[len("worktree ") :]
             elif line.startswith("HEAD "):
-                current_wt["HEAD"] = line[len("HEAD "):]
+                current_wt["HEAD"] = line[len("HEAD ") :]
             elif line.startswith("branch "):
-                current_wt["branch"] = line[len("branch "):]
+                current_wt["branch"] = line[len("branch ") :]
             elif line == "detached":
                 current_wt["branch"] = "(detached HEAD)"
 
@@ -529,9 +528,7 @@ class GitService:
 
         return True
 
-    async def merge_branch(
-        self, working_directory: str, branch_name: str
-    ) -> tuple[bool, str]:
+    async def merge_branch(self, working_directory: str, branch_name: str) -> tuple[bool, str]:
         """Merge a branch into the current branch.
 
         Parameters

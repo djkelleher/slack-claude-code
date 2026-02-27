@@ -21,10 +21,22 @@ DB_TIMEOUT = 30.0
 
 
 class DatabaseRepository:
+    _SESSION_SCOPE_WHERE = """channel_id = ? AND (
+                       (thread_ts = ? AND ? IS NOT NULL) OR
+                       (thread_ts IS NULL AND ? IS NULL)
+                   )"""
+
     def __init__(self, db_path: str, timeout: float = DB_TIMEOUT):
         self.db_path = db_path
         self.timeout = timeout
         self._initialized = False
+
+    @staticmethod
+    def _session_scope_params(
+        channel_id: str, thread_ts: Optional[str]
+    ) -> tuple[Optional[str], ...]:
+        """Return standard SQL parameters for channel/thread scoped session queries."""
+        return (channel_id, thread_ts, thread_ts, thread_ts)
 
     def _get_connection(self) -> aiosqlite.Connection:
         return aiosqlite.connect(self.db_path, timeout=self.timeout)
@@ -76,14 +88,11 @@ class DatabaseRepository:
             # Find best existing session for this channel/thread pair.
             # If duplicate NULL-thread rows exist, prefer the most populated one.
             cursor = await db.execute(
-                """SELECT id, channel_id, thread_ts, working_directory,
+                f"""SELECT id, channel_id, thread_ts, working_directory,
                           claude_session_id, permission_mode, created_at, last_active,
                           model, added_dirs, codex_session_id, sandbox_mode, approval_mode
                    FROM sessions
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )
+                   WHERE {self._SESSION_SCOPE_WHERE}
                    ORDER BY
                        ((CASE WHEN model IS NOT NULL THEN 1 ELSE 0 END) +
                         (CASE WHEN codex_session_id IS NOT NULL THEN 1 ELSE 0 END) +
@@ -92,7 +101,7 @@ class DatabaseRepository:
                        last_active DESC,
                        id DESC
                    LIMIT 1""",
-                (channel_id, thread_ts, thread_ts, thread_ts),
+                self._session_scope_params(channel_id, thread_ts),
             )
             row = await cursor.fetchone()
 
@@ -147,18 +156,12 @@ class DatabaseRepository:
         """Update the working directory for a session."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET working_directory = ?, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET working_directory = ?, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     cwd,
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
 
@@ -168,18 +171,12 @@ class DatabaseRepository:
         """Update the Claude session ID for resume functionality."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET claude_session_id = ?, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET claude_session_id = ?, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     claude_session_id,
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
 
@@ -189,17 +186,11 @@ class DatabaseRepository:
         """Clear the Claude session ID to start fresh (used by /clear command)."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET claude_session_id = NULL, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET claude_session_id = NULL, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
 
@@ -209,18 +200,12 @@ class DatabaseRepository:
         """Update the permission mode for a session."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET permission_mode = ?, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET permission_mode = ?, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     permission_mode,
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
 
@@ -230,18 +215,12 @@ class DatabaseRepository:
         """Update the model for a session."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET model = ?, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET model = ?, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     model,
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
 
@@ -255,12 +234,9 @@ class DatabaseRepository:
         async with self._transact() as db:
             # Get current directories
             cursor = await db.execute(
-                """SELECT added_dirs FROM sessions
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
-                (channel_id, thread_ts, thread_ts, thread_ts),
+                f"""SELECT added_dirs FROM sessions
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
+                self._session_scope_params(channel_id, thread_ts),
             )
             row = await cursor.fetchone()
             current_dirs = json.loads(row[0]) if row and row[0] else []
@@ -271,18 +247,12 @@ class DatabaseRepository:
 
             # Update database
             await db.execute(
-                """UPDATE sessions SET added_dirs = ?, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET added_dirs = ?, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     json.dumps(current_dirs),
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
             return current_dirs
@@ -297,12 +267,9 @@ class DatabaseRepository:
         async with self._transact() as db:
             # Get current directories
             cursor = await db.execute(
-                """SELECT added_dirs FROM sessions
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
-                (channel_id, thread_ts, thread_ts, thread_ts),
+                f"""SELECT added_dirs FROM sessions
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
+                self._session_scope_params(channel_id, thread_ts),
             )
             row = await cursor.fetchone()
             current_dirs = json.loads(row[0]) if row and row[0] else []
@@ -313,18 +280,12 @@ class DatabaseRepository:
 
             # Update database
             await db.execute(
-                """UPDATE sessions SET added_dirs = ?, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET added_dirs = ?, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     json.dumps(current_dirs) if current_dirs else None,
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
             return current_dirs
@@ -333,17 +294,11 @@ class DatabaseRepository:
         """Clear all added directories from a session."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET added_dirs = NULL, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET added_dirs = NULL, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
 
@@ -351,12 +306,9 @@ class DatabaseRepository:
         """Get the list of added directories for a session."""
         async with self._get_connection() as db:
             cursor = await db.execute(
-                """SELECT added_dirs FROM sessions
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
-                (channel_id, thread_ts, thread_ts, thread_ts),
+                f"""SELECT added_dirs FROM sessions
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
+                self._session_scope_params(channel_id, thread_ts),
             )
             row = await cursor.fetchone()
             return json.loads(row[0]) if row and row[0] else []
@@ -378,12 +330,9 @@ class DatabaseRepository:
         """Delete a specific session."""
         async with self._get_connection() as db:
             cursor = await db.execute(
-                """DELETE FROM sessions
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
-                (channel_id, thread_ts, thread_ts, thread_ts),
+                f"""DELETE FROM sessions
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
+                self._session_scope_params(channel_id, thread_ts),
             )
             await db.commit()
             return cursor.rowcount > 0
@@ -877,18 +826,12 @@ class DatabaseRepository:
         """Update the Codex session ID for resume functionality."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET codex_session_id = ?, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET codex_session_id = ?, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     codex_session_id,
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
 
@@ -898,17 +841,11 @@ class DatabaseRepository:
         """Clear the Codex session ID to start fresh."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET codex_session_id = NULL, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET codex_session_id = NULL, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
 
@@ -918,18 +855,12 @@ class DatabaseRepository:
         """Update the sandbox mode for a session (Codex)."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET sandbox_mode = ?, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET sandbox_mode = ?, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     sandbox_mode,
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
 
@@ -939,17 +870,11 @@ class DatabaseRepository:
         """Update the approval mode for a session (Codex)."""
         async with self._transact() as db:
             await db.execute(
-                """UPDATE sessions SET approval_mode = ?, last_active = ?
-                   WHERE channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )""",
+                f"""UPDATE sessions SET approval_mode = ?, last_active = ?
+                   WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     approval_mode,
                     datetime.now(timezone.utc).isoformat(),
-                    channel_id,
-                    thread_ts,
-                    thread_ts,
-                    thread_ts,
+                    *self._session_scope_params(channel_id, thread_ts),
                 ),
             )
