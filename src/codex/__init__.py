@@ -1,4 +1,4 @@
-"""Codex CLI execution layer."""
+"""Codex app-server execution layer."""
 
 from .capabilities import (
     COMPAT_MODE_ALIASES,

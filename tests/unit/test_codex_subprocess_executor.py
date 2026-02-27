@@ -1,18 +1,24 @@
-"""Unit tests for Codex subprocess executor command construction."""
+"""Unit tests for Codex app-server subprocess executor."""
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.config import config
-from src.codex.subprocess_executor import ExecutionResult, SubprocessExecutor
+from src.codex.subprocess_executor import SubprocessExecutor
 
 
 class _DummyStdout:
     """Simple async stdout stream for subprocess mocks."""
 
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = [line + "\n" for line in lines]
+
     async def readline(self) -> bytes:
-        return b""
+        if not self._lines:
+            return b""
+        return self._lines.pop(0).encode("utf-8")
 
 
 class _DummyStderr:
@@ -22,205 +28,423 @@ class _DummyStderr:
         return b""
 
 
+class _DummyStdin:
+    """Capture JSON-RPC writes sent to app-server stdin."""
+
+    def __init__(self) -> None:
+        self.writes: list[str] = []
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data.decode("utf-8"))
+
+    async def drain(self) -> None:
+        return None
+
+
 class _DummyProcess:
     """Simple subprocess mock compatible with asyncio interfaces."""
 
-    def __init__(self) -> None:
-        self.stdout = _DummyStdout()
+    def __init__(self, lines: list[str]) -> None:
+        self.stdin = _DummyStdin()
+        self.stdout = _DummyStdout(lines)
         self.stderr = _DummyStderr()
-        self.returncode = 0
+        self.returncode = None
 
     async def wait(self) -> int:
+        if self.returncode is None:
+            self.returncode = 0
         return self.returncode
 
     def terminate(self) -> None:
-        self.returncode = -1
+        self.returncode = 0
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+
+def _json_line(payload: dict) -> str:
+    return json.dumps(payload)
+
+
+def _sent_messages(process: _DummyProcess) -> list[dict]:
+    messages: list[dict] = []
+    for chunk in process.stdin.writes:
+        for line in chunk.splitlines():
+            line = line.strip()
+            if line:
+                messages.append(json.loads(line))
+    return messages
+
+
+def _sent_requests(process: _DummyProcess) -> list[dict]:
+    return [
+        msg for msg in _sent_messages(process) if "method" in msg and "params" in msg
+    ]
+
+
+def _sent_responses(process: _DummyProcess) -> list[dict]:
+    return [msg for msg in _sent_messages(process) if "id" in msg and "result" in msg]
 
 
 class TestCodexSubprocessExecutor:
-    """Tests for Codex CLI command construction."""
+    """Tests for app-server execution behavior."""
 
     @pytest.mark.asyncio
-    async def test_resume_uses_dangerous_bypass_and_supported_positional_order(self):
-        """Resume commands place options before session/prompt and skip unsupported flags."""
-        executor = SubprocessExecutor()
-        process = _DummyProcess()
+    async def test_execute_uses_app_server_and_passes_thread_params(self, monkeypatch):
+        """Executor should start app-server and send thread/start + turn/start with settings."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
         with patch(
-            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
         ) as mock_exec:
             result = await executor.execute(
-                prompt="follow-up prompt",
+                prompt="build feature",
                 working_directory="/tmp/workspace",
-                resume_session_id="019c922c-2b7a-7782-80c7-f83fb79ca53c",
-                sandbox_mode="workspace-write",
-                approval_mode="on-request",
+                sandbox_mode="danger-full-access",
+                approval_mode="never",
                 model="gpt-5.3-codex-high",
             )
 
         args = mock_exec.await_args.args
-
-        assert args[:5] == (
-            "codex",
-            "--dangerously-bypass-approvals-and-sandbox",
-            "exec",
-            "resume",
-            "--json",
-        )
-        assert "--sandbox" not in args
-        assert "--cd" not in args
-        assert "--full-auto" not in args
-        assert args[-2] == "019c922c-2b7a-7782-80c7-f83fb79ca53c"
-        assert args[-1] == "follow-up prompt"
+        assert args[:4] == ("codex", "app-server", "--listen", "stdio://")
         assert result.success is True
+        assert result.session_id == "thread-1"
+
+        requests = _sent_requests(process)
+        methods = [req["method"] for req in requests]
+        assert methods == ["initialize", "thread/start", "turn/start"]
+
+        thread_start = requests[1]
+        assert thread_start["params"]["cwd"] == "/tmp/workspace"
+        assert thread_start["params"]["approvalPolicy"] == "never"
+        assert thread_start["params"]["sandbox"] == "danger-full-access"
+        assert thread_start["params"]["model"] == "gpt-5.3-codex"
+
+        turn_start = requests[2]
+        assert turn_start["params"]["threadId"] == "thread-1"
+        assert turn_start["params"]["effort"] == "high"
+        assert turn_start["params"]["input"][0]["text"] == "build feature"
 
     @pytest.mark.asyncio
-    async def test_new_execution_uses_dangerous_bypass_and_cd(self):
-        """New executions use dangerous bypass wrapper behavior and still pass --cd."""
-        executor = SubprocessExecutor()
-        process = _DummyProcess()
+    async def test_user_input_request_uses_callback_response(self, monkeypatch):
+        """request_user_input server requests should be answered by callback payload."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
+        question = {
+            "id": "q_1",
+            "question": "Proceed?",
+            "header": "Confirm",
+            "options": [{"label": "Yes", "description": "Continue"}],
+        }
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 10,
+                        "method": "item/tool/requestUserInput",
+                        "params": {"itemId": "item_1", "questions": [question]},
+                    }
+                ),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        callback_payload = {"answers": {"q_1": {"answers": ["Yes"]}}}
+        on_user_input_request = AsyncMock(return_value=callback_payload)
+
+        executor = SubprocessExecutor()
         with patch(
-            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
-        ) as mock_exec:
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
             result = await executor.execute(
-                prompt="new prompt",
+                prompt="continue",
                 working_directory="/tmp/workspace",
-                resume_session_id=None,
-                sandbox_mode="workspace-write",
-                approval_mode="never",
-                model="gpt-5.3-codex",
+                on_user_input_request=on_user_input_request,
             )
 
-        args = mock_exec.await_args.args
-
-        assert args[:4] == (
-            "codex",
-            "--dangerously-bypass-approvals-and-sandbox",
-            "exec",
-            "--json",
-        )
-        assert "--sandbox" not in args
-        assert "--cd" in args
-        assert "--full-auto" not in args
-        assert args[-1] == "new prompt"
         assert result.success is True
+        on_user_input_request.assert_awaited_once_with(
+            "item_1", {"questions": [question]}
+        )
+
+        response_by_id = {msg["id"]: msg for msg in _sent_responses(process)}
+        assert response_by_id[10]["result"] == callback_payload
 
     @pytest.mark.asyncio
-    async def test_new_execution_includes_sandbox_and_full_auto_when_dangerous_disabled(
+    async def test_approval_request_uses_callback_response(self, monkeypatch):
+        """Approval server requests should use callback-provided decision payload."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        approval_params = {
+            "itemId": "item_2",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "command": "ls -la",
+        }
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 20,
+                        "method": "item/commandExecution/requestApproval",
+                        "params": approval_params,
+                    }
+                ),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        on_approval_request = AsyncMock(return_value={"decision": "decline"})
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            result = await executor.execute(
+                prompt="run command",
+                working_directory="/tmp/workspace",
+                on_approval_request=on_approval_request,
+            )
+
+        assert result.success is True
+        on_approval_request.assert_awaited_once_with(
+            "item/commandExecution/requestApproval", approval_params
+        )
+
+        response_by_id = {msg["id"]: msg for msg in _sent_responses(process)}
+        assert response_by_id[20]["result"] == {"decision": "decline"}
+
+    @pytest.mark.asyncio
+    async def test_default_approval_decision_respects_mode_when_no_callback(
         self, monkeypatch
     ):
-        """When dangerous bypass is disabled, executor uses sandbox/full-auto flags."""
-        monkeypatch.setattr(config, "CODEX_USE_DANGEROUS_BYPASS", False)
-        executor = SubprocessExecutor()
-        process = _DummyProcess()
+        """Without callback, never-mode auto-accepts while on-request declines."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
-        with patch(
-            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
-        ) as mock_exec:
-            result = await executor.execute(
-                prompt="new prompt",
-                working_directory="/tmp/workspace",
-                resume_session_id=None,
-                sandbox_mode="workspace-write",
-                approval_mode="never",
-                model="gpt-5.3-codex",
+        def build_process() -> _DummyProcess:
+            return _DummyProcess(
+                [
+                    _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 2,
+                            "result": {"thread": {"id": "thread-1"}},
+                        }
+                    ),
+                    _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 21,
+                            "method": "item/fileChange/requestApproval",
+                            "params": {
+                                "itemId": "item_3",
+                                "threadId": "thread-1",
+                                "turnId": "turn-1",
+                            },
+                        }
+                    ),
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "turn/completed",
+                            "params": {"turn": {"status": "completed"}},
+                        }
+                    ),
+                ]
             )
 
-        args = mock_exec.await_args.args
-
-        assert args[:3] == ("codex", "exec", "--json")
-        assert "--sandbox" in args
-        assert "--cd" in args
-        assert "--full-auto" in args
-        assert args[-1] == "new prompt"
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_exec_prepends_default_instructions_when_file_exists(self, monkeypatch, tmp_path):
-        """Executor prepends default instructions from file before prompt."""
-        instructions = tmp_path / "default_instructions.txt"
-        instructions.write_text("ALWAYS BE CONCISE", encoding="utf-8")
-        monkeypatch.setattr(config, "CODEX_DEFAULT_INSTRUCTIONS_FILE", str(instructions))
-        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", True)
+        process_never = build_process()
+        process_on_request = build_process()
 
         executor = SubprocessExecutor()
-        process = _DummyProcess()
-
         with patch(
-            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(side_effect=[process_never, process_on_request]),
+        ):
+            result_never = await executor.execute(
+                prompt="p1",
+                working_directory="/tmp/workspace",
+                approval_mode="never",
+            )
+            result_on_request = await executor.execute(
+                prompt="p2",
+                working_directory="/tmp/workspace",
+                approval_mode="on-request",
+            )
+
+        assert result_never.success is True
+        assert result_on_request.success is True
+
+        response_never = {msg["id"]: msg for msg in _sent_responses(process_never)}[21]
+        response_on_request = {
+            msg["id"]: msg for msg in _sent_responses(process_on_request)
+        }[21]
+        assert response_never["result"] == {"decision": "accept"}
+        assert response_on_request["result"] == {"decision": "decline"}
+
+    @pytest.mark.asyncio
+    async def test_resume_missing_thread_retries_with_new_thread(self, monkeypatch):
+        """Missing resume thread should retry with thread/start."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process_resume_fail = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "error": {"message": "thread not found"},
+                    }
+                ),
+            ]
+        )
+        process_fresh_start = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-2"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(side_effect=[process_resume_fail, process_fresh_start]),
         ) as mock_exec:
+            result = await executor.execute(
+                prompt="retry me",
+                working_directory="/tmp/workspace",
+                resume_session_id="old-thread",
+            )
+
+        assert mock_exec.await_count == 2
+        assert result.success is True
+        assert result.session_id == "thread-2"
+
+        first_methods = [req["method"] for req in _sent_requests(process_resume_fail)]
+        second_methods = [req["method"] for req in _sent_requests(process_fresh_start)]
+        assert first_methods == ["initialize", "thread/resume"]
+        assert second_methods == ["initialize", "thread/start", "turn/start"]
+
+    @pytest.mark.asyncio
+    async def test_exec_prepends_default_instructions_when_file_exists(
+        self, monkeypatch, tmp_path
+    ):
+        """Executor prepends default instructions from file before turn/start input."""
+        instructions = tmp_path / "default_instructions.txt"
+        instructions.write_text("ALWAYS BE CONCISE", encoding="utf-8")
+        monkeypatch.setattr(
+            config, "CODEX_DEFAULT_INSTRUCTIONS_FILE", str(instructions)
+        )
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", True)
+
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
             result = await executor.execute(
                 prompt="do a repo review",
                 working_directory="/tmp/workspace",
-                resume_session_id=None,
-                sandbox_mode="workspace-write",
-                approval_mode="on-request",
-                model="gpt-5.3-codex",
             )
 
-        args = mock_exec.await_args.args
-        assert args[-1] == "ALWAYS BE CONCISE\n\ndo a repo review"
         assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_plan_mode_uses_native_app_server_when_enabled(self, monkeypatch):
-        """Plan mode routes to native app-server flow when feature flag is enabled."""
-        monkeypatch.setattr(config, "CODEX_NATIVE_PLAN_MODE_ENABLED", True)
-        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
-
-        executor = SubprocessExecutor()
-        native_result = ExecutionResult(success=True, output="native-ok")
-
-        with (
-            patch.object(
-                executor,
-                "_execute_via_app_server",
-                new=AsyncMock(return_value=native_result),
-            ) as mock_native,
-            patch.object(
-                executor,
-                "_execute_legacy",
-                new=AsyncMock(),
-            ) as mock_legacy,
-        ):
-            result = await executor.execute(
-                prompt="plan this change",
-                working_directory="/tmp/workspace",
-                permission_mode="plan",
-            )
-
-        assert result is native_result
-        mock_native.assert_awaited_once()
-        mock_legacy.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_plan_mode_falls_back_to_legacy_when_native_fails(self, monkeypatch):
-        """Native app-server failure falls back to legacy codex exec flow."""
-        monkeypatch.setattr(config, "CODEX_NATIVE_PLAN_MODE_ENABLED", True)
-        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
-
-        executor = SubprocessExecutor()
-        legacy_result = ExecutionResult(success=True, output="legacy-ok")
-
-        with (
-            patch.object(
-                executor,
-                "_execute_via_app_server",
-                new=AsyncMock(side_effect=RuntimeError("app-server failed")),
-            ) as mock_native,
-            patch.object(
-                executor,
-                "_execute_legacy",
-                new=AsyncMock(return_value=legacy_result),
-            ) as mock_legacy,
-        ):
-            result = await executor.execute(
-                prompt="plan this change",
-                working_directory="/tmp/workspace",
-                permission_mode="plan",
-            )
-
-        assert result is legacy_result
-        mock_native.assert_awaited_once()
-        mock_legacy.assert_awaited_once()
+        turn_start = _sent_requests(process)[2]
+        assert (
+            turn_start["params"]["input"][0]["text"]
+            == "ALWAYS BE CONCISE\n\ndo a repo review"
+        )

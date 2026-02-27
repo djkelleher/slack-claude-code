@@ -282,19 +282,17 @@ class Config(BaseSettings):
     # Codex configuration
     CODEX_SANDBOX_MODE: str = "workspace-write"
     CODEX_APPROVAL_MODE: str = "on-request"
-    CODEX_USE_DANGEROUS_BYPASS: bool = True
     CODEX_PREPEND_DEFAULT_INSTRUCTIONS: bool = True
     CODEX_DEFAULT_INSTRUCTIONS_FILE: str = str(Path.home() / ".codex" / "default_instructions.txt")
-    CODEX_NATIVE_PLAN_MODE_ENABLED: bool = True
 
-    # Valid sandbox modes for Codex CLI
+    # Valid sandbox modes for Codex app-server
     VALID_SANDBOX_MODES: tuple[str, ...] = (
         "read-only",
         "workspace-write",
         "danger-full-access",
     )
 
-    # Valid approval modes for Codex CLI
+    # Valid approval modes for Codex app-server
     VALID_APPROVAL_MODES: tuple[str, ...] = (
         "untrusted",
         "on-request",

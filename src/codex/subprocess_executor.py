@@ -1,14 +1,15 @@
-"""Codex CLI executor using subprocess with stream-json output."""
+"""Codex app-server executor using subprocess JSON-RPC over stdio."""
 
 import asyncio
 import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from loguru import logger
 
+from src.codex.approval_bridge import default_approval_payload
 from src.codex.capabilities import normalize_codex_approval_mode
 from src.config import config, parse_model_effort
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class ExecutionResult:
-    """Result of a Codex CLI execution."""
+    """Result of a Codex execution."""
 
     success: bool
     output: str
@@ -35,11 +36,7 @@ class ExecutionResult:
 
 
 class SubprocessExecutor:
-    """Execute Codex CLI via subprocess with stream-json output.
-
-    Uses `codex exec --json` for reliable non-interactive execution.
-    Supports session resume via `codex exec resume` command.
-    """
+    """Execute Codex via `codex app-server` JSON-RPC over stdio."""
 
     def __init__(
         self,
@@ -58,7 +55,12 @@ class SubprocessExecutor:
         resume_session_id: Optional[str] = None,
         execution_id: Optional[str] = None,
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]] = None,
-        on_user_input_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]] = None,
+        on_user_input_request: Optional[
+            Callable[[str, dict], Awaitable[Optional[dict]]]
+        ] = None,
+        on_approval_request: Optional[
+            Callable[[str, dict], Awaitable[Optional[dict]]]
+        ] = None,
         sandbox_mode: Optional[str] = None,
         approval_mode: Optional[str] = None,
         permission_mode: Optional[str] = None,
@@ -66,74 +68,46 @@ class SubprocessExecutor:
         model: Optional[str] = None,
         channel_id: Optional[str] = None,
         _recursion_depth: int = 0,
-        _force_legacy: bool = False,
     ) -> ExecutionResult:
-        """Execute a prompt via Codex CLI subprocess.
+        """Execute a prompt via Codex app-server.
 
         Args:
-            prompt: The prompt to send to Codex
-            working_directory: Directory to run Codex in
-            session_id: Identifier for this execution (for tracking)
-            resume_session_id: Codex session ID to resume (from previous execution)
-            execution_id: Unique ID for this execution (for cancellation)
-            on_chunk: Async callback for each streamed message
-            sandbox_mode: Sandbox mode (read-only, workspace-write, danger-full-access)
-            approval_mode: Approval mode (untrusted, on-request, never)
-            db_session_id: Database session ID for tracking (optional)
-            model: Model to use (e.g., "gpt-5.3-codex", "gpt-5.2")
-            channel_id: Slack channel ID (for process tracking)
-            on_user_input_request: Callback for native app-server request_user_input prompts
-            permission_mode: Session mode (plan/default/etc)
-            _recursion_depth: Internal parameter to track retry depth (max 3)
-            _force_legacy: Internal flag to skip native app-server path
+            prompt: The prompt to send to Codex.
+            working_directory: Directory to run Codex in.
+            session_id: Identifier for this execution (for tracking).
+            resume_session_id: Codex thread ID to resume (from previous execution).
+            execution_id: Unique ID for this execution (for cancellation).
+            on_chunk: Async callback for each streamed message.
+            on_user_input_request: Callback for request_user_input prompts.
+            on_approval_request: Callback for command/file/skill approval prompts.
+            sandbox_mode: Sandbox mode (read-only, workspace-write, danger-full-access).
+            approval_mode: Approval mode (untrusted, on-request, never).
+            permission_mode: Session mode (plan/default/etc), retained for compatibility.
+            db_session_id: Database session ID for tracking.
+            model: Model to use (e.g., "gpt-5.3-codex").
+            channel_id: Slack channel ID (for process tracking).
+            _recursion_depth: Internal retry depth for resume recovery.
 
         Returns:
-            ExecutionResult with the command output
+            ExecutionResult with command output.
         """
-        # Create log prefix for this session
+        del permission_mode  # app-server transport is uniform across session modes
+
         log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
         effective_prompt = self._build_effective_prompt(prompt, log_prefix)
 
-        # Prevent infinite recursion (max 3 retries)
-        MAX_RECURSION_DEPTH = 3
-        if _recursion_depth >= MAX_RECURSION_DEPTH:
+        max_recursion_depth = 3
+        if _recursion_depth >= max_recursion_depth:
             logger.error(
-                f"{log_prefix}Max recursion depth ({MAX_RECURSION_DEPTH}) reached, aborting"
+                f"{log_prefix}Max recursion depth ({max_recursion_depth}) reached, aborting"
             )
             return ExecutionResult(
                 success=False,
                 output="",
-                error=f"Max retry depth ({MAX_RECURSION_DEPTH}) exceeded",
+                error=f"Max retry depth ({max_recursion_depth}) exceeded",
             )
 
-        plan_mode_active = (permission_mode or "").strip().lower() == "plan"
-        use_native_plan_mode = (
-            config.CODEX_NATIVE_PLAN_MODE_ENABLED and plan_mode_active and not _force_legacy
-        )
-        if use_native_plan_mode:
-            try:
-                return await self._execute_via_app_server(
-                    prompt=prompt,
-                    effective_prompt=effective_prompt,
-                    working_directory=working_directory,
-                    session_id=session_id,
-                    resume_session_id=resume_session_id,
-                    execution_id=execution_id,
-                    on_chunk=on_chunk,
-                    on_user_input_request=on_user_input_request,
-                    db_session_id=db_session_id,
-                    model=model,
-                    channel_id=channel_id,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.warning(
-                    f"{log_prefix}Native app-server plan mode failed ({type(e).__name__}: {e}); "
-                    "falling back to legacy `codex exec --json`"
-                )
-
-        return await self._execute_legacy(
+        return await self._execute_via_app_server(
             prompt=prompt,
             effective_prompt=effective_prompt,
             working_directory=working_directory,
@@ -142,344 +116,14 @@ class SubprocessExecutor:
             execution_id=execution_id,
             on_chunk=on_chunk,
             on_user_input_request=on_user_input_request,
+            on_approval_request=on_approval_request,
             sandbox_mode=sandbox_mode,
             approval_mode=approval_mode,
-            permission_mode=permission_mode,
             db_session_id=db_session_id,
             model=model,
             channel_id=channel_id,
             _recursion_depth=_recursion_depth,
-            _force_legacy=_force_legacy,
         )
-
-    async def _execute_legacy(
-        self,
-        prompt: str,
-        effective_prompt: str,
-        working_directory: str,
-        session_id: Optional[str],
-        resume_session_id: Optional[str],
-        execution_id: Optional[str],
-        on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]],
-        on_user_input_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]],
-        sandbox_mode: Optional[str],
-        approval_mode: Optional[str],
-        permission_mode: Optional[str],
-        db_session_id: Optional[int],
-        model: Optional[str],
-        channel_id: Optional[str],
-        _recursion_depth: int,
-        _force_legacy: bool,
-    ) -> ExecutionResult:
-        """Execute using legacy `codex exec --json` flow."""
-        log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
-
-        # Build command - use codex exec for non-interactive execution
-        is_resume = bool(resume_session_id)
-        if is_resume:
-            # Resume existing session.
-            # Important: codex exec resume requires options before positional args:
-            # `codex exec resume [options] <session_id> <prompt>`
-            cmd = ["codex"]
-            if config.CODEX_USE_DANGEROUS_BYPASS:
-                cmd.append("--dangerously-bypass-approvals-and-sandbox")
-            cmd.extend(
-                [
-                    "exec",
-                    "resume",
-                    "--json",  # Stream JSON events
-                ]
-            )
-            logger.info(f"{log_prefix}Resuming session {resume_session_id}")
-        else:
-            # New execution
-            cmd = ["codex"]
-            if config.CODEX_USE_DANGEROUS_BYPASS:
-                cmd.append("--dangerously-bypass-approvals-and-sandbox")
-            cmd.extend(
-                [
-                    "exec",
-                    "--json",  # Stream JSON events
-                ]
-            )
-
-        # Add model flag if specified, parsing out effort suffix
-        effort = None
-        if model:
-            base_model, effort = parse_model_effort(model)
-            cmd.extend(["--model", base_model])
-            logger.info(f"{log_prefix}Using --model {base_model}")
-            if effort:
-                cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
-                logger.info(f"{log_prefix}Using reasoning effort: {effort}")
-
-        # Determine sandbox mode: explicit > session > config default
-        # `codex exec resume` does not support `--sandbox`, so only pass it for new executions.
-        mode = sandbox_mode or config.CODEX_SANDBOX_MODE
-        if config.CODEX_USE_DANGEROUS_BYPASS:
-            logger.info(
-                f"{log_prefix}Dangerous bypass enabled; not passing --sandbox (requested: {mode})"
-            )
-        else:
-            if mode in config.VALID_SANDBOX_MODES:
-                if is_resume:
-                    logger.info(
-                        f"{log_prefix}Resume mode active; not passing --sandbox (requested: {mode})"
-                    )
-                else:
-                    cmd.extend(["--sandbox", mode])
-                    logger.info(f"{log_prefix}Using --sandbox {mode}")
-            else:
-                logger.warning(
-                    f"{log_prefix}Invalid sandbox mode: {mode}, using {config.CODEX_SANDBOX_MODE}"
-                )
-                if not is_resume:
-                    cmd.extend(["--sandbox", config.CODEX_SANDBOX_MODE])
-
-        # Determine approval mode: explicit > session > config default
-        # Codex CLI doesn't support --ask-for-approval; map to equivalent flags
-        approval_raw = approval_mode or config.CODEX_APPROVAL_MODE
-        approval = normalize_codex_approval_mode(approval_raw)
-        if approval != (approval_raw or "").strip().lower():
-            logger.warning(
-                f"{log_prefix}Deprecated approval mode `{approval_raw}` mapped to `{approval}`"
-            )
-        if config.CODEX_USE_DANGEROUS_BYPASS:
-            logger.info(
-                f"{log_prefix}Dangerous bypass enabled; ignoring approval mode `{approval}`"
-            )
-        elif approval == "never":
-            cmd.append("--full-auto")
-            logger.info(f"{log_prefix}Using --full-auto (approval=never)")
-        else:
-            logger.info(f"{log_prefix}Approval mode: {approval} (no extra flag needed)")
-
-        # Add working directory.
-        # `codex exec resume` does not support --cd; rely on subprocess cwd for resume.
-        if is_resume:
-            logger.info(f"{log_prefix}Resume mode uses process cwd: {working_directory}")
-        else:
-            cmd.extend(["--cd", working_directory])
-
-        # Add positional args after options.
-        if is_resume:
-            resume_id = resume_session_id or ""
-            cmd.append(resume_id)
-            if effective_prompt:
-                cmd.append(effective_prompt)
-        elif effective_prompt:
-            cmd.append(effective_prompt)
-
-        # Log full command with all flags, but truncate prompt for readability
-        if effective_prompt:
-            cmd_preview = " ".join(cmd[:-1])
-            prompt_preview = (
-                effective_prompt[:100] + "..." if len(effective_prompt) > 100 else effective_prompt
-            )
-            logger.info(f"{log_prefix}Executing: {cmd_preview} '{prompt_preview}'")
-        else:
-            logger.info(f"{log_prefix}Executing: {' '.join(cmd)}")
-
-        # Start subprocess with increased line limit
-        limit = 200 * 1024 * 1024  # 200MB limit for large file reads
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=working_directory,
-                limit=limit,
-            )
-        except Exception as e:
-            logger.error(f"{log_prefix}Failed to start Codex process: {e}")
-            return ExecutionResult(
-                success=False,
-                output="",
-                error=f"Failed to start Codex: {e}",
-            )
-
-        # Track process for cancellation
-        track_id = execution_id or session_id or "default"
-        if channel_id:
-            track_id = f"{channel_id}_{track_id}"
-        async with self._lock:
-            self._active_processes[track_id] = process
-            if channel_id:
-                self._process_channels[track_id] = channel_id
-
-        parser = StreamParser()
-        accumulated_output = ""
-        accumulated_detailed = ""
-        result_session_id = None
-        cost_usd = None
-        duration_ms = None
-        error_msg = None
-
-        try:
-            # Read stdout line by line
-            while True:
-                line = await process.stdout.readline()
-
-                if not line:
-                    break
-
-                line_str = line.decode("utf-8", errors="replace").strip()
-                if not line_str:
-                    continue
-
-                # Parse the JSON message
-                msg = parser.parse_line(line_str)
-                if not msg:
-                    continue
-
-                # Log human-readable summaries
-                if msg.type == "assistant":
-                    if msg.content:
-                        preview = (
-                            msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
-                        )
-                        logger.debug(f"{log_prefix}Codex: {preview}")
-                elif msg.type == "tool_call":
-                    for tool in msg.tool_activities:
-                        logger.info(f"{log_prefix}Tool: {tool.name} {tool.input_summary}")
-                elif msg.type == "tool_result":
-                    for tool in msg.tool_activities:
-                        status = "ERROR" if tool.is_error else "OK"
-                        logger.info(
-                            f"{log_prefix}Tool result [{tool.id[:8] if tool.id else '?'}]: {status}"
-                        )
-                elif msg.type == "init":
-                    if is_resume and msg.session_id == resume_session_id:
-                        logger.info(f"{log_prefix}Session resumed: {msg.session_id}")
-                    else:
-                        logger.info(f"{log_prefix}Session initialized: {msg.session_id}")
-                elif msg.type == "error":
-                    logger.error(f"{log_prefix}Error: {msg.content}")
-                elif msg.type == "result":
-                    if msg.cost_usd:
-                        logger.info(
-                            f"{log_prefix}Codex Finished - completed in {msg.duration_ms}ms, cost ${msg.cost_usd:.4f}"
-                        )
-                    else:
-                        logger.info(
-                            f"{log_prefix}Codex Finished - completed in {msg.duration_ms}ms"
-                        )
-
-                # Track session ID
-                if msg.session_id:
-                    result_session_id = msg.session_id
-
-                # Accumulate content
-                if msg.type == "assistant" and msg.content:
-                    accumulated_output = _concat_with_spacing(accumulated_output, msg.content)
-
-                # Track result metadata
-                if msg.type == "result":
-                    cost_usd = msg.cost_usd
-                    duration_ms = msg.duration_ms
-                    if msg.session_id:
-                        result_session_id = msg.session_id
-                    if msg.detailed_content:
-                        accumulated_detailed = msg.detailed_content
-                    # Check for errors in result message
-                    if msg.raw and msg.raw.get("is_error"):
-                        errors = msg.raw.get("errors", [])
-                        if errors:
-                            error_msg = "; ".join(str(e) for e in errors)
-                            logger.warning(f"{log_prefix}Result contains errors: {error_msg}")
-
-                # Track errors from error-type messages
-                if msg.type == "error":
-                    error_msg = msg.content
-
-                # Call chunk callback
-                if on_chunk:
-                    await on_chunk(msg)
-
-                if msg.is_final:
-                    break
-
-            # Wait for process to complete
-            await process.wait()
-
-            # Check stderr for errors
-            stderr = await process.stderr.read()
-            if stderr:
-                stderr_str = stderr.decode("utf-8", errors="replace").strip()
-                if stderr_str:
-                    logger.warning(f"{log_prefix}Codex stderr: {stderr_str}")
-                    # Only treat stderr as error if process failed
-                    if process.returncode != 0 and not error_msg:
-                        error_msg = stderr_str
-
-            success = process.returncode == 0 and not error_msg
-
-            # Check if session not found - retry without resume
-            if (
-                not success
-                and resume_session_id
-                and (
-                    "session not found" in (error_msg or "").lower()
-                    or "no conversation found" in (error_msg or "").lower()
-                )
-            ):
-                logger.info(
-                    f"{log_prefix}Session {resume_session_id} not found, retrying without resume (depth={_recursion_depth + 1})"
-                )
-                return await self.execute(
-                    prompt=prompt,
-                    working_directory=working_directory,
-                    session_id=session_id,
-                    resume_session_id=None,  # Don't resume
-                    execution_id=execution_id,
-                    on_chunk=on_chunk,
-                    on_user_input_request=on_user_input_request,
-                    sandbox_mode=sandbox_mode,
-                    approval_mode=approval_mode,
-                    permission_mode=permission_mode,
-                    db_session_id=db_session_id,
-                    model=model,
-                    channel_id=channel_id,
-                    _recursion_depth=_recursion_depth + 1,
-                    _force_legacy=True,
-                )
-
-            return ExecutionResult(
-                success=success,
-                output=accumulated_output,
-                detailed_output=accumulated_detailed,
-                session_id=result_session_id,
-                error=error_msg,
-                cost_usd=cost_usd,
-                duration_ms=duration_ms,
-            )
-
-        except asyncio.CancelledError:
-            process.terminate()
-            await process.wait()
-            return ExecutionResult(
-                success=False,
-                output=accumulated_output,
-                detailed_output=accumulated_detailed,
-                session_id=result_session_id,
-                error="Cancelled",
-                was_cancelled=True,
-            )
-        except Exception as e:
-            logger.error(f"{log_prefix}Error during execution: {e}")
-            process.terminate()
-            await process.wait()
-            return ExecutionResult(
-                success=False,
-                output=accumulated_output,
-                detailed_output=accumulated_detailed,
-                session_id=result_session_id,
-                error=str(e),
-            )
-        finally:
-            async with self._lock:
-                self._active_processes.pop(track_id, None)
-                self._process_channels.pop(track_id, None)
 
     async def _execute_via_app_server(
         self,
@@ -490,21 +134,23 @@ class SubprocessExecutor:
         resume_session_id: Optional[str],
         execution_id: Optional[str],
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]],
-        on_user_input_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]],
+        on_user_input_request: Optional[
+            Callable[[str, dict], Awaitable[Optional[dict]]]
+        ],
+        on_approval_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]],
+        sandbox_mode: Optional[str],
+        approval_mode: Optional[str],
         db_session_id: Optional[int],
         model: Optional[str],
         channel_id: Optional[str],
+        _recursion_depth: int,
     ) -> ExecutionResult:
-        """Execute using Codex app-server JSON-RPC flow (native plan mode)."""
+        """Execute using Codex app-server JSON-RPC flow."""
         log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
-        logger.info(f"{log_prefix}Executing via `codex app-server` native plan flow")
+        logger.info(f"{log_prefix}Executing via `codex app-server` JSON-RPC flow")
 
-        # Native plan mode safety overrides.
-        approval = "on-request"
-        sandbox = "read-only"
-        logger.info(
-            f"{log_prefix}Native plan safety enforced: approval={approval}, sandbox={sandbox}"
-        )
+        approval = self._resolve_approval_mode(approval_mode, log_prefix)
+        sandbox = self._resolve_sandbox_mode(sandbox_mode, log_prefix)
 
         cmd = ["codex", "app-server", "--listen", "stdio://"]
         limit = 200 * 1024 * 1024
@@ -518,7 +164,11 @@ class SubprocessExecutor:
                 limit=limit,
             )
         except Exception as e:
-            raise RuntimeError(f"Failed to start codex app-server: {e}") from e
+            return ExecutionResult(
+                success=False,
+                output="",
+                error=f"Failed to start codex app-server: {e}",
+            )
 
         track_id = execution_id or session_id or "default"
         if channel_id:
@@ -569,7 +219,9 @@ class SubprocessExecutor:
             nonlocal cost_usd, duration_ms, error_msg
 
             if msg.type == "assistant" and msg.content:
-                preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                preview = (
+                    msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                )
                 logger.debug(f"{log_prefix}Codex: {preview}")
             elif msg.type == "tool_call":
                 for tool in msg.tool_activities:
@@ -585,14 +237,20 @@ class SubprocessExecutor:
             elif msg.type == "error":
                 logger.error(f"{log_prefix}Error: {msg.content}")
             elif msg.type == "result":
-                duration_display = msg.duration_ms if msg.duration_ms is not None else "?"
-                logger.info(f"{log_prefix}Codex Finished - completed in {duration_display}ms")
+                duration_display = (
+                    msg.duration_ms if msg.duration_ms is not None else "?"
+                )
+                logger.info(
+                    f"{log_prefix}Codex Finished - completed in {duration_display}ms"
+                )
 
             if msg.session_id:
                 result_session_id = msg.session_id
 
             if msg.type == "assistant" and msg.content:
-                accumulated_output = _concat_with_spacing(accumulated_output, msg.content)
+                accumulated_output = _concat_with_spacing(
+                    accumulated_output, msg.content
+                )
 
             if msg.type == "result":
                 cost_usd = msg.cost_usd
@@ -612,6 +270,21 @@ class SubprocessExecutor:
 
             return msg.is_final
 
+        async def emit_assistant_delta(delta: str) -> bool:
+            if not delta:
+                return False
+            msg = parser.parse_line(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "content": delta,
+                    }
+                )
+            )
+            if msg:
+                return await handle_stream_message(msg)
+            return False
+
         async def handle_notification(method: str, params: dict) -> bool:
             nonlocal result_session_id
 
@@ -621,11 +294,16 @@ class SubprocessExecutor:
                 if thread_id:
                     result_session_id = str(thread_id)
                     msg = parser.parse_line(
-                        json.dumps({"type": "thread.started", "thread_id": str(thread_id)})
+                        json.dumps(
+                            {"type": "thread.started", "thread_id": str(thread_id)}
+                        )
                     )
                     if msg:
                         return await handle_stream_message(msg)
                 return False
+
+            if method in {"item/agentMessage/delta", "item/plan/delta"}:
+                return await emit_assistant_delta(str(params.get("delta", "")))
 
             if method == "item/started":
                 item = params.get("item", {})
@@ -689,14 +367,18 @@ class SubprocessExecutor:
                         else str(turn_error or "Codex turn failed")
                     )
                     msg = parser.parse_line(
-                        json.dumps({"type": "turn.failed", "error": {"message": error_text}})
+                        json.dumps(
+                            {"type": "turn.failed", "error": {"message": error_text}}
+                        )
                     )
                 else:
                     msg = parser.parse_line(
                         json.dumps(
                             {
                                 "type": "turn.completed",
-                                "duration_ms": int((time.monotonic() - started_at) * 1000),
+                                "duration_ms": int(
+                                    (time.monotonic() - started_at) * 1000
+                                ),
                             }
                         )
                     )
@@ -777,32 +459,22 @@ class SubprocessExecutor:
             if method in {
                 "item/commandExecution/requestApproval",
                 "item/fileChange/requestApproval",
+                "skill/requestApproval",
+                "execCommandApproval",
+                "applyPatchApproval",
             }:
-                await send_rpc(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {"decision": "decline"},
-                    }
-                )
-                return
+                response_payload = None
+                if on_approval_request:
+                    response_payload = await on_approval_request(method, params)
 
-            if method == "skill/requestApproval":
-                await send_rpc(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {"decision": "decline"},
-                    }
-                )
-                return
+                if not self._is_valid_approval_response(method, response_payload):
+                    response_payload = default_approval_payload(method, approval)
 
-            if method in {"execCommandApproval", "applyPatchApproval"}:
                 await send_rpc(
                     {
                         "jsonrpc": "2.0",
                         "id": request_id,
-                        "result": {"decision": "denied"},
+                        "result": response_payload,
                     }
                 )
                 return
@@ -877,7 +549,7 @@ class SubprocessExecutor:
             if init_resp.get("error"):
                 raise RuntimeError(f"initialize failed: {init_resp['error']}")
 
-            thread_params: dict = {
+            thread_params: dict[str, Any] = {
                 "cwd": working_directory,
                 "approvalPolicy": approval,
                 "sandbox": sandbox,
@@ -885,21 +557,57 @@ class SubprocessExecutor:
             if base_model:
                 thread_params["model"] = base_model
 
+            thread_method = "thread/start"
             if resume_session_id:
                 thread_method = "thread/resume"
                 thread_params["threadId"] = resume_session_id
-                logger.info(f"{log_prefix}Resuming session via app-server: {resume_session_id}")
-            else:
-                thread_method = "thread/start"
+                logger.info(
+                    f"{log_prefix}Resuming session via app-server: {resume_session_id}"
+                )
 
             thread_req_id = await send_request(thread_method, thread_params)
             thread_resp = await await_response(thread_req_id)
+
+            if (
+                thread_resp.get("error")
+                and resume_session_id
+                and self._is_missing_thread_error(thread_resp["error"])
+            ):
+                logger.info(
+                    f"{log_prefix}Session {resume_session_id} not found, "
+                    "retrying with a new thread"
+                )
+                if process.returncode is None:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=2)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await process.wait()
+                return await self.execute(
+                    prompt=prompt,
+                    working_directory=working_directory,
+                    session_id=session_id,
+                    resume_session_id=None,
+                    execution_id=execution_id,
+                    on_chunk=on_chunk,
+                    on_user_input_request=on_user_input_request,
+                    on_approval_request=on_approval_request,
+                    sandbox_mode=sandbox,
+                    approval_mode=approval,
+                    db_session_id=db_session_id,
+                    model=model,
+                    channel_id=channel_id,
+                    _recursion_depth=_recursion_depth + 1,
+                )
+
             if thread_resp.get("error"):
                 raise RuntimeError(f"{thread_method} failed: {thread_resp['error']}")
+
             thread = (thread_resp.get("result") or {}).get("thread", {})
             result_session_id = str(thread.get("id") or result_session_id or "")
 
-            turn_params: dict = {
+            turn_params: dict[str, Any] = {
                 "threadId": result_session_id,
                 "input": [{"type": "text", "text": effective_prompt}],
             }
@@ -954,10 +662,91 @@ class SubprocessExecutor:
                 error="Cancelled",
                 was_cancelled=True,
             )
+        except Exception as e:
+            logger.error(f"{log_prefix}Error during app-server execution: {e}")
+            if process.returncode is None:
+                process.terminate()
+                await process.wait()
+            return ExecutionResult(
+                success=False,
+                output=accumulated_output,
+                detailed_output=accumulated_detailed,
+                session_id=result_session_id,
+                error=str(e),
+            )
         finally:
             async with self._lock:
                 self._active_processes.pop(track_id, None)
                 self._process_channels.pop(track_id, None)
+
+    @staticmethod
+    def _resolve_sandbox_mode(mode: Optional[str], log_prefix: str) -> str:
+        """Return validated sandbox mode."""
+        resolved = mode or config.CODEX_SANDBOX_MODE
+        if resolved not in config.VALID_SANDBOX_MODES:
+            logger.warning(
+                f"{log_prefix}Invalid sandbox mode: {resolved}, "
+                f"using {config.CODEX_SANDBOX_MODE}"
+            )
+            return config.CODEX_SANDBOX_MODE
+        logger.info(f"{log_prefix}Using sandbox mode: {resolved}")
+        return resolved
+
+    @staticmethod
+    def _resolve_approval_mode(mode: Optional[str], log_prefix: str) -> str:
+        """Return validated approval mode."""
+        normalized = normalize_codex_approval_mode(mode or config.CODEX_APPROVAL_MODE)
+        if normalized not in config.VALID_APPROVAL_MODES:
+            logger.warning(
+                f"{log_prefix}Invalid approval mode: {normalized}, "
+                f"using {config.CODEX_APPROVAL_MODE}"
+            )
+            return normalize_codex_approval_mode(config.CODEX_APPROVAL_MODE)
+        logger.info(f"{log_prefix}Using approval mode: {normalized}")
+        return normalized
+
+    @staticmethod
+    def _is_missing_thread_error(error: Any) -> bool:
+        """Return True when an app-server resume error indicates thread/session missing."""
+        error_text = str(error).lower()
+        markers = (
+            "thread not found",
+            "session not found",
+            "no conversation found",
+            "unknown thread",
+        )
+        return any(marker in error_text for marker in markers)
+
+    @staticmethod
+    def _is_valid_approval_response(method: str, payload: Any) -> bool:
+        """Validate approval payload shape for known request methods."""
+        if not isinstance(payload, dict):
+            return False
+        decision = payload.get("decision")
+        if decision is None:
+            return False
+
+        normalized_method = (method or "").strip()
+
+        if normalized_method == "skill/requestApproval":
+            return decision in {"approve", "decline"}
+
+        if normalized_method in {
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        }:
+            simple_decisions = {"accept", "acceptForSession", "decline", "cancel"}
+            if isinstance(decision, str):
+                return decision in simple_decisions
+            if isinstance(decision, dict):
+                # Allow advanced app-server decision payloads.
+                return bool(decision)
+            return False
+
+        if normalized_method in {"execCommandApproval", "applyPatchApproval"}:
+            return decision in {"approved", "denied"}
+
+        return True
 
     @staticmethod
     def _empty_user_input_response(questions: list[dict]) -> dict:
@@ -977,7 +766,9 @@ class SubprocessExecutor:
         try:
             preamble = preamble_path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
-            logger.debug(f"{log_prefix}No default Codex instructions file at {preamble_path}")
+            logger.debug(
+                f"{log_prefix}No default Codex instructions file at {preamble_path}"
+            )
             return prompt
         except Exception as e:
             logger.warning(
@@ -1004,10 +795,10 @@ class SubprocessExecutor:
         """Cancel all active executions for a specific channel.
 
         Args:
-            channel_id: The Slack channel ID to cancel executions for
+            channel_id: The Slack channel ID to cancel executions for.
 
         Returns:
-            Number of processes cancelled
+            Number of processes cancelled.
         """
         async with self._lock:
             track_ids_to_cancel = [

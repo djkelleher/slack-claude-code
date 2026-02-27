@@ -69,6 +69,8 @@ Use these when your session model is a Codex model.
 | `/codex-status` | Show Codex session state and modes | `/codex-status` |
 | `/codex-clear` | Reset only Codex session state | `/codex-clear` |
 
+Codex transport uses `codex app-server` JSON-RPC for all modes.
+
 `/mode` in Codex sessions:
 - `/mode bypass` -> `approval=never`
 - `/mode ask`, `/mode default`, and `/mode plan` -> `approval=on-request`
@@ -88,6 +90,9 @@ Optional Codex effort suffixes:
 - `-medium`
 - `-high`
 - `-xhigh` (alias: `-extra-high`)
+
+Breaking change:
+- Legacy Codex transport flags `CODEX_NATIVE_PLAN_MODE_ENABLED` and `CODEX_USE_DANGEROUS_BYPASS` were removed.
 
 #### Session Management
 Each Slack thread maintains an isolated Claude session with its own context.

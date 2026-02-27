@@ -3,8 +3,13 @@
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from src.approval.handler import PermissionManager
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.streaming import _concat_with_spacing
+from src.codex.approval_bridge import (
+    approval_payload_from_decision,
+    format_approval_request_for_slack,
+)
 from src.codex.capabilities import apply_codex_mode_to_prompt, is_likely_plan_content
 from src.config import config
 from src.database.models import Session
@@ -91,7 +96,9 @@ async def execute_for_session(
                 await on_chunk(msg)
 
             if msg.type == "assistant" and msg.content:
-                accumulated_context = _concat_with_spacing(accumulated_context, msg.content)
+                accumulated_context = _concat_with_spacing(
+                    accumulated_context, msg.content
+                )
 
             if not msg.tool_activities:
                 return
@@ -99,15 +106,21 @@ async def execute_for_session(
             for tool in msg.tool_activities:
                 if _is_codex_question_tool(tool.name) and tool.result is None:
                     if not pending_question or pending_question.tool_use_id != tool.id:
-                        pending_question = await QuestionManager.create_pending_question(
-                            session_id=str(session.id),
-                            channel_id=channel_id,
-                            thread_ts=thread_ts,
-                            tool_use_id=tool.id,
-                            tool_input=_normalize_codex_question_input(tool.name, tool.input),
+                        pending_question = (
+                            await QuestionManager.create_pending_question(
+                                session_id=str(session.id),
+                                channel_id=channel_id,
+                                thread_ts=thread_ts,
+                                tool_use_id=tool.id,
+                                tool_input=_normalize_codex_question_input(
+                                    tool.name, tool.input
+                                ),
+                            )
                         )
 
-        async def on_user_input_request(tool_use_id: str, tool_input: dict) -> dict | None:
+        async def on_user_input_request(
+            tool_use_id: str, tool_input: dict
+        ) -> dict | None:
             nonlocal pending_question
             if slack_client is None:
                 if pending_question and pending_question.tool_use_id == tool_use_id:
@@ -121,7 +134,9 @@ async def execute_for_session(
                     channel_id=channel_id,
                     thread_ts=thread_ts,
                     tool_use_id=tool_use_id,
-                    tool_input=_normalize_codex_question_input("request_user_input", tool_input),
+                    tool_input=_normalize_codex_question_input(
+                        "request_user_input", tool_input
+                    ),
                 )
 
             await QuestionManager.post_question_to_slack(
@@ -130,14 +145,38 @@ async def execute_for_session(
                 deps.db,
                 context_text=accumulated_context,
             )
-            answers = await QuestionManager.wait_for_answer(pending_question.question_id)
+            answers = await QuestionManager.wait_for_answer(
+                pending_question.question_id
+            )
             if not answers:
                 pending_question = None
                 return None
 
-            response_payload = QuestionManager.format_answer_for_codex_request(pending_question)
+            response_payload = QuestionManager.format_answer_for_codex_request(
+                pending_question
+            )
             pending_question = None
             return response_payload
+
+        async def on_approval_request(method: str, approval_input: dict) -> dict | None:
+            if slack_client is None:
+                return None
+
+            tool_name, tool_input = format_approval_request_for_slack(
+                method, approval_input
+            )
+            approved = await PermissionManager.request_approval(
+                session_id=str(session.id),
+                channel_id=channel_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                user_id=user_id,
+                thread_ts=thread_ts,
+                slack_client=slack_client,
+                db=deps.db,
+                auto_approve_tools=config.AUTO_APPROVE_TOOLS,
+            )
+            return approval_payload_from_decision(method, approved)
 
         execution_prompt = apply_codex_mode_to_prompt(prompt, session.permission_mode)
         result = await deps.codex_executor.execute(
@@ -148,6 +187,7 @@ async def execute_for_session(
             execution_id=execution_id,
             on_chunk=wrapped_on_chunk,
             on_user_input_request=on_user_input_request,
+            on_approval_request=on_approval_request,
             sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
             approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
             permission_mode=session.permission_mode,
@@ -157,7 +197,9 @@ async def execute_for_session(
         )
 
         if result.session_id:
-            await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
+            await deps.db.update_session_codex_id(
+                channel_id, thread_ts, result.session_id
+            )
 
         question_count = 0
         max_questions = config.timeouts.execution.max_questions_per_conversation
@@ -174,7 +216,9 @@ async def execute_for_session(
                 deps.db,
                 context_text=accumulated_context,
             )
-            answers = await QuestionManager.wait_for_answer(pending_question.question_id)
+            answers = await QuestionManager.wait_for_answer(
+                pending_question.question_id
+            )
             if not answers:
                 result.output = (
                     result.output or accumulated_context
@@ -193,6 +237,7 @@ async def execute_for_session(
                 execution_id=execution_id,
                 on_chunk=wrapped_on_chunk,
                 on_user_input_request=on_user_input_request,
+                on_approval_request=on_approval_request,
                 sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
                 approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
                 permission_mode=session.permission_mode,
@@ -201,7 +246,9 @@ async def execute_for_session(
                 channel_id=channel_id,
             )
             if result.session_id:
-                await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
+                await deps.db.update_session_codex_id(
+                    channel_id, thread_ts, result.session_id
+                )
 
         if question_count >= max_questions and pending_question:
             result.output = (
@@ -234,7 +281,9 @@ async def execute_for_session(
             )
 
             if approved:
-                await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
+                await deps.db.update_session_mode(
+                    channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
+                )
                 session.permission_mode = config.DEFAULT_BYPASS_MODE
 
                 result = await deps.codex_executor.execute(
@@ -245,6 +294,7 @@ async def execute_for_session(
                     execution_id=execution_id,
                     on_chunk=wrapped_on_chunk,
                     on_user_input_request=on_user_input_request,
+                    on_approval_request=on_approval_request,
                     sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
                     approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
                     permission_mode=session.permission_mode,
@@ -253,7 +303,9 @@ async def execute_for_session(
                     channel_id=channel_id,
                 )
                 if result.session_id:
-                    await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
+                    await deps.db.update_session_codex_id(
+                        channel_id, thread_ts, result.session_id
+                    )
             else:
                 result.success = False
                 result.output = (
