@@ -1,12 +1,14 @@
 import json
 import time
-from dataclasses import dataclass
 from typing import Iterator, Optional
 
 from loguru import logger
 
-from src.config import config
-from src.utils.tool_input_summary import format_tool_input_summary
+from src.utils.stream_models import (
+    BaseToolActivity,
+    StreamMessage,
+    concat_with_spacing,
+)
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
 # Increased to 1MB to handle large file reads and tool outputs
@@ -27,67 +29,13 @@ CLAUDE_TOOL_SUMMARY_RULES = {
     "AskUserQuestion": {"type": "first_question", "keys": ["questions"]},
 }
 
-
-def _concat_with_spacing(existing: str, new: str) -> str:
-    """Concatenate text ensuring a separator between chunks.
-
-    When Claude outputs text across multiple assistant messages (separated by
-    tool use), the chunks need a newline between them so sentences don't run
-    together like ``"found.Now let me"``.
-    """
-    if not existing or not new:
-        return existing + new
-    # If existing already ends with whitespace or new starts with it, no action needed
-    if existing[-1] in ("\n", " ") or new[0] in ("\n", " "):
-        return existing + new
-    # Separate distinct assistant turns with double newline (paragraph break)
-    return existing + "\n\n" + new
+_concat_with_spacing = concat_with_spacing
 
 
-@dataclass
-class ToolActivity:
-    """Structured representation of a tool invocation.
+class ToolActivity(BaseToolActivity):
+    """Claude-specific tool activity metadata."""
 
-    Tracks the full lifecycle of a tool use from invocation to result.
-    """
-
-    id: str  # tool_use_id from Claude
-    name: str  # Read, Edit, Write, Bash, Glob, Grep, etc.
-    input: dict  # Full tool input parameters
-    input_summary: str  # Short summary for inline display
-    result: Optional[str] = None  # Result content (truncated for display)
-    full_result: Optional[str] = None  # Full untruncated result
-    is_error: bool = False
-    duration_ms: Optional[int] = None
-    started_at: Optional[float] = None  # time.monotonic() for duration calculation
-    timestamp: Optional[float] = None  # time.time() wall-clock for display
-
-    @classmethod
-    def create_input_summary(cls, name: str, input_dict: dict) -> str:
-        """Create a short summary of tool input for inline display."""
-        display = config.timeouts.display
-        return format_tool_input_summary(name, input_dict, display, CLAUDE_TOOL_SUMMARY_RULES)
-
-
-@dataclass
-class StreamMessage:
-    """Parsed message from Claude's stream-json output."""
-
-    type: str  # init, assistant, user, result, error
-    content: str = ""
-    detailed_content: str = ""  # Full output with tool use details
-    tool_activities: Optional[list[ToolActivity]] = None  # Structured tool data
-    session_id: Optional[str] = None
-    is_final: bool = False
-    cost_usd: Optional[float] = None
-    duration_ms: Optional[int] = None
-    raw: dict = None
-
-    def __post_init__(self):
-        if self.raw is None:
-            self.raw = {}
-        if self.tool_activities is None:
-            self.tool_activities = []
+    SUMMARY_RULES = CLAUDE_TOOL_SUMMARY_RULES
 
 
 class StreamParser:
@@ -323,7 +271,7 @@ class StreamParser:
 
                     # Update linked ToolActivity if we have it
                     if tool_use_id in self.pending_tools:
-                        tool_activity = self.pending_tools[tool_use_id]
+                        tool_activity = self.pending_tools.pop(tool_use_id)
                         tool_activity.result = content_preview
                         tool_activity.full_result = full_content
                         tool_activity.is_error = is_error

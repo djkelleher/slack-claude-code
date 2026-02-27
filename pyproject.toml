@@ -40,3 +40,19 @@ build-backend = "poetry.core.masonry.api"
 markers = [
     "live: marks tests as live integration tests (require Slack credentials)"
 ]
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = [
+    "E203",
+    "E302",
+    "E303",
+    "E306",
+    "E501",
+    "C901",
+]
+per-file-ignores = [
+    "__init__.py:F401",
+    "tests/unit/*.py:F401,F841",
+    "tests/integration/*.py:F401,F841",
+]

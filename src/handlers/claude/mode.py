@@ -5,6 +5,7 @@ from slack_bolt.async_app import AsyncApp
 from src.codex.capabilities import (
     SUPPORTED_COMPAT_MODE_ALIASES,
     codex_mode_alias_for_approval,
+    normalize_codex_approval_mode,
     resolve_codex_compat_mode,
 )
 from src.config import config
@@ -40,7 +41,11 @@ def register_mode_command(app: AsyncApp, deps: HandlerDependencies) -> None:
 
     @app.command("/mode")
     @slack_command(
-        require_text=False, usage_hint="Usage: /mode [bypass|accept|plan|ask|default|delegate]"
+        require_text=False,
+        usage_hint=(
+            "Usage: /mode [bypass|accept|plan|ask|default|delegate|"
+            "approval <mode>|sandbox <mode>]"
+        ),
     )
     async def handle_mode(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /mode command - view or set permission mode for session."""
@@ -126,6 +131,113 @@ async def _handle_codex_mode(
     text: str,
 ) -> None:
     """Handle /mode for Codex sessions."""
+    tokens = text.split(None, 1) if text else []
+    primary = tokens[0] if tokens else ""
+    value = tokens[1].strip().lower() if len(tokens) > 1 else ""
+
+    if primary == "approval":
+        if not value:
+            current_mode = normalize_codex_approval_mode(
+                session.approval_mode or config.CODEX_APPROVAL_MODE
+            )
+            valid_modes = ", ".join(f"`{mode}`" for mode in config.VALID_APPROVAL_MODES)
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Current approval mode: {current_mode}",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"*Current Codex approval mode:* `{current_mode}`\n\n"
+                                f"*Valid modes:* {valid_modes}\n\n"
+                                "Use `/mode approval <mode>` to update."
+                            ),
+                        },
+                    }
+                ],
+            )
+            return
+
+        if value not in config.VALID_APPROVAL_MODES:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Invalid approval mode: {value}",
+                blocks=error_message(
+                    f"Invalid approval mode: `{value}`\n\n"
+                    f"Valid modes: {', '.join(f'`{m}`' for m in config.VALID_APPROVAL_MODES)}"
+                ),
+            )
+            return
+
+        normalized_value = normalize_codex_approval_mode(value)
+        await deps.db.update_session_approval_mode(ctx.channel_id, ctx.thread_ts, normalized_value)
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            text=f"Codex approval mode set to: {normalized_value}",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":heavy_check_mark: Codex approval mode set to `{normalized_value}`",
+                    },
+                }
+            ],
+        )
+        return
+
+    if primary == "sandbox":
+        if not value:
+            current_mode = session.sandbox_mode or config.CODEX_SANDBOX_MODE
+            valid_modes = ", ".join(f"`{mode}`" for mode in config.VALID_SANDBOX_MODES)
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Current sandbox mode: {current_mode}",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"*Current Codex sandbox mode:* `{current_mode}`\n\n"
+                                f"*Valid modes:* {valid_modes}\n\n"
+                                "Use `/mode sandbox <mode>` to update."
+                            ),
+                        },
+                    }
+                ],
+            )
+            return
+
+        if value not in config.VALID_SANDBOX_MODES:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                text=f"Invalid sandbox mode: {value}",
+                blocks=error_message(
+                    f"Invalid sandbox mode: `{value}`\n\n"
+                    f"Valid modes: {', '.join(f'`{m}`' for m in config.VALID_SANDBOX_MODES)}"
+                ),
+            )
+            return
+
+        await deps.db.update_session_sandbox_mode(ctx.channel_id, ctx.thread_ts, value)
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            text=f"Codex sandbox mode set to: {value}",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":heavy_check_mark: Codex sandbox mode set to `{value}`",
+                    },
+                }
+            ],
+        )
+        return
+
     if not text:
         current_mode = _get_codex_display_mode(
             permission_mode=session.permission_mode,
@@ -152,7 +264,10 @@ async def _handle_codex_mode(
                     "elements": [
                         {
                             "type": "mrkdwn",
-                            "text": "Use `/approval` and `/sandbox` for direct Codex controls.",
+                            "text": (
+                                "Use `/mode approval <mode>` and `/mode sandbox <mode>` "
+                                "for direct Codex controls."
+                            ),
                         }
                     ],
                 },

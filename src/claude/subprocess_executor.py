@@ -8,8 +8,12 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from loguru import logger
 
+from src.utils.execution_scope import build_session_scope
+from src.utils.process_utils import terminate_process_safely
+from src.utils.stream_models import concat_with_spacing
+
 from ..config import config
-from .streaming import StreamMessage, StreamParser, _concat_with_spacing
+from .streaming import StreamMessage, StreamParser
 
 # Timeout for reading a single line from Claude process stdout
 # If no output is received for this duration, assume the process is hung
@@ -44,31 +48,6 @@ class ExecutionResult:
     has_pending_plan_approval: bool = False  # True if terminated due to ExitPlanMode
     plan_subagent_result: Optional[str] = None  # Plan content from Plan subagent output
     plan_write_timeout: bool = False  # True if we timed out waiting for plan write
-
-
-async def _terminate_process_safely(
-    process: asyncio.subprocess.Process,
-    timeout: float = 5.0,
-) -> None:
-    """Terminate a process safely, falling back to kill if needed.
-
-    Args:
-        process: The process to terminate
-        timeout: Seconds to wait for graceful termination before kill
-    """
-    if process.returncode is not None:
-        return  # Already terminated
-
-    process.terminate()
-    try:
-        await asyncio.wait_for(process.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-        # Process didn't terminate gracefully, force kill
-        process.kill()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
-            logger.warning("Process did not respond to kill signal")
 
 
 @dataclass
@@ -111,6 +90,8 @@ class SubprocessExecutor:
     ) -> None:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._process_channels: dict[str, str] = {}  # track_id -> channel_id
+        self._process_scopes: dict[str, str] = {}  # track_id -> session_scope
+        self._execution_track_ids: dict[str, str] = {}  # execution_id -> track_id
         self._lock: asyncio.Lock = asyncio.Lock()
         self.db = db
         # Per-execution state to avoid race conditions between concurrent executions
@@ -153,6 +134,7 @@ class SubprocessExecutor:
         db_session_id: Optional[int] = None,
         model: Optional[str] = None,
         channel_id: Optional[str] = None,
+        thread_ts: Optional[str] = None,
         _recursion_depth: int = 0,
         _is_retry_after_exit_plan_error: bool = False,
     ) -> ExecutionResult:
@@ -192,6 +174,9 @@ class SubprocessExecutor:
         # Create per-execution state to avoid race conditions between concurrent executions
         # Each execution gets its own state object keyed by execution_id
         track_id = execution_id or session_id or "default"
+        if channel_id:
+            track_id = f"{channel_id}_{track_id}"
+        session_scope = build_session_scope(channel_id or "", thread_ts)
         state = ExecutionState()
         async with self._states_lock:
             self._execution_states[track_id] = state
@@ -217,7 +202,9 @@ class SubprocessExecutor:
             cmd.extend(["--permission-mode", mode])
             logger.info(f"{log_prefix}Using --permission-mode {mode}")
         else:
-            logger.warning(f"{log_prefix}Invalid permission mode: {mode}, using {config.DEFAULT_BYPASS_MODE}")
+            logger.warning(
+                f"{log_prefix}Invalid permission mode: {mode}, using {config.DEFAULT_BYPASS_MODE}"
+            )
             cmd.extend(["--permission-mode", config.DEFAULT_BYPASS_MODE])
 
         # Add allowed tools restriction if configured
@@ -264,6 +251,9 @@ class SubprocessExecutor:
             self._active_processes[track_id] = process
             if channel_id:
                 self._process_channels[track_id] = channel_id
+            self._process_scopes[track_id] = session_scope
+            if execution_id:
+                self._execution_track_ids[execution_id] = track_id
 
         parser = StreamParser()
         accumulated_output = ""
@@ -293,7 +283,7 @@ class SubprocessExecutor:
                             "terminating after grace period"
                         )
                         state.plan_write_timeout = True
-                        await _terminate_process_safely(process)
+                        await terminate_process_safely(process)
                         break
                     read_timeout = min(read_timeout, remaining)
 
@@ -312,14 +302,14 @@ class SubprocessExecutor:
                             f"{log_prefix}No plan artifact within grace period; terminating"
                         )
                         state.plan_write_timeout = True
-                        await _terminate_process_safely(process)
+                        await terminate_process_safely(process)
                         break
 
                     logger.error(
                         f"{log_prefix}Readline timeout after {READLINE_TIMEOUT_SECONDS}s - "
                         "Claude process may be hung or lost connection"
                     )
-                    await _terminate_process_safely(process)
+                    await terminate_process_safely(process)
                     return ExecutionResult(
                         success=False,
                         output=accumulated_output,
@@ -405,7 +395,9 @@ class SubprocessExecutor:
                                         logger.info(f"{log_prefix}Tool: AskUserQuestion")
                                     # Mark for early termination to handle question in Slack
                                     state.ask_user_question_detected = True
-                                    logger.info(f"{log_prefix}AskUserQuestion detected - will terminate for Slack handling")
+                                    logger.info(
+                                        f"{log_prefix}AskUserQuestion detected - will terminate for Slack handling"
+                                    )
                                 elif tool_name == "ExitPlanMode":
                                     state.exit_plan_mode_tool_id = block.get("id")
                                     # Always set exit_plan_mode_detected when Claude calls
@@ -448,9 +440,7 @@ class SubprocessExecutor:
                     # Log tool results summary
                     message = msg.raw.get("message", {})
                     if not isinstance(message, dict):
-                        logger.debug(
-                            f"{log_prefix}Unexpected user message type: {type(message)}"
-                        )
+                        logger.debug(f"{log_prefix}Unexpected user message type: {type(message)}")
                         message = {}
                     content_blocks = message.get("content", [])
                     if not isinstance(content_blocks, list):
@@ -546,9 +536,7 @@ class SubprocessExecutor:
 
                 # Accumulate content
                 if msg.type == "assistant" and msg.content:
-                    accumulated_output = _concat_with_spacing(
-                        accumulated_output, msg.content
-                    )
+                    accumulated_output = concat_with_spacing(accumulated_output, msg.content)
                 elif msg.type == "result" and msg.content and not accumulated_output:
                     # Some CLI commands only populate the result field.
                     accumulated_output = msg.content
@@ -580,14 +568,16 @@ class SubprocessExecutor:
                 # If ExitPlanMode error detected, terminate early and retry
                 if state.exit_plan_mode_error_detected:
                     logger.info(f"{log_prefix}Terminating execution to retry without plan mode")
-                    await _terminate_process_safely(process)
+                    await terminate_process_safely(process)
                     break  # Exit the message processing loop
 
                 # If AskUserQuestion detected, terminate early to handle in Slack
                 # This must happen before Claude CLI returns the error to Claude
                 if state.ask_user_question_detected:
-                    logger.info(f"{log_prefix}Terminating execution to handle AskUserQuestion in Slack")
-                    await _terminate_process_safely(process)
+                    logger.info(
+                        f"{log_prefix}Terminating execution to handle AskUserQuestion in Slack"
+                    )
+                    await terminate_process_safely(process)
                     break  # Exit the message processing loop
 
                 # If ExitPlanMode detected in plan mode, terminate early to show approval UI
@@ -610,7 +600,7 @@ class SubprocessExecutor:
                                     f"{log_prefix}ExitPlanMode detected but Write tools still pending "
                                     f"after {elapsed:.1f}s; terminating anyway"
                                 )
-                                await _terminate_process_safely(process)
+                                await terminate_process_safely(process)
                                 break
                             logger.info(
                                 f"{log_prefix}ExitPlanMode detected but Write tool(s) still pending - "
@@ -623,8 +613,10 @@ class SubprocessExecutor:
                             )
                         # Don't terminate yet - continue processing to get subagent result / writes
                     else:
-                        logger.info(f"{log_prefix}Terminating execution to handle plan approval in Slack")
-                        await _terminate_process_safely(process)
+                        logger.info(
+                            f"{log_prefix}Terminating execution to handle plan approval in Slack"
+                        )
+                        await terminate_process_safely(process)
                         break  # Exit the message processing loop
 
                 # If Plan subagent (specifically subagent_type=Plan) completed in plan mode,
@@ -642,7 +634,7 @@ class SubprocessExecutor:
                                 f"{log_prefix}Plan subagent completed but Write tools still pending "
                                 f"after {elapsed:.1f}s; terminating anyway"
                             )
-                            await _terminate_process_safely(process)
+                            await terminate_process_safely(process)
                             break
                         logger.info(
                             f"{log_prefix}Plan subagent completed but Write tool(s) still pending - "
@@ -654,7 +646,7 @@ class SubprocessExecutor:
                                 f"{log_prefix}Plan write completed ({state.plan_write_path}); "
                                 "terminating for Plan subagent approval"
                             )
-                            await _terminate_process_safely(process)
+                            await terminate_process_safely(process)
                             break  # Exit the message processing loop
                         elapsed = 0.0
                         if state.plan_subagent_completed_at is not None:
@@ -664,7 +656,7 @@ class SubprocessExecutor:
                                 f"{log_prefix}Plan subagent completed but no plan write detected "
                                 f"after {elapsed:.1f}s; terminating anyway"
                             )
-                            await _terminate_process_safely(process)
+                            await terminate_process_safely(process)
                             break  # Exit the message processing loop
                         if not state.plan_write_wait_logged:
                             logger.info(
@@ -711,6 +703,7 @@ class SubprocessExecutor:
                     db_session_id=db_session_id,
                     model=model,
                     channel_id=channel_id,
+                    thread_ts=thread_ts,
                     _recursion_depth=_recursion_depth + 1,
                 )
 
@@ -731,6 +724,7 @@ class SubprocessExecutor:
                     db_session_id=db_session_id,
                     model=model,
                     channel_id=channel_id,
+                    thread_ts=thread_ts,
                     _recursion_depth=_recursion_depth + 1,
                     _is_retry_after_exit_plan_error=True,  # Prevent infinite retry
                 )
@@ -757,7 +751,7 @@ class SubprocessExecutor:
             )
 
         except asyncio.CancelledError:
-            await _terminate_process_safely(process)
+            await terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
@@ -768,7 +762,7 @@ class SubprocessExecutor:
             )
         except Exception as e:
             logger.error(f"{log_prefix}Error during execution: {e}")
-            await _terminate_process_safely(process)
+            await terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
@@ -780,17 +774,62 @@ class SubprocessExecutor:
             async with self._lock:
                 self._active_processes.pop(track_id, None)
                 self._process_channels.pop(track_id, None)
+                self._process_scopes.pop(track_id, None)
+                if execution_id and self._execution_track_ids.get(execution_id) == track_id:
+                    self._execution_track_ids.pop(execution_id, None)
             async with self._states_lock:
                 self._execution_states.pop(track_id, None)
 
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""
         async with self._lock:
-            process = self._active_processes.get(execution_id)
-        if process:
-            process.terminate()
-            return True
-        return False
+            process_key = None
+            if execution_id in self._active_processes:
+                process_key = execution_id
+            else:
+                track_id = self._execution_track_ids.get(execution_id)
+                if track_id and track_id in self._active_processes:
+                    process_key = track_id
+
+            if process_key is None:
+                return False
+
+            process = self._active_processes.pop(process_key)
+            self._process_channels.pop(process_key, None)
+            self._process_scopes.pop(process_key, None)
+
+            mapped_track_id = self._execution_track_ids.get(execution_id)
+            if mapped_track_id == process_key:
+                self._execution_track_ids.pop(execution_id, None)
+
+        await terminate_process_safely(process)
+        return True
+
+    async def cancel_by_scope(self, session_scope: str) -> int:
+        """Cancel active executions for a channel/thread session scope."""
+        async with self._lock:
+            track_ids_to_cancel = [
+                track_id
+                for track_id, scope in self._process_scopes.items()
+                if scope == session_scope
+            ]
+            processes = []
+            for track_id in track_ids_to_cancel:
+                process = self._active_processes.pop(track_id, None)
+                if process:
+                    processes.append(process)
+                self._process_channels.pop(track_id, None)
+                self._process_scopes.pop(track_id, None)
+            for execution_id, track_id in list(self._execution_track_ids.items()):
+                if track_id in track_ids_to_cancel:
+                    self._execution_track_ids.pop(execution_id, None)
+
+        if processes:
+            await asyncio.gather(
+                *(terminate_process_safely(process) for process in processes),
+                return_exceptions=True,
+            )
+        return len(processes)
 
     async def cancel_all(self) -> int:
         """Cancel all active executions."""
@@ -798,8 +837,13 @@ class SubprocessExecutor:
             processes = list(self._active_processes.values())
             self._active_processes.clear()
             self._process_channels.clear()
-        for process in processes:
-            process.terminate()
+            self._process_scopes.clear()
+            self._execution_track_ids.clear()
+        if processes:
+            await asyncio.gather(
+                *(terminate_process_safely(process) for process in processes),
+                return_exceptions=True,
+            )
         return len(processes)
 
     async def cancel_by_channel(self, channel_id: str) -> int:
@@ -812,21 +856,26 @@ class SubprocessExecutor:
             Number of processes cancelled
         """
         async with self._lock:
-            # Find all track_ids for this channel
             track_ids_to_cancel = [
                 track_id
                 for track_id, ch_id in self._process_channels.items()
                 if ch_id == channel_id
             ]
-            # Get processes and remove from tracking
             processes = []
             for track_id in track_ids_to_cancel:
                 if track_id in self._active_processes:
                     processes.append(self._active_processes.pop(track_id))
                     self._process_channels.pop(track_id, None)
+                    self._process_scopes.pop(track_id, None)
+            for execution_id, track_id in list(self._execution_track_ids.items()):
+                if track_id in track_ids_to_cancel:
+                    self._execution_track_ids.pop(execution_id, None)
 
-        for process in processes:
-            process.terminate()
+        if processes:
+            await asyncio.gather(
+                *(terminate_process_safely(process) for process in processes),
+                return_exceptions=True,
+            )
         return len(processes)
 
     async def shutdown(self) -> None:

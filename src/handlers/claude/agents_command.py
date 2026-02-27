@@ -372,6 +372,7 @@ async def _run_agent_with_streaming(
             model=model,
             db_session_id=session.id,
             channel_id=channel_id,
+            thread_ts=thread_ts,
         )
 
         await streaming_state.stop_heartbeat()

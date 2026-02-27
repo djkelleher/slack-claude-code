@@ -1,0 +1,14 @@
+[flake8]
+max-line-length = 100
+extend-ignore =
+    E203
+    E302
+    E303
+    E306
+    E501
+    C901
+per-file-ignores =
+    __init__.py:F401
+    tests/*.py:F401,F841
+    tests/unit/*.py:F401,F841
+    tests/integration/*.py:F401,F841

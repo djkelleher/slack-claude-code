@@ -2,14 +2,15 @@
 
 import json
 import time
-from dataclasses import dataclass
 from typing import Any, Iterator, Optional
 
 from loguru import logger
 
-from src.claude.streaming import _concat_with_spacing
-from src.config import config
-from src.utils.tool_input_summary import format_tool_input_summary
+from src.utils.stream_models import (
+    BaseToolActivity,
+    StreamMessage,
+    concat_with_spacing,
+)
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
 MAX_BUFFER_SIZE = 1024 * 1024  # 1MB
@@ -30,50 +31,10 @@ CODEX_TOOL_SUMMARY_RULES = {
 }
 
 
-@dataclass
-class ToolActivity:
-    """Structured representation of a tool invocation.
+class ToolActivity(BaseToolActivity):
+    """Codex-specific tool activity metadata."""
 
-    Tracks the full lifecycle of a tool use from invocation to result.
-    """
-
-    id: str  # tool_use_id from Codex
-    name: str  # Read, Edit, Write, Bash, etc.
-    input: dict  # Full tool input parameters
-    input_summary: str  # Short summary for inline display
-    result: Optional[str] = None  # Result content (truncated for display)
-    full_result: Optional[str] = None  # Full untruncated result
-    is_error: bool = False
-    duration_ms: Optional[int] = None
-    started_at: Optional[float] = None  # time.monotonic() for duration calculation
-    timestamp: Optional[float] = None  # time.time() wall-clock for display
-
-    @classmethod
-    def create_input_summary(cls, name: str, input_dict: dict) -> str:
-        """Create a short summary of tool input for inline display."""
-        display = config.timeouts.display
-        return format_tool_input_summary(name, input_dict, display, CODEX_TOOL_SUMMARY_RULES)
-
-
-@dataclass
-class StreamMessage:
-    """Parsed message from Codex's stream-json output."""
-
-    type: str  # init, assistant, user, result, error, tool_call, tool_result
-    content: str = ""
-    detailed_content: str = ""  # Full output with tool use details
-    tool_activities: Optional[list[ToolActivity]] = None  # Structured tool data
-    session_id: Optional[str] = None
-    is_final: bool = False
-    cost_usd: Optional[float] = None
-    duration_ms: Optional[int] = None
-    raw: dict = None
-
-    def __post_init__(self):
-        if self.raw is None:
-            self.raw = {}
-        if self.tool_activities is None:
-            self.tool_activities = []
+    SUMMARY_RULES = CODEX_TOOL_SUMMARY_RULES
 
 
 class StreamParser:
@@ -96,8 +57,8 @@ class StreamParser:
         """Append assistant text to accumulated output buffers."""
         if not content:
             return
-        self.accumulated_content = _concat_with_spacing(self.accumulated_content, content)
-        self.accumulated_detailed = _concat_with_spacing(self.accumulated_detailed, content)
+        self.accumulated_content = concat_with_spacing(self.accumulated_content, content)
+        self.accumulated_detailed = concat_with_spacing(self.accumulated_detailed, content)
 
     def _create_tool_call(
         self,

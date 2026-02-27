@@ -5,7 +5,6 @@ from typing import Any, Optional
 
 from src.approval.handler import PermissionManager
 from src.approval.plan_manager import PlanApprovalManager
-from src.claude.streaming import _concat_with_spacing
 from src.codex.approval_bridge import (
     approval_payload_from_decision,
     format_approval_request_for_slack,
@@ -14,6 +13,8 @@ from src.codex.capabilities import apply_codex_mode_to_prompt, is_likely_plan_co
 from src.config import config
 from src.database.models import Session
 from src.question.manager import QuestionManager
+from src.utils.execution_scope import build_session_scope
+from src.utils.stream_models import concat_with_spacing
 
 
 @dataclass
@@ -27,12 +28,6 @@ class CommandRouteResult:
 def resolve_backend_for_session(session: Session) -> str:
     """Resolve backend for a session based on selected model."""
     return session.get_backend()
-
-
-def _is_codex_question_tool(tool_name: str) -> bool:
-    """Return True when a Codex tool invocation requests user input."""
-    normalized = (tool_name or "").strip().lower()
-    return normalized in {"askuserquestion", "ask_user_question", "request_user_input"}
 
 
 def _normalize_codex_question_input(tool_name: str, tool_input: dict) -> dict:
@@ -87,37 +82,35 @@ async def execute_for_session(
         if not deps.codex_executor:
             raise RuntimeError("Codex executor is not configured")
 
+        session_scope = build_session_scope(channel_id, thread_ts)
+
         pending_question = None
         accumulated_context = ""
+        question_count = 0
+        max_questions = config.timeouts.execution.max_questions_per_conversation
 
         async def wrapped_on_chunk(msg: Any) -> None:
-            nonlocal pending_question, accumulated_context
+            nonlocal accumulated_context
             if on_chunk:
                 await on_chunk(msg)
 
             if msg.type == "assistant" and msg.content:
-                accumulated_context = _concat_with_spacing(accumulated_context, msg.content)
-
-            if not msg.tool_activities:
-                return
-
-            for tool in msg.tool_activities:
-                if _is_codex_question_tool(tool.name) and tool.result is None:
-                    if not pending_question or pending_question.tool_use_id != tool.id:
-                        pending_question = await QuestionManager.create_pending_question(
-                            session_id=str(session.id),
-                            channel_id=channel_id,
-                            thread_ts=thread_ts,
-                            tool_use_id=tool.id,
-                            tool_input=_normalize_codex_question_input(tool.name, tool.input),
-                        )
+                accumulated_context = concat_with_spacing(accumulated_context, msg.content)
 
         async def on_user_input_request(tool_use_id: str, tool_input: dict) -> dict | None:
-            nonlocal pending_question
+            nonlocal pending_question, question_count
             if slack_client is None:
                 if pending_question and pending_question.tool_use_id == tool_use_id:
                     await QuestionManager.cancel(pending_question.question_id)
                     pending_question = None
+                return None
+
+            if question_count >= max_questions:
+                if logger:
+                    logger.warning(
+                        f"Reached maximum Codex question limit ({max_questions}) "
+                        f"for session {session.id}"
+                    )
                 return None
 
             if not pending_question or pending_question.tool_use_id != tool_use_id:
@@ -135,6 +128,7 @@ async def execute_for_session(
                 deps.db,
                 context_text=accumulated_context,
             )
+            question_count += 1
             answers = await QuestionManager.wait_for_answer(pending_question.question_id)
             if not answers:
                 pending_question = None
@@ -166,7 +160,7 @@ async def execute_for_session(
         result = await deps.codex_executor.execute(
             prompt=execution_prompt,
             working_directory=session.working_directory,
-            session_id=channel_id,
+            session_id=session_scope,
             resume_session_id=session.codex_session_id,
             execution_id=execution_id,
             on_chunk=wrapped_on_chunk,
@@ -177,61 +171,19 @@ async def execute_for_session(
             db_session_id=session.id,
             model=session.model,
             channel_id=channel_id,
+            thread_ts=thread_ts,
         )
 
         if result.session_id:
             await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
 
-        question_count = 0
-        max_questions = config.timeouts.execution.max_questions_per_conversation
-        while pending_question and result.session_id and question_count < max_questions:
-            if slack_client is None:
-                await QuestionManager.cancel(pending_question.question_id)
-                pending_question = None
-                break
-
-            question_count += 1
-            await QuestionManager.post_question_to_slack(
-                pending_question,
-                slack_client,
-                deps.db,
-                context_text=accumulated_context,
-            )
-            answers = await QuestionManager.wait_for_answer(pending_question.question_id)
-            if not answers:
-                result.output = (
-                    result.output or accumulated_context
-                ) + "\n\n_Question was cancelled._"
-                result.success = False
-                pending_question = None
-                break
-
-            answer_text = QuestionManager.format_answer_for_claude(pending_question)
-            pending_question = None
-            result = await deps.codex_executor.execute(
-                prompt=answer_text,
-                working_directory=session.working_directory,
-                session_id=channel_id,
-                resume_session_id=result.session_id,
-                execution_id=execution_id,
-                on_chunk=wrapped_on_chunk,
-                on_user_input_request=on_user_input_request,
-                on_approval_request=on_approval_request,
-                sandbox_mode=session.sandbox_mode or config.CODEX_SANDBOX_MODE,
-                approval_mode=session.approval_mode or config.CODEX_APPROVAL_MODE,
-                db_session_id=session.id,
-                model=session.model,
-                channel_id=channel_id,
-            )
-            if result.session_id:
-                await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
-
-        if question_count >= max_questions and pending_question:
+        if question_count >= max_questions:
             result.output = (
                 (result.output or accumulated_context)
-                + f"\n\n_Reached maximum question limit ({max_questions}). Please start a new conversation._"
-            )
+                + f"\n\n_Reached maximum question limit ({max_questions})._"
+            ).strip()
             result.success = False
+        if pending_question:
             await QuestionManager.cancel(pending_question.question_id)
             pending_question = None
 
@@ -262,7 +214,7 @@ async def execute_for_session(
                 result = await deps.codex_executor.execute(
                     prompt="Plan approved. Please proceed with the implementation.",
                     working_directory=session.working_directory,
-                    session_id=channel_id,
+                    session_id=session_scope,
                     resume_session_id=result.session_id,
                     execution_id=execution_id,
                     on_chunk=wrapped_on_chunk,
@@ -273,6 +225,7 @@ async def execute_for_session(
                     db_session_id=session.id,
                     model=session.model,
                     channel_id=channel_id,
+                    thread_ts=thread_ts,
                 )
                 if result.session_id:
                     await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
@@ -288,7 +241,7 @@ async def execute_for_session(
     result = await deps.executor.execute(
         prompt=prompt,
         working_directory=session.working_directory,
-        session_id=channel_id,
+        session_id=build_session_scope(channel_id, thread_ts),
         resume_session_id=session.claude_session_id,
         execution_id=execution_id,
         on_chunk=on_chunk,
@@ -296,6 +249,7 @@ async def execute_for_session(
         db_session_id=session.id,
         model=session.model,
         channel_id=channel_id,
+        thread_ts=thread_ts,
     )
 
     if result.session_id:

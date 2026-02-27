@@ -12,13 +12,17 @@ from loguru import logger
 from src.codex.approval_bridge import default_approval_payload
 from src.codex.capabilities import normalize_codex_approval_mode
 from src.config import config, parse_model_effort
-
-from src.claude.streaming import _concat_with_spacing
+from src.utils.execution_scope import build_session_scope
+from src.utils.process_utils import terminate_process_safely
+from src.utils.stream_models import concat_with_spacing
 
 from .streaming import StreamMessage, StreamParser
 
 if TYPE_CHECKING:
     from src.database.repository import DatabaseRepository
+
+# Backwards-compatible alias retained for existing tests/integration points.
+_terminate_process_safely = terminate_process_safely
 
 
 @dataclass
@@ -35,25 +39,6 @@ class ExecutionResult:
     was_cancelled: bool = False
 
 
-async def _terminate_process_safely(
-    process: asyncio.subprocess.Process,
-    timeout: float = 5.0,
-) -> None:
-    """Terminate a process safely, falling back to kill if needed."""
-    if process.returncode is not None:
-        return
-
-    process.terminate()
-    try:
-        await asyncio.wait_for(process.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-        process.kill()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
-            logger.warning("Codex process did not respond to kill signal")
-
-
 class SubprocessExecutor:
     """Execute Codex via `codex app-server` JSON-RPC over stdio."""
 
@@ -63,6 +48,7 @@ class SubprocessExecutor:
     ) -> None:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._process_channels: dict[str, str] = {}  # track_id -> channel_id
+        self._process_scopes: dict[str, str] = {}  # track_id -> session_scope
         self._execution_track_ids: dict[str, str] = {}  # execution_id -> track_id
         self._lock: asyncio.Lock = asyncio.Lock()
         self.db = db
@@ -82,6 +68,7 @@ class SubprocessExecutor:
         db_session_id: Optional[int] = None,
         model: Optional[str] = None,
         channel_id: Optional[str] = None,
+        thread_ts: Optional[str] = None,
         _recursion_depth: int = 0,
     ) -> ExecutionResult:
         """Execute a prompt via Codex app-server.
@@ -134,6 +121,7 @@ class SubprocessExecutor:
             db_session_id=db_session_id,
             model=model,
             channel_id=channel_id,
+            thread_ts=thread_ts,
             _recursion_depth=_recursion_depth,
         )
 
@@ -153,6 +141,7 @@ class SubprocessExecutor:
         db_session_id: Optional[int],
         model: Optional[str],
         channel_id: Optional[str],
+        thread_ts: Optional[str],
         _recursion_depth: int,
     ) -> ExecutionResult:
         """Execute using Codex app-server JSON-RPC flow."""
@@ -183,10 +172,12 @@ class SubprocessExecutor:
         track_id = execution_id or session_id or "default"
         if channel_id:
             track_id = f"{channel_id}_{track_id}"
+        session_scope = build_session_scope(channel_id or "", thread_ts)
         async with self._lock:
             self._active_processes[track_id] = process
             if channel_id:
                 self._process_channels[track_id] = channel_id
+            self._process_scopes[track_id] = session_scope
             if execution_id:
                 self._execution_track_ids[execution_id] = track_id
 
@@ -254,7 +245,7 @@ class SubprocessExecutor:
                 result_session_id = msg.session_id
 
             if msg.type == "assistant" and msg.content:
-                accumulated_output = _concat_with_spacing(accumulated_output, msg.content)
+                accumulated_output = concat_with_spacing(accumulated_output, msg.content)
 
             if msg.type == "result":
                 cost_usd = msg.cost_usd
@@ -573,7 +564,7 @@ class SubprocessExecutor:
                     f"{log_prefix}Session {resume_session_id} not found, "
                     "retrying with a new thread"
                 )
-                await _terminate_process_safely(process, timeout=2.0)
+                await terminate_process_safely(process, timeout=2.0)
                 return await self.execute(
                     prompt=prompt,
                     working_directory=working_directory,
@@ -588,6 +579,7 @@ class SubprocessExecutor:
                     db_session_id=db_session_id,
                     model=model,
                     channel_id=channel_id,
+                    thread_ts=thread_ts,
                     _recursion_depth=_recursion_depth + 1,
                 )
 
@@ -616,7 +608,7 @@ class SubprocessExecutor:
                     continue
                 is_final = await process_rpc_message(rpc)
 
-            await _terminate_process_safely(process, timeout=2.0)
+            await terminate_process_safely(process, timeout=2.0)
 
             stderr = await process.stderr.read() if process.stderr else b""
             if stderr:
@@ -636,7 +628,7 @@ class SubprocessExecutor:
             )
 
         except asyncio.CancelledError:
-            await _terminate_process_safely(process)
+            await terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
@@ -647,7 +639,7 @@ class SubprocessExecutor:
             )
         except Exception as e:
             logger.error(f"{log_prefix}Error during app-server execution: {e}")
-            await _terminate_process_safely(process)
+            await terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
                 output=accumulated_output,
@@ -659,6 +651,7 @@ class SubprocessExecutor:
             async with self._lock:
                 self._active_processes.pop(track_id, None)
                 self._process_channels.pop(track_id, None)
+                self._process_scopes.pop(track_id, None)
                 if execution_id and self._execution_track_ids.get(execution_id) == track_id:
                     self._execution_track_ids.pop(execution_id, None)
 
@@ -779,13 +772,40 @@ class SubprocessExecutor:
 
             process = self._active_processes.pop(process_key)
             self._process_channels.pop(process_key, None)
+            self._process_scopes.pop(process_key, None)
 
             mapped_track_id = self._execution_track_ids.get(execution_id)
             if mapped_track_id == process_key:
                 self._execution_track_ids.pop(execution_id, None)
 
-        await _terminate_process_safely(process)
+        await terminate_process_safely(process)
         return True
+
+    async def cancel_by_scope(self, session_scope: str) -> int:
+        """Cancel active executions for a channel/thread session scope."""
+        async with self._lock:
+            track_ids_to_cancel = [
+                track_id
+                for track_id, scope in self._process_scopes.items()
+                if scope == session_scope
+            ]
+            processes = []
+            for track_id in track_ids_to_cancel:
+                process = self._active_processes.pop(track_id, None)
+                if process:
+                    processes.append(process)
+                self._process_channels.pop(track_id, None)
+                self._process_scopes.pop(track_id, None)
+            for execution_id, track_id in list(self._execution_track_ids.items()):
+                if track_id in track_ids_to_cancel:
+                    self._execution_track_ids.pop(execution_id, None)
+
+        if processes:
+            await asyncio.gather(
+                *(terminate_process_safely(process) for process in processes),
+                return_exceptions=True,
+            )
+        return len(processes)
 
     async def cancel_by_channel(self, channel_id: str) -> int:
         """Cancel all active executions for a specific channel.
@@ -807,13 +827,14 @@ class SubprocessExecutor:
                 if track_id in self._active_processes:
                     processes.append(self._active_processes.pop(track_id))
                     self._process_channels.pop(track_id, None)
+                    self._process_scopes.pop(track_id, None)
             for execution_id, track_id in list(self._execution_track_ids.items()):
                 if track_id in track_ids_to_cancel:
                     self._execution_track_ids.pop(execution_id, None)
 
         if processes:
             await asyncio.gather(
-                *(_terminate_process_safely(process) for process in processes),
+                *(terminate_process_safely(process) for process in processes),
                 return_exceptions=True,
             )
         return len(processes)
@@ -824,10 +845,11 @@ class SubprocessExecutor:
             processes = list(self._active_processes.values())
             self._active_processes.clear()
             self._process_channels.clear()
+            self._process_scopes.clear()
             self._execution_track_ids.clear()
         if processes:
             await asyncio.gather(
-                *(_terminate_process_safely(process) for process in processes),
+                *(terminate_process_safely(process) for process in processes),
                 return_exceptions=True,
             )
         return len(processes)

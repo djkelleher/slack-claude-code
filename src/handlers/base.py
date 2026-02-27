@@ -49,8 +49,8 @@ class CommandContext:
 
         Note
         ----
-        Slash commands don't include thread_ts, so it will always be None for commands.
-        Thread-based sessions are only available when handling message events.
+        Most slash command payloads do not include ``thread_ts``. When Slack
+        provides it, handlers can scope operations to that thread session.
         """
         return cls(
             channel_id=command["channel_id"],
@@ -59,7 +59,7 @@ class CommandContext:
             command_name=command.get("command", ""),
             client=client,
             logger=logger,
-            thread_ts=None,  # Commands always operate on channel-level sessions
+            thread_ts=command.get("thread_ts"),
         )
 
 

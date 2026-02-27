@@ -55,7 +55,7 @@ Customize Claude's behavior for your workflow.
 | Command | Description | Example |
 |---------|-------------|---------|
 | `/model` | Show or change AI model | `/model sonnet` |
-| `/mode` | View or set session mode (Claude and Codex) | `/mode`, `/mode plan`, `/mode bypass` |
+| `/mode` | View or set session mode (Claude and Codex) | `/mode`, `/mode plan`, `/mode bypass`, `/mode approval never`, `/mode sandbox workspace-write` |
 | `/permissions` | View current permission mode (use `/mode` to change) | `/permissions` |
 | `/notifications` | Configure notifications | `/notifications` |
 
@@ -64,8 +64,6 @@ Use these when your session model is a Codex model.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/sandbox` | View or set Codex sandbox mode | `/sandbox`, `/sandbox workspace-write` |
-| `/approval` | View or set Codex approval mode | `/approval`, `/approval never` |
 | `/codex-status` | Show Codex session state and modes | `/codex-status` |
 | `/codex-clear` | Reset only Codex session state | `/codex-clear` |
 
@@ -78,6 +76,8 @@ the exact request/notification methods this app handles.
 - `/mode ask`, `/mode default`, and `/mode plan` -> `approval=on-request`
 - `/mode plan` also adds a plan-first, no-execution instruction to Codex prompts
 - `/mode accept` and `/mode delegate` remain unsupported for Codex
+- `/mode approval <untrusted|on-request|never>` sets explicit approval policy
+- `/mode sandbox <read-only|workspace-write|danger-full-access>` sets sandbox policy
 
 Supported Codex models:
 - `gpt-5.3-codex`

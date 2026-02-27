@@ -45,6 +45,7 @@ from src.utils.formatters.command import (
     should_attach_file,
 )
 from src.utils.formatters.streaming import processing_message, streaming_update
+from src.utils.execution_scope import build_session_scope
 from src.utils.slack_helpers import post_text_snippet
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
@@ -685,7 +686,7 @@ async def main():
             result = await claude_executor.execute(
                 prompt=execution_prompt,
                 working_directory=session.working_directory,
-                session_id=channel_id,
+                session_id=build_session_scope(channel_id, thread_ts),
                 resume_session_id=session.claude_session_id,  # Resume previous session if exists
                 execution_id=execution_id,
                 on_chunk=on_chunk,
@@ -693,6 +694,7 @@ async def main():
                 db_session_id=session.id,  # Pass for smart context tracking
                 model=session.model,  # Use session's selected model
                 channel_id=channel_id,  # For channel-specific cancellation
+                thread_ts=thread_ts,
             )
 
             # Update session with Claude session ID for resume
@@ -782,7 +784,7 @@ async def main():
                     result = await claude_executor.execute(
                         prompt=answer_text,
                         working_directory=session.working_directory,
-                        session_id=channel_id,
+                        session_id=build_session_scope(channel_id, thread_ts),
                         resume_session_id=result.session_id,  # Resume the same session
                         execution_id=str(uuid.uuid4()),
                         on_chunk=on_chunk,  # Use updated chunk handler
@@ -790,6 +792,7 @@ async def main():
                         db_session_id=session.id,
                         model=session.model,
                         channel_id=channel_id,
+                        thread_ts=thread_ts,
                     )
 
                     # Update the new message_ts for any future operations
@@ -1029,7 +1032,7 @@ async def main():
                     result = await claude_executor.execute(
                         prompt="Plan approved. Please proceed with the implementation.",
                         working_directory=session.working_directory,
-                        session_id=channel_id,
+                        session_id=build_session_scope(channel_id, thread_ts),
                         resume_session_id=result.session_id,
                         execution_id=str(uuid.uuid4()),
                         on_chunk=on_chunk,
@@ -1037,6 +1040,7 @@ async def main():
                         db_session_id=session.id,
                         model=session.model,
                         channel_id=channel_id,
+                        thread_ts=thread_ts,
                     )
 
                     # Update message_ts for final response

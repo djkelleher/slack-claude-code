@@ -23,10 +23,7 @@ from .claude import (
 )
 
 # Codex-specific handlers
-from .codex import (
-    register_codex_mode_commands,
-    register_codex_session_commands,
-)
+from .codex import register_codex_session_commands
 
 
 def register_commands(
@@ -74,7 +71,6 @@ def register_commands(
     register_cancel_commands(app, deps)
 
     # Codex-specific handlers
-    register_codex_mode_commands(app, deps)
     register_codex_session_commands(app, deps)
 
     return deps

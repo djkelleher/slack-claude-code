@@ -41,9 +41,9 @@ CLAUDE_ONLY_SLASH_COMMANDS: tuple[str, ...] = (
 _CLAUDE_TO_CODEX_HINTS: dict[str, str] = {
     "/compact": "Use `/clear` to reset the conversation in Slack mode.",
     "/cost": "Use `/codex-status` and per-response footer cost metadata.",
-    "/claude-help": "Use `/codex-status`, `/approval`, `/sandbox`, and `/model`.",
+    "/claude-help": "Use `/codex-status`, `/mode`, and `/model`.",
     "/doctor": "Use local CLI diagnostics outside Slack.",
-    "/claude-config": "Use `/approval` and `/sandbox` to inspect Codex behavior.",
+    "/claude-config": "Use `/mode approval ...` and `/mode sandbox ...` for Codex behavior.",
     "/context": "Use Slack thread history and `/codex-status`.",
     "/init": "Codex does not provide `/init` in this Slack integration.",
     "/memory": "Codex does not use CLAUDE.md memory files.",
@@ -191,5 +191,5 @@ def get_codex_hint_for_claude_command(command: str) -> str:
     """Get Codex guidance for a Claude-only slash command."""
     return _CLAUDE_TO_CODEX_HINTS.get(
         command,
-        "Use `/codex-status`, `/approval`, `/sandbox`, or direct prompts instead.",
+        "Use `/codex-status`, `/mode approval ...`, `/mode sandbox ...`, or direct prompts.",
     )

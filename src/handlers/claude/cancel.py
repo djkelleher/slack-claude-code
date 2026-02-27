@@ -2,6 +2,8 @@
 
 from slack_bolt.async_app import AsyncApp
 
+from src.utils.execution_scope import build_session_scope
+
 from ..base import CommandContext, HandlerDependencies, slack_command
 
 
@@ -18,9 +20,16 @@ def register_cancel_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
     async def _handle_cancel(ctx: CommandContext, deps: HandlerDependencies) -> None:
         """Cancel all active executions in the current channel."""
-        cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
+        if ctx.thread_ts:
+            session_scope = build_session_scope(ctx.channel_id, ctx.thread_ts)
+            cancelled_count = await deps.executor.cancel_by_scope(session_scope)
+        else:
+            cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
         if deps.codex_executor:
-            cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
+            if ctx.thread_ts:
+                cancelled_count += await deps.codex_executor.cancel_by_scope(session_scope)
+            else:
+                cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
 
         if cancelled_count > 0:
             await ctx.client.chat_postMessage(

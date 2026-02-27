@@ -1,0 +1,24 @@
+"""Shared subprocess lifecycle helpers."""
+
+import asyncio
+
+from loguru import logger
+
+
+async def terminate_process_safely(
+    process: asyncio.subprocess.Process,
+    timeout: float = 5.0,
+) -> None:
+    """Terminate a process safely, falling back to kill if needed."""
+    if process.returncode is not None:
+        return
+
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        process.kill()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning("Process did not respond to kill signal")

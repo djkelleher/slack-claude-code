@@ -20,6 +20,7 @@ from src.config import (
     looks_like_codex_model,
     parse_model_effort,
 )
+from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.command import command_response_with_tables, error_message
 from src.utils.formatters.streaming import processing_message
 
@@ -39,18 +40,24 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         Shared handler dependencies.
     """
 
+    async def _cancel_executor_operations(
+        executor,
+        ctx: CommandContext,
+    ) -> int:
+        """Cancel operations for the current scope when possible."""
+        if not executor:
+            return 0
+        if ctx.thread_ts:
+            session_scope = build_session_scope(ctx.channel_id, ctx.thread_ts)
+            return await executor.cancel_by_scope(session_scope)
+        return await executor.cancel_by_channel(ctx.channel_id)
+
     async def _cancel_codex_operations(
         ctx: CommandContext,
         deps: HandlerDependencies,
     ) -> int:
         """Cancel active Codex operations for this channel/thread."""
-        cancelled_count = 0
-
-        # Cancel active Codex subprocess executions.
-        if deps.codex_executor:
-            cancelled_count += await deps.codex_executor.cancel_by_channel(ctx.channel_id)
-
-        return cancelled_count
+        return await _cancel_executor_operations(deps.codex_executor, ctx)
 
     async def _send_claude_command(
         ctx: CommandContext,
@@ -106,12 +113,13 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             result = await deps.executor.execute(
                 prompt=claude_command,
                 working_directory=session.working_directory,
-                session_id=ctx.channel_id,
+                session_id=build_session_scope(ctx.channel_id, ctx.thread_ts),
                 resume_session_id=session.claude_session_id,
                 execution_id=str(uuid.uuid4()),
                 permission_mode=session.permission_mode,
                 model=session.model,
                 channel_id=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
             )
 
             # Update session if needed
@@ -167,7 +175,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_clear(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /clear command - cancel processes and reset conversation sessions."""
         # Step 1: Cancel/stop active executions for this channel
-        cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
+        cancelled_count = await _cancel_executor_operations(deps.executor, ctx)
         cancelled_count += await _cancel_codex_operations(ctx, deps)
 
         # Brief wait for graceful shutdown
@@ -206,7 +214,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_esc(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /esc command - interrupt current operation (like pressing Escape)."""
         # Interrupt all active executions for this channel
-        cancelled_count = await deps.executor.cancel_by_channel(ctx.channel_id)
+        cancelled_count = await _cancel_executor_operations(deps.executor, ctx)
         cancelled_count += await _cancel_codex_operations(ctx, deps)
 
         if cancelled_count > 0:
@@ -731,7 +739,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f"*Custom Model*\nEnter any model ID (e.g., `claude-sonnet-4-6[1m]` or `gpt-5.3-codex-extra-high`)"
+                            "*Custom Model*\nEnter any model ID (e.g., `claude-sonnet-4-6[1m]` or `gpt-5.3-codex-extra-high`)"
                             + (
                                 f"\n_Currently using: `{normalized_current_model}`_"
                                 if is_custom_model
@@ -805,9 +813,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                                 f"*Approval mode:* `{current_approval}`\n"
                                 f"*Sandbox mode:* `{current_sandbox}`\n\n"
                                 "Use:\n"
-                                "• `/approval <mode>` to control approvals\n"
-                                "• `/sandbox <mode>` to control filesystem access\n"
-                                "• `/mode bypass|ask|default|plan` for session mode"
+                                "• `/mode approval <mode>` to control approvals\n"
+                                "• `/mode sandbox <mode>` to control filesystem access\n"
+                                "• `/mode bypass|ask|default|plan` for compatibility session mode"
                             ),
                         },
                     }
