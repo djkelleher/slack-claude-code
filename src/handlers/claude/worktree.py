@@ -12,6 +12,15 @@ from src.utils.formatters.command import error_message
 from ..base import CommandContext, HandlerDependencies, slack_command
 
 
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return True when path is root or a descendant of root."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def register_worktree_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register worktree command handlers.
 
@@ -134,12 +143,12 @@ async def _handle_list(
         )
         return
 
-    session_cwd = str(Path(session.working_directory).resolve())
+    session_cwd_path = Path(session.working_directory).resolve()
 
     lines = []
     for wt in worktrees:
-        wt_resolved = str(Path(wt.path).resolve())
-        is_current = session_cwd.startswith(wt_resolved)
+        wt_resolved_path = Path(wt.path).resolve()
+        is_current = _path_is_within(session_cwd_path, wt_resolved_path)
         pointer = " :point_left: _current_" if is_current else ""
         main_tag = " _(main)_" if wt.is_main else ""
         lines.append(f"  `{wt.branch}`{main_tag} - `{wt.path}`{pointer}")
@@ -241,6 +250,16 @@ async def _handle_merge(
             blocks=error_message(
                 f"No worktree found for branch `{branch_name}`.\n"
                 f"Available branches: {available}"
+            ),
+        )
+        return
+
+    if source_wt.is_main:
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            text=f"Cannot merge branch into itself: {branch_name}",
+            blocks=error_message(
+                f"Branch `{branch_name}` is the main worktree branch.\n" "Nothing to merge."
             ),
         )
         return

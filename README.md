@@ -49,6 +49,8 @@ Go to https://api.slack.com/apps → "Create New App" → "From scratch"
 
 **Slash Commands**: Add the commands from the tables below (or the subset that you plan to use)
 
+If you want worktree workflows, register both `/worktree` and `/wt` (alias) in Slack.
+
 #### Configuration
 Customize Claude's behavior for your workflow.
 
@@ -163,6 +165,8 @@ Full git workflow without leaving Slack. Includes branch name and commit message
 | `/diff` | Show uncommitted changes | `/diff --staged` |
 | `/commit` | Commit staged changes | `/commit fix: resolve race condition` |
 | `/branch` | Manage branches | `/branch create feature/auth` |
+| `/worktree` | Manage worktrees (`add`, `list`, `switch`, `merge`) | `/worktree add feature/auth` |
+| `/wt` | Alias for `/worktree` | `/wt list` |
 
 
 ### 3. Configure
@@ -211,7 +215,7 @@ src/
 ├── handlers/              # Slack command handlers
 ├── agents/                # Configurable subagent system (explore, plan, bash, general)
 ├── approval/              # Permission & plan approval handling
-├── git/                   # Git operations (status, diff, commit, branch)
+├── git/                   # Git operations (status, diff, commit, branch, worktree)
 ├── hooks/                 # Event hook system
 ├── question/              # AskUserQuestion tool support
 ├── tasks/                 # Background task management
