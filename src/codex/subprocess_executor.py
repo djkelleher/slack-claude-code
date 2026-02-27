@@ -532,6 +532,10 @@ class SubprocessExecutor:
         async def handle_control_request(request: _ControlRequest) -> None:
             """Queue steer/interrupt RPC calls for the active turn."""
             if request.kind == "steer":
+                logger.info(
+                    f"{log_prefix}event=turn_steer_requested scope={session_scope} "
+                    f"thread_id={result_session_id or 'unknown'} turn_id={current_turn_id or 'unknown'}"
+                )
                 if not result_session_id or not current_turn_id:
                     if not request.future.done():
                         request.future.set_result(
@@ -541,6 +545,10 @@ class SubprocessExecutor:
                                 turn_id=current_turn_id,
                             )
                         )
+                    logger.warning(
+                        f"{log_prefix}event=turn_steer_result success=false scope={session_scope} "
+                        "reason=no_active_turn"
+                    )
                     return
                 steer_input = request.text or ""
                 request_id = await send_request(
@@ -555,6 +563,10 @@ class SubprocessExecutor:
                 return
 
             if request.kind == "interrupt":
+                logger.info(
+                    f"{log_prefix}event=turn_interrupt_requested scope={session_scope} "
+                    f"thread_id={result_session_id or 'unknown'} turn_id={current_turn_id or 'unknown'}"
+                )
                 if not result_session_id or not current_turn_id:
                     if not request.future.done():
                         request.future.set_result(
@@ -564,6 +576,10 @@ class SubprocessExecutor:
                                 turn_id=current_turn_id,
                             )
                         )
+                    logger.warning(
+                        f"{log_prefix}event=turn_interrupt_result success=false scope={session_scope} "
+                        "reason=no_active_turn"
+                    )
                     return
                 request_id = await send_request(
                     "turn/interrupt",
@@ -590,6 +606,11 @@ class SubprocessExecutor:
                 if control_request:
                     if not control_request.future.done():
                         if rpc.get("error"):
+                            logger.warning(
+                                f"{log_prefix}event=turn_{control_request.kind}_result success=false "
+                                f"scope={session_scope} turn_id={current_turn_id or 'unknown'} "
+                                f"error={rpc.get('error')}"
+                            )
                             control_request.future.set_result(
                                 TurnControlResult(
                                     success=False,
@@ -603,6 +624,10 @@ class SubprocessExecutor:
                             if turn_id:
                                 if active_turn_state:
                                     active_turn_state.turn_id = str(turn_id)
+                                logger.info(
+                                    f"{log_prefix}event=turn_{control_request.kind}_result success=true "
+                                    f"scope={session_scope} turn_id={turn_id}"
+                                )
                                 control_request.future.set_result(
                                     TurnControlResult(
                                         success=True,
@@ -611,6 +636,10 @@ class SubprocessExecutor:
                                     )
                                 )
                             else:
+                                logger.info(
+                                    f"{log_prefix}event=turn_{control_request.kind}_result success=true "
+                                    f"scope={session_scope} turn_id={current_turn_id or 'unknown'}"
+                                )
                                 control_request.future.set_result(
                                     TurnControlResult(
                                         success=True,
@@ -756,6 +785,10 @@ class SubprocessExecutor:
                 async with self._lock:
                     self._active_turns_by_scope[session_scope] = active_turn_state
                     self._active_turns_by_track[track_id] = active_turn_state
+                logger.info(
+                    f"{log_prefix}event=turn_start_registered scope={session_scope} "
+                    f"thread_id={result_session_id} turn_id={current_turn_id} track_id={track_id}"
+                )
 
             is_final = False
             while not is_final:
@@ -858,6 +891,11 @@ class SubprocessExecutor:
                     self._active_turns_by_scope.pop(session_scope, None)
             if active_turn_state:
                 active_turn_state.done_event.set()
+                logger.info(
+                    f"{log_prefix}event=turn_state_cleared scope={session_scope} "
+                    f"thread_id={active_turn_state.thread_id} "
+                    f"turn_id={active_turn_state.turn_id} track_id={track_id}"
+                )
 
     @staticmethod
     def _resolve_sandbox_mode(mode: Optional[str], log_prefix: str) -> str:
@@ -993,6 +1031,9 @@ class SubprocessExecutor:
         async with self._lock:
             active = self._active_turns_by_scope.get(session_scope)
             if not active or active.done_event.is_set():
+                logger.debug(
+                    f"event=turn_{kind}_enqueue_skipped scope={session_scope} reason=no_active_turn"
+                )
                 return TurnControlResult(
                     success=False, error="No active turn", turn_id=None
                 )

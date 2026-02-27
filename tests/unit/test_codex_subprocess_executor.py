@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.config import config
-from src.codex.subprocess_executor import SubprocessExecutor, _terminate_process_safely
+from src.codex.subprocess_executor import (
+    SubprocessExecutor,
+    TurnControlResult,
+    _ActiveTurnState,
+    _terminate_process_safely,
+)
 
 
 class _DummyStdout:
@@ -497,3 +502,215 @@ class TestCodexSubprocessExecutor:
 
         assert process.terminated is True
         assert process.killed is True
+
+    @pytest.mark.asyncio
+    async def test_active_turn_lifecycle_helpers(self):
+        """Active turn helpers should reflect done_event lifecycle transitions."""
+        executor = SubprocessExecutor()
+        state = _ActiveTurnState(
+            scope="scope-1",
+            track_id="track-1",
+            thread_id="thread-1",
+            turn_id="turn-1",
+            control_queue=asyncio.Queue(),
+        )
+
+        async with executor._lock:
+            executor._active_turns_by_scope["scope-1"] = state
+            executor._active_turns_by_track["track-1"] = state
+
+        assert await executor.has_active_turn("scope-1") is True
+        active = await executor.get_active_turn("scope-1")
+        assert active is not None
+        assert active["turn_id"] == "turn-1"
+
+        state.done_event.set()
+        assert await executor.has_active_turn("scope-1") is False
+        assert await executor.get_active_turn("scope-1") is None
+
+    @pytest.mark.asyncio
+    async def test_steer_active_turn_success(self):
+        """steer_active_turn should return callback result when control request is consumed."""
+        executor = SubprocessExecutor()
+        control_queue: asyncio.Queue = asyncio.Queue()
+        state = _ActiveTurnState(
+            scope="scope-2",
+            track_id="track-2",
+            thread_id="thread-2",
+            turn_id="turn-2",
+            control_queue=control_queue,
+        )
+        async with executor._lock:
+            executor._active_turns_by_scope["scope-2"] = state
+            executor._active_turns_by_track["track-2"] = state
+
+        async def consume_once():
+            request = await control_queue.get()
+            request.future.set_result(
+                TurnControlResult(success=True, message="ok", turn_id="turn-2b")
+            )
+
+        consumer_task = asyncio.create_task(consume_once())
+        result = await executor.steer_active_turn("scope-2", "continue", timeout=0.5)
+        await consumer_task
+
+        assert result.success is True
+        assert result.turn_id == "turn-2b"
+
+    @pytest.mark.asyncio
+    async def test_steer_active_turn_timeout(self):
+        """steer_active_turn should time out when no active loop consumes control request."""
+        executor = SubprocessExecutor()
+        state = _ActiveTurnState(
+            scope="scope-3",
+            track_id="track-3",
+            thread_id="thread-3",
+            turn_id="turn-3",
+            control_queue=asyncio.Queue(),
+        )
+        async with executor._lock:
+            executor._active_turns_by_scope["scope-3"] = state
+            executor._active_turns_by_track["track-3"] = state
+
+        result = await executor.steer_active_turn("scope-3", "continue", timeout=0.01)
+        assert result.success is False
+        assert "timed out" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_interrupt_active_turn_success(self):
+        """interrupt_active_turn should return callback result when consumed."""
+        executor = SubprocessExecutor()
+        control_queue: asyncio.Queue = asyncio.Queue()
+        state = _ActiveTurnState(
+            scope="scope-4",
+            track_id="track-4",
+            thread_id="thread-4",
+            turn_id="turn-4",
+            control_queue=control_queue,
+        )
+        async with executor._lock:
+            executor._active_turns_by_scope["scope-4"] = state
+            executor._active_turns_by_track["track-4"] = state
+
+        async def consume_once():
+            request = await control_queue.get()
+            request.future.set_result(
+                TurnControlResult(
+                    success=True, message="interrupt accepted", turn_id="turn-4"
+                )
+            )
+
+        consumer_task = asyncio.create_task(consume_once())
+        result = await executor.interrupt_active_turn("scope-4", timeout=0.5)
+        await consumer_task
+
+        assert result.success is True
+        assert result.turn_id == "turn-4"
+
+    @pytest.mark.asyncio
+    async def test_cancel_interrupts_before_terminate(self):
+        """cancel() should request turn interrupt before terminating subprocess."""
+        process = _DummyProcess([])
+        executor = SubprocessExecutor()
+        executor._active_processes["exec-1"] = process
+        executor._process_scopes["exec-1"] = "scope-cancel"
+
+        event_order: list[str] = []
+
+        async def interrupt_side_effect(*args, **kwargs):
+            event_order.append("interrupt")
+            return TurnControlResult(success=True, turn_id="turn-cancel")
+
+        async def settle_side_effect(*args, **kwargs):
+            event_order.append("settle")
+            return True
+
+        async def terminate_side_effect(*args, **kwargs):
+            event_order.append("terminate")
+            return None
+
+        with patch.object(
+            executor,
+            "interrupt_active_turn",
+            new=AsyncMock(side_effect=interrupt_side_effect),
+        ) as mock_interrupt:
+            with patch.object(
+                executor,
+                "_wait_for_turn_settle",
+                new=AsyncMock(side_effect=settle_side_effect),
+            ) as mock_settle:
+                with patch(
+                    "src.codex.subprocess_executor.terminate_process_safely",
+                    new=AsyncMock(side_effect=terminate_side_effect),
+                ) as mock_terminate:
+                    cancelled = await executor.cancel("exec-1")
+
+        assert cancelled is True
+        mock_interrupt.assert_awaited_once_with("scope-cancel", timeout=1.0)
+        mock_settle.assert_awaited_once_with("scope-cancel", timeout=1.5)
+        mock_terminate.assert_awaited_once()
+        assert event_order == ["interrupt", "settle", "terminate"]
+
+    @pytest.mark.asyncio
+    async def test_dual_ready_rpc_and_control_does_not_timeout_control(
+        self, monkeypatch
+    ):
+        """When rpc/control complete together, control should not be dropped and time out."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line(
+                    {"jsonrpc": "2.0", "id": 3, "result": {"turn": {"id": "turn-1"}}}
+                ),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+        executor = SubprocessExecutor()
+        real_wait = asyncio.wait
+
+        async def wait_both(tasks, return_when=asyncio.FIRST_COMPLETED):
+            task_list = list(tasks)
+            for task in task_list:
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=0.05)
+                except asyncio.TimeoutError:
+                    pass
+            done = {task for task in task_list if task.done()}
+            if done:
+                pending = set(task_list) - done
+                return done, pending
+            return await real_wait(tasks, return_when=return_when)
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            with patch("src.codex.subprocess_executor.asyncio.wait", new=wait_both):
+                exec_task = asyncio.create_task(
+                    executor.execute(prompt="run", working_directory="/tmp/workspace")
+                )
+                while not await executor.has_active_turn(":channel"):
+                    await asyncio.sleep(0)
+                steer_result = await executor.steer_active_turn(
+                    ":channel", "follow-up", timeout=0.5
+                )
+                result = await exec_task
+
+        assert result.success is True
+        assert steer_result.success is False
+        assert steer_result.error != "steer request timed out"

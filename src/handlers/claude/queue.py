@@ -240,9 +240,11 @@ async def _process_queue(
 
         # Ensure we never overlap with a currently running Codex turn in this scope.
         while deps.codex_executor and await deps.codex_executor.has_active_turn(scope):
+            log.debug(f"Queue waiting for active Codex turn to finish in scope {scope}")
             await asyncio.sleep(0.5)
 
         item = pending[0]
+        log.info(f"Queue processing item #{item.id} in scope {scope}")
         await deps.db.update_queue_item_status(item.id, "running")
 
         message_ts = None
@@ -288,7 +290,7 @@ async def _process_queue(
             )
 
         except Exception as e:
-            log.error(f"Queue item {item.id} failed: {e}")
+            log.error(f"Queue item {item.id} failed in scope {scope}: {e}")
             await deps.db.update_queue_item_status(
                 item.id, "failed", error_message=str(e)
             )

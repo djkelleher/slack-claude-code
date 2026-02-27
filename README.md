@@ -68,10 +68,18 @@ Use these when your session model is a Codex model.
 |---------|-------------|---------|
 | `/codex-status` | Show Codex session state and modes | `/codex-status` |
 | `/codex-clear` | Reset only Codex session state | `/codex-clear` |
+| `/codex-sessions` | List channel sessions | `/codex-sessions` |
+| `/codex-cleanup` | Remove inactive sessions | `/codex-cleanup 30` |
+| `/codex-thread` | Manage Codex thread lifecycle | `/codex-thread list` |
+| `/codex-config` | Inspect Codex config and requirements | `/codex-config requirements` |
 
 Codex transport uses `codex app-server` JSON-RPC for all modes.
 See [Codex app-server JSON-RPC integration notes](CODEX_APP_SERVER_JSON_RPC.md) for
 the exact request/notification methods this app handles.
+
+Codex session command support:
+- `/review` starts a Codex review when the active session backend is Codex
+- `/mcp` shows Codex MCP server status when the active session backend is Codex
 
 `/mode` in Codex sessions:
 - `/mode bypass` -> `approval=never`
@@ -146,6 +154,10 @@ Queue commands for sequential execution while preserving Claude's session contex
 | `/qv` | View queue status | `/qv` |
 | `/qc` | Clear pending queue | `/qc` |
 | `/qr` | Remove specific item | `/qr 5` |
+
+Queue scope follows session scope:
+- Channel messages use a channel-level queue
+- Thread messages use an isolated queue per thread
 
 #### Jobs & Control
 Monitor and control long-running operations with real-time progress updates.

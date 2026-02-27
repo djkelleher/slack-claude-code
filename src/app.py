@@ -168,6 +168,140 @@ async def post_channel_notification(
         )
 
 
+async def _route_codex_message_to_active_turn_or_queue(
+    client,
+    deps,
+    session,
+    channel_id: str,
+    thread_ts: str | None,
+    prompt: str,
+    logger,
+) -> bool:
+    """Route a Codex message to an active turn, or queue it on steer failure.
+
+    Returns
+    -------
+    bool
+        True when the message was handled by steer or queue fallback, False when
+        no active turn exists and normal execution should continue.
+    """
+    if not deps.codex_executor:
+        return False
+
+    session_scope = build_session_scope(channel_id, thread_ts)
+    if not await deps.codex_executor.has_active_turn(session_scope):
+        return False
+
+    cmd_history = await deps.db.add_command(session.id, prompt)
+    await deps.db.update_command_status(cmd_history.id, "running")
+
+    steer_error: str | None = None
+    steer_result = None
+    try:
+        steer_result = await deps.codex_executor.steer_active_turn(
+            session_scope=session_scope,
+            text=prompt,
+        )
+    except Exception as e:
+        steer_error = str(e)
+        logger.error(
+            f"Failed to steer active Codex turn in scope {session_scope}: {steer_error}"
+        )
+
+    if steer_result and steer_result.success:
+        await deps.db.update_command_status(
+            cmd_history.id,
+            "completed",
+            output=(
+                "Routed to active Codex turn via turn/steer."
+                f" turn_id={steer_result.turn_id or 'unknown'}"
+            ),
+        )
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text="Message merged into active Codex execution.",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            ":compass: Routed your message to the active Codex run "
+                            "using `turn/steer`."
+                        ),
+                    },
+                }
+            ],
+        )
+        return True
+
+    steer_error = steer_error or (
+        steer_result.error if steer_result else "unknown error"
+    )
+    try:
+        queued_item = await deps.db.add_to_queue(
+            session_id=session.id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            prompt=prompt,
+        )
+    except Exception as e:
+        queue_error = str(e)
+        await deps.db.update_command_status(
+            cmd_history.id,
+            "failed",
+            output=(
+                "Steer failed and queue fallback failed."
+                f" steer_error={steer_error} queue_error={queue_error}"
+            ),
+            error_message=queue_error,
+        )
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text="Failed to queue message after steer failure.",
+            blocks=error_message(
+                "Active Codex run could not be steered and queue fallback failed.\n"
+                f"steer_error: {steer_error}\nqueue_error: {queue_error}"
+            ),
+        )
+        return True
+
+    await deps.db.update_command_status(
+        cmd_history.id,
+        "completed",
+        output=(
+            f"Steer failed ({steer_error}). " f"Auto-queued item #{queued_item.id}."
+        ),
+    )
+    await ensure_queue_processor(
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        deps=deps,
+        client=client,
+        task_logger=logger,
+    )
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=f"Steer unavailable; queued message as item #{queued_item.id}.",
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        ":inbox_tray: Active Codex run is busy and steering failed.\n"
+                        f"Queued as item *#{queued_item.id}* in this session scope."
+                    ),
+                },
+            }
+        ],
+    )
+    return True
+
+
 async def _execute_codex_message(
     client,
     deps,
@@ -593,83 +727,17 @@ async def main():
 
         # Route to appropriate execution path
         if backend == "codex":
-            if deps.codex_executor:
-                session_scope = build_session_scope(channel_id, thread_ts)
-                if await deps.codex_executor.has_active_turn(session_scope):
-                    cmd_history = await deps.db.add_command(session.id, prompt)
-                    await deps.db.update_command_status(cmd_history.id, "running")
-
-                    steer_result = await deps.codex_executor.steer_active_turn(
-                        session_scope=session_scope,
-                        text=prompt,
-                    )
-                    if steer_result.success:
-                        await deps.db.update_command_status(
-                            cmd_history.id,
-                            "completed",
-                            output=(
-                                "Routed to active Codex turn via turn/steer."
-                                f" turn_id={steer_result.turn_id or 'unknown'}"
-                            ),
-                        )
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            text="Message merged into active Codex execution.",
-                            blocks=[
-                                {
-                                    "type": "section",
-                                    "text": {
-                                        "type": "mrkdwn",
-                                        "text": (
-                                            ":compass: Routed your message to the active Codex run "
-                                            "using `turn/steer`."
-                                        ),
-                                    },
-                                }
-                            ],
-                        )
-                        return
-
-                    queued_item = await deps.db.add_to_queue(
-                        session_id=session.id,
-                        channel_id=channel_id,
-                        thread_ts=thread_ts,
-                        prompt=prompt,
-                    )
-                    await deps.db.update_command_status(
-                        cmd_history.id,
-                        "completed",
-                        output=(
-                            f"Steer failed ({steer_result.error or 'unknown error'}). "
-                            f"Auto-queued item #{queued_item.id}."
-                        ),
-                    )
-                    await ensure_queue_processor(
-                        channel_id=channel_id,
-                        thread_ts=thread_ts,
-                        deps=deps,
-                        client=client,
-                        task_logger=logger,
-                    )
-                    await client.chat_postMessage(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        text=f"Steer unavailable; queued message as item #{queued_item.id}.",
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": (
-                                        ":inbox_tray: Active Codex run is busy and steering failed.\n"
-                                        f"Queued as item *#{queued_item.id}* in this session scope."
-                                    ),
-                                },
-                            }
-                        ],
-                    )
-                    return
+            handled_active_turn = await _route_codex_message_to_active_turn_or_queue(
+                client=client,
+                deps=deps,
+                session=session,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                prompt=prompt,
+                logger=logger,
+            )
+            if handled_active_turn:
+                return
 
             await _execute_codex_message(
                 client=client,

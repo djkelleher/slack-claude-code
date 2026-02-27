@@ -104,3 +104,8 @@ class TestCodexCommandHints:
         """A Codex hint is returned for Claude-only commands."""
         hint = get_codex_hint_for_claude_command("/cost")
         assert "/codex-status" in hint
+
+    def test_claude_config_hint_points_to_codex_config(self):
+        """Codex hint for /claude-config should include /codex-config."""
+        hint = get_codex_hint_for_claude_command("/claude-config")
+        assert "/codex-config" in hint

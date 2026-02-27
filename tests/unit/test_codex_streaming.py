@@ -121,3 +121,130 @@ def test_parse_request_user_input_event_as_tool_call():
     assert tool.id == "call_123"
     assert tool.name == "request_user_input"
     assert tool.input["questions"][0]["question"] == "Proceed?"
+
+
+def test_parse_web_search_item_lifecycle():
+    """Parser should map webSearch items to tool call/result."""
+    parser = StreamParser()
+    parser.parse_line('{"type":"thread.started","thread_id":"thread-123"}')
+
+    tool_call = parser.parse_line(
+        '{"type":"item.started","item":{"id":"ws_1","type":"webSearch","query":"latest release"}}'
+    )
+    assert tool_call is not None
+    assert tool_call.type == "tool_call"
+    assert tool_call.tool_activities[0].name == "web_search"
+
+    tool_result = parser.parse_line(
+        '{"type":"item.completed","item":{"id":"ws_1","type":"webSearch","query":"latest release","action":{"type":"search"}}}'
+    )
+    assert tool_result is not None
+    assert tool_result.type == "tool_result"
+    assert tool_result.tool_activities[0].is_error is False
+
+
+def test_parse_fuzzy_file_search_item_lifecycle():
+    """Parser should map fuzzyFileSearch items to tool call/result."""
+    parser = StreamParser()
+    parser.parse_line('{"type":"thread.started","thread_id":"thread-123"}')
+
+    tool_call = parser.parse_line(
+        '{"type":"item.started","item":{"id":"ffs_1","type":"fuzzyFileSearch","query":"executor"}}'
+    )
+    assert tool_call is not None
+    assert tool_call.type == "tool_call"
+    assert tool_call.tool_activities[0].name == "fuzzy_file_search"
+
+    tool_result = parser.parse_line(
+        '{"type":"item.completed","item":{"id":"ffs_1","type":"fuzzyFileSearch","results":[{"path":"src/codex/subprocess_executor.py"}]}}'
+    )
+    assert tool_result is not None
+    assert tool_result.type == "tool_result"
+    assert "returned 1 result" in (tool_result.tool_activities[0].result or "")
+
+
+def test_parse_file_change_item_lifecycle():
+    """Parser should map fileChange items to tool call/result."""
+    parser = StreamParser()
+    parser.parse_line('{"type":"thread.started","thread_id":"thread-123"}')
+
+    tool_call = parser.parse_line(
+        '{"type":"item.started","item":{"id":"fc_1","type":"fileChange","changes":[{"path":"src/app.py"}]}}'
+    )
+    assert tool_call is not None
+    assert tool_call.type == "tool_call"
+    assert tool_call.tool_activities[0].name == "file_change"
+
+    tool_result = parser.parse_line(
+        '{"type":"item.completed","item":{"id":"fc_1","type":"fileChange","status":"completed","changes":[{"path":"src/app.py"}]}}'
+    )
+    assert tool_result is not None
+    assert tool_result.type == "tool_result"
+    assert tool_result.tool_activities[0].is_error is False
+
+
+def test_parse_mcp_tool_call_item_lifecycle():
+    """Parser should map mcpToolCall items to tool call/result."""
+    parser = StreamParser()
+    parser.parse_line('{"type":"thread.started","thread_id":"thread-123"}')
+
+    tool_call = parser.parse_line(
+        '{"type":"item.started","item":{"id":"mcp_1","type":"mcpToolCall","server":"git","tool":"status"}}'
+    )
+    assert tool_call is not None
+    assert tool_call.type == "tool_call"
+    assert tool_call.tool_activities[0].name == "mcp_tool_call"
+
+    tool_result = parser.parse_line(
+        '{"type":"item.completed","item":{"id":"mcp_1","type":"mcpToolCall","status":"completed","server":"git","tool":"status"}}'
+    )
+    assert tool_result is not None
+    assert tool_result.type == "tool_result"
+    assert tool_result.tool_activities[0].is_error is False
+
+
+def test_parse_reasoning_item_lifecycle():
+    """Parser should map reasoning items to tool call/result."""
+    parser = StreamParser()
+    parser.parse_line('{"type":"thread.started","thread_id":"thread-123"}')
+
+    tool_call = parser.parse_line(
+        '{"type":"item.started","item":{"id":"r_1","type":"reasoning"}}'
+    )
+    assert tool_call is not None
+    assert tool_call.type == "tool_call"
+    assert tool_call.tool_activities[0].name == "reasoning"
+
+    tool_result = parser.parse_line(
+        '{"type":"item.completed","item":{"id":"r_1","type":"reasoning","summary":["step 1","step 2"]}}'
+    )
+    assert tool_result is not None
+    assert tool_result.type == "tool_result"
+    assert "step 1" in (tool_result.tool_activities[0].result or "")
+
+
+def test_parse_mixed_case_command_execution_and_agent_message():
+    """Parser should support mixed-case app-server item type names."""
+    parser = StreamParser()
+    parser.parse_line('{"type":"thread.started","thread_id":"thread-123"}')
+
+    tool_call = parser.parse_line(
+        '{"type":"item.started","item":{"id":"item_9","type":"commandExecution","command":"echo ok"}}'
+    )
+    assert tool_call is not None
+    assert tool_call.type == "tool_call"
+    assert tool_call.tool_activities[0].name == "run_command"
+
+    tool_result = parser.parse_line(
+        '{"type":"item.completed","item":{"id":"item_9","type":"commandExecution","aggregatedOutput":"ok","exitCode":0,"status":"completed"}}'
+    )
+    assert tool_result is not None
+    assert tool_result.type == "tool_result"
+    assert tool_result.tool_activities[0].is_error is False
+
+    assistant = parser.parse_line(
+        '{"type":"item.completed","item":{"id":"item_10","type":"agentMessage","text":"done"}}'
+    )
+    assert assistant is not None
+    assert assistant.type == "assistant"
+    assert assistant.content == "done"

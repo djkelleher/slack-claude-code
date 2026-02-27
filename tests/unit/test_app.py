@@ -1,10 +1,12 @@
 """Unit tests for app-level helpers."""
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.app import slack_api_with_retry
+from src.app import _route_codex_message_to_active_turn_or_queue, slack_api_with_retry
 
 
 class TestSlackApiRetry:
@@ -24,3 +26,129 @@ class TestSlackApiRetry:
             await slack_api_with_retry(failing_call, max_retries=3, base_delay=0)
 
         assert call_count == 1
+
+
+class TestCodexActiveTurnRouting:
+    """Tests for active-turn steer and queue fallback behavior."""
+
+    @pytest.mark.asyncio
+    async def test_routes_to_active_turn_when_steer_succeeds(self):
+        """Active Codex turn should consume follow-up message via steer."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            codex_executor=SimpleNamespace(
+                has_active_turn=AsyncMock(return_value=True),
+                steer_active_turn=AsyncMock(
+                    return_value=SimpleNamespace(
+                        success=True, turn_id="turn-123", error=None
+                    )
+                ),
+            ),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=10)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        handled = await _route_codex_message_to_active_turn_or_queue(
+            client=client,
+            deps=deps,
+            session=session,
+            channel_id="C123",
+            thread_ts="123.456",
+            prompt="follow up",
+            logger=MagicMock(),
+        )
+
+        assert handled is True
+        deps.db.add_to_queue.assert_not_called()
+        deps.db.update_command_status.assert_any_await(
+            10,
+            "completed",
+            output="Routed to active Codex turn via turn/steer. turn_id=turn-123",
+        )
+
+    @pytest.mark.asyncio
+    async def test_queues_message_when_steer_fails(self):
+        """Steer failure should auto-queue and start queue processor."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            codex_executor=SimpleNamespace(
+                has_active_turn=AsyncMock(return_value=True),
+                steer_active_turn=AsyncMock(
+                    return_value=SimpleNamespace(
+                        success=False, turn_id=None, error="conflict"
+                    )
+                ),
+            ),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=11)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(return_value=SimpleNamespace(id=77)),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch(
+            "src.app.ensure_queue_processor", new=AsyncMock()
+        ) as mock_ensure_queue:
+            handled = await _route_codex_message_to_active_turn_or_queue(
+                client=client,
+                deps=deps,
+                session=session,
+                channel_id="C123",
+                thread_ts="123.456",
+                prompt="follow up",
+                logger=MagicMock(),
+            )
+
+        assert handled is True
+        deps.db.add_to_queue.assert_awaited_once()
+        mock_ensure_queue.assert_awaited_once()
+        deps.db.update_command_status.assert_any_await(
+            11,
+            "completed",
+            output="Steer failed (conflict). Auto-queued item #77.",
+        )
+
+    @pytest.mark.asyncio
+    async def test_reports_queue_failure_after_steer_failure(self):
+        """If queue fallback fails, command status should be marked failed and user notified."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            codex_executor=SimpleNamespace(
+                has_active_turn=AsyncMock(return_value=True),
+                steer_active_turn=AsyncMock(
+                    return_value=SimpleNamespace(
+                        success=False, turn_id=None, error="busy"
+                    )
+                ),
+            ),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=12)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(side_effect=RuntimeError("db insert failed")),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        handled = await _route_codex_message_to_active_turn_or_queue(
+            client=client,
+            deps=deps,
+            session=session,
+            channel_id="C123",
+            thread_ts="123.456",
+            prompt="follow up",
+            logger=MagicMock(),
+        )
+
+        assert handled is True
+        deps.db.update_command_status.assert_any_await(
+            12,
+            "failed",
+            output="Steer failed and queue fallback failed. steer_error=busy queue_error=db insert failed",
+            error_message="db insert failed",
+        )
+        assert client.chat_postMessage.await_count >= 1

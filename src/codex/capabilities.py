@@ -41,7 +41,7 @@ _CLAUDE_TO_CODEX_HINTS: dict[str, str] = {
     "/cost": "Use `/codex-status` and per-response footer cost metadata.",
     "/claude-help": "Use `/codex-status`, `/mode`, and `/model`.",
     "/doctor": "Use local CLI diagnostics outside Slack.",
-    "/claude-config": "Use `/mode approval ...` and `/mode sandbox ...` for Codex behavior.",
+    "/claude-config": "Use `/codex-config`, `/mode approval ...`, and `/mode sandbox ...`.",
     "/context": "Use Slack thread history and `/codex-status`.",
     "/init": "Codex does not provide `/init` in this Slack integration.",
     "/memory": "Codex does not use CLAUDE.md memory files.",
