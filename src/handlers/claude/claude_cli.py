@@ -1,7 +1,6 @@
 """Claude CLI passthrough command handlers."""
 
 import asyncio
-import signal
 import uuid
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from src.utils.formatters.command import command_response_with_tables, error_mes
 from src.utils.formatters.streaming import processing_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
+
 
 def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register Claude CLI passthrough command handlers.

@@ -7,8 +7,7 @@ import uuid
 
 from slack_bolt.async_app import AsyncApp
 
-from src.agents.executor import AgentExecutor
-from src.agents.models import AgentExecutionStatus, AgentSource
+from src.agents.models import AgentSource
 from src.agents.registry import get_registry
 from src.config import config
 from src.utils.formatters.base import markdown_to_mrkdwn

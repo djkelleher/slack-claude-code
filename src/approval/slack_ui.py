@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from src.utils.formatters.base import MAX_TEXT_LENGTH, split_text_into_blocks
+from src.utils.formatters.base import MAX_TEXT_LENGTH
 
 
 def build_approval_blocks(

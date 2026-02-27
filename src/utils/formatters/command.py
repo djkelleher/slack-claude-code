@@ -7,9 +7,7 @@ from src.config import config
 from .base import (
     FILE_THRESHOLD,
     escape_markdown,
-    markdown_to_mrkdwn,
     sanitize_error,
-    split_text_into_blocks,
     text_to_rich_text_blocks,
 )
 from .table import extract_tables_from_text, split_text_by_tables

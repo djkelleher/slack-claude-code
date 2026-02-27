@@ -641,7 +641,6 @@ def text_to_rich_text_blocks(text: str, max_length: int = MAX_TEXT_LENGTH) -> li
         # Code block (```)
         if stripped.startswith("```"):
             code_lines = []
-            lang = stripped[3:].strip()  # Language hint after ```
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 code_lines.append(lines[i])
