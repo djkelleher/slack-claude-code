@@ -24,7 +24,7 @@ from slack_sdk.errors import SlackApiError
 
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.subprocess_executor import SubprocessExecutor as ClaudeExecutor
-from src.codex.capabilities import apply_codex_mode_to_prompt
+from src.codex.capabilities import apply_codex_mode_to_prompt, is_likely_plan_content
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
 from src.config import PLANS_DIR, config, get_backend_for_model
 from src.database.migrations import init_database
@@ -493,7 +493,11 @@ async def _execute_codex_message(
 
         # Plan mode approval for Codex mirrors Claude plan mode UX:
         # show plan + approve/reject buttons, then auto-execute on approval.
-        if session.permission_mode == "plan" and result.success and result.output:
+        if (
+            session.permission_mode == "plan"
+            and result.success
+            and is_likely_plan_content(result.output)
+        ):
             logger.info("Codex plan response ready, requesting user approval")
             approved = await PlanApprovalManager.request_approval(
                 session_id=str(session.id),

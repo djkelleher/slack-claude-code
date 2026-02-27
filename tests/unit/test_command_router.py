@@ -1,7 +1,7 @@
 """Unit tests for backend-aware command routing."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -134,3 +134,51 @@ class TestCommandRouter:
 
         called_prompt = deps.codex_executor.execute.await_args.kwargs["prompt"]
         assert "Provide a concrete implementation plan first" in called_prompt
+
+    @pytest.mark.asyncio
+    async def test_codex_plan_mode_skips_approval_for_non_plan_output(self):
+        """Plan mode should not request approval for generic clarification text."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock()),
+        )
+        deps.codex_executor.execute.return_value = SimpleNamespace(
+            session_id="codex-new",
+            success=True,
+            output=(
+                "Ready to help. Share the change you want, and I will provide a concrete "
+                "implementation plan first, then wait for your confirmation."
+            ),
+        )
+
+        session = Session(
+            id=12,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            permission_mode="plan",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+
+        with patch(
+            "src.handlers.command_router.PlanApprovalManager.request_approval",
+            new=AsyncMock(return_value=True),
+        ) as mock_request_approval:
+            await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="hi",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-5",
+                slack_client=SimpleNamespace(),
+                user_id="U123",
+            )
+
+        mock_request_approval.assert_not_awaited()

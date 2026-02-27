@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.streaming import _concat_with_spacing
-from src.codex.capabilities import apply_codex_mode_to_prompt
+from src.codex.capabilities import apply_codex_mode_to_prompt, is_likely_plan_content
 from src.config import config
 from src.database.models import Session
 from src.question.manager import QuestionManager
@@ -216,7 +216,7 @@ async def execute_for_session(
         if (
             session.permission_mode == "plan"
             and result.success
-            and result_output
+            and is_likely_plan_content(result_output)
             and slack_client is not None
         ):
             if logger:

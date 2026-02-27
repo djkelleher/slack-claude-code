@@ -4,6 +4,7 @@ from src.codex.capabilities import (
     apply_codex_mode_to_prompt,
     codex_mode_alias_for_approval,
     get_codex_hint_for_claude_command,
+    is_likely_plan_content,
     is_claude_only_slash_command,
     normalize_codex_approval_mode,
     resolve_codex_compat_mode,
@@ -65,6 +66,30 @@ class TestCodexModeMappings:
         """Non-plan mode leaves the prompt untouched."""
         prompt = apply_codex_mode_to_prompt("Implement feature X", "default")
         assert prompt == "Implement feature X"
+
+    def test_plan_content_detector_rejects_clarification_text(self):
+        """Short clarification messages should not trigger plan approval."""
+        text = (
+            "Ready to help. Share the change you want, and I will provide a concrete "
+            "implementation plan first, then wait for your confirmation."
+        )
+        assert is_likely_plan_content(text) is False
+
+    def test_plan_content_detector_accepts_structured_plan(self):
+        """Structured plan output should trigger plan approval."""
+        text = """# Implementation Plan
+1. Add request validation in the command handler.
+2. Update persistence logic to store the new flag.
+3. Add tests for success and error paths.
+
+## Acceptance Criteria
+- Validation rejects empty payloads.
+- Existing behavior stays unchanged for valid inputs.
+
+## Test Plan
+- Run unit tests for command routing and persistence.
+"""
+        assert is_likely_plan_content(text) is True
 
 
 class TestCodexCommandHints:

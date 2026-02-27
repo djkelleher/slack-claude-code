@@ -1,5 +1,6 @@
 """Codex capability mappings and Slack compatibility helpers."""
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -129,6 +130,56 @@ def apply_codex_mode_to_prompt(prompt: str, permission_mode: Optional[str]) -> s
         "Do not execute commands or edit files yet. "
         "Wait for user confirmation before making changes.]"
     )
+
+
+def is_likely_plan_content(text: Optional[str]) -> bool:
+    """Heuristically detect whether assistant output is an actionable plan.
+
+    Avoids opening approval UI for non-plan replies like greetings or clarifications.
+    """
+    if not text:
+        return False
+
+    normalized = text.strip()
+    if len(normalized) < 80:
+        return False
+
+    lowered = normalized.lower()
+    early_exit_markers = (
+        "share the change you want",
+        "i don't have an actual scoped change",
+        "please send the specific task",
+        "ready to help",
+    )
+    if any(marker in lowered for marker in early_exit_markers):
+        return False
+
+    score = 0
+
+    if re.search(r"(?im)^\s{0,3}(#{1,6}\s+\S+|implementation plan\s*:|plan\s*:)", normalized):
+        score += 1
+
+    numbered_steps = len(re.findall(r"(?im)^\s*(?:\d+\.\s+|\d+\)\s+)", normalized))
+    if numbered_steps >= 3:
+        score += 2
+    elif numbered_steps >= 2:
+        score += 1
+
+    section_keywords = (
+        "implementation steps",
+        "acceptance criteria",
+        "risks",
+        "test plan",
+        "validation",
+        "rollout",
+        "timeline",
+        "milestones",
+    )
+    keyword_hits = sum(1 for keyword in section_keywords if keyword in lowered)
+    if keyword_hits >= 2:
+        score += 1
+
+    return score >= 2
 
 
 def is_claude_only_slash_command(command: str) -> bool:
