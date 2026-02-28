@@ -32,6 +32,7 @@ async def deliver_command_response(
     ] = None,
 ) -> None:
     """Render and deliver final command output to Slack with shared formatting logic."""
+    response_thread_ts = thread_ts or message_ts
 
     async def _run_update(call: Callable[[], Awaitable[Any]]) -> Any:
         if api_with_retry:
@@ -61,7 +62,7 @@ async def deliver_command_response(
                 channel_id=channel_id,
                 content=file_content,
                 title="📄 Response summary",
-                thread_ts=thread_ts,
+                thread_ts=response_thread_ts,
                 format_as_text=True,
                 render_tables=True,
             )
@@ -69,7 +70,7 @@ async def deliver_command_response(
                 DetailCache.store(command_id, detailed_output)
                 await client.chat_postMessage(
                     channel=channel_id,
-                    thread_ts=thread_ts,
+                    thread_ts=response_thread_ts,
                     text="📋 Detailed output available",
                     blocks=[
                         {
@@ -96,7 +97,7 @@ async def deliver_command_response(
             if notify_on_snippet_failure:
                 await client.chat_postMessage(
                     channel=channel_id,
-                    thread_ts=thread_ts,
+                    thread_ts=response_thread_ts,
                     text=f"⚠️ Could not post detailed output: {str(post_error)[:100]}",
                 )
         return
@@ -120,7 +121,7 @@ async def deliver_command_response(
     for blocks in message_blocks_list[1:]:
         await client.chat_postMessage(
             channel=channel_id,
-            thread_ts=thread_ts,
+            thread_ts=response_thread_ts,
             text="Table",
             blocks=blocks,
         )

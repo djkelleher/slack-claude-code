@@ -419,6 +419,9 @@ async def _execute_codex_message(
             cost_usd=result.cost_usd,
             is_error=not result.success,
             logger=logger,
+            detailed_output=result.detailed_output,
+            post_detail_button=True,
+            notify_on_snippet_failure=True,
             api_with_retry=slack_api_with_retry,
         )
 
