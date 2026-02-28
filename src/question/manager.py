@@ -18,6 +18,7 @@ from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
 from ..database.repository import DatabaseRepository
+from ..utils.pending_manager import PendingManager
 
 
 @dataclass
@@ -50,24 +51,10 @@ class PendingQuestion:
     tool_use_id: str  # The tool_use_id from Claude
     questions: list[Question]  # Can have multiple questions
     message_ts: Optional[str] = None
-    _future: Optional[asyncio.Future] = field(default=None, repr=False)
+    future: Optional[asyncio.Future] = field(default=None, repr=False)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     # Collected answers: question_index -> list of selected labels
     answers: dict[int, list[str]] = field(default_factory=dict)
-
-    @property
-    def future(self) -> asyncio.Future:
-        """Lazily create the Future when first accessed in async context."""
-        if self._future is None:
-            try:
-                loop = asyncio.get_running_loop()
-                self._future = loop.create_future()
-            except RuntimeError:
-                # Not in async context - create a new event loop's future
-                # This shouldn't happen in normal usage but provides a fallback
-                loop = asyncio.new_event_loop()
-                self._future = loop.create_future()
-        return self._future
 
 
 class QuestionManager:
@@ -77,8 +64,7 @@ class QuestionManager:
     Thread-safe via asyncio.Lock for all _pending dictionary access.
     """
 
-    _pending: dict[str, PendingQuestion] = {}
-    _lock: asyncio.Lock = asyncio.Lock()
+    _pending = PendingManager[PendingQuestion]()
 
     @classmethod
     def parse_ask_user_question_input(cls, tool_input: dict) -> list[Question]:
@@ -147,6 +133,7 @@ class QuestionManager:
         """
         question_id = str(uuid.uuid4())[:8]
         questions = cls.parse_ask_user_question_input(tool_input)
+        future = asyncio.get_running_loop().create_future()
 
         pending = PendingQuestion(
             question_id=question_id,
@@ -155,11 +142,13 @@ class QuestionManager:
             thread_ts=thread_ts,
             tool_use_id=tool_use_id,
             questions=questions,
+            future=future,
         )
 
-        async with cls._lock:
-            cls._pending[question_id] = pending
-        logger.info(f"Created pending question {question_id} with {len(questions)} question(s)")
+        await cls._pending.add(question_id, pending)
+        logger.info(
+            f"Created pending question {question_id} with {len(questions)} question(s)"
+        )
 
         return pending
 
@@ -193,7 +182,9 @@ class QuestionManager:
         pending.message_ts = result.get("ts")
 
         # Post channel notification if configured
-        await cls._post_notification(slack_client, pending.channel_id, pending.thread_ts, db)
+        await cls._post_notification(
+            slack_client, pending.channel_id, pending.thread_ts, db
+        )
 
     @classmethod
     async def _post_notification(
@@ -214,9 +205,7 @@ class QuestionManager:
 
             # Build thread link
             if thread_ts:
-                thread_link = (
-                    f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
-                )
+                thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
                 message = f":question: Claude has a question • <{thread_link}|Answer in thread>"
             else:
                 message = ":question: Claude has a question"
@@ -248,14 +237,14 @@ class QuestionManager:
         Returns:
             True if answer was set, False if question not found
         """
-        async with cls._lock:
-            pending = cls._pending.get(question_id)
-            if not pending:
-                logger.warning(f"Question {question_id} not found")
-                return False
-
-            pending.answers[question_index] = selected_labels
-        logger.debug(f"Set answer for question {question_id}[{question_index}]: {selected_labels}")
+        pending = await cls._pending.get(question_id)
+        if not pending:
+            logger.warning(f"Question {question_id} not found")
+            return False
+        pending.answers[question_index] = selected_labels
+        logger.debug(
+            f"Set answer for question {question_id}[{question_index}]: {selected_labels}"
+        )
         return True
 
     @classmethod
@@ -268,12 +257,10 @@ class QuestionManager:
         Returns:
             True if all questions have answers
         """
-        async with cls._lock:
-            pending = cls._pending.get(question_id)
-            if not pending:
-                return False
-
-            return len(pending.answers) >= len(pending.questions)
+        pending = await cls._pending.get(question_id)
+        if not pending:
+            return False
+        return len(pending.answers) >= len(pending.questions)
 
     @classmethod
     async def resolve(
@@ -290,21 +277,16 @@ class QuestionManager:
         Returns:
             The PendingQuestion if found and resolved, None otherwise
         """
-        async with cls._lock:
-            pending = cls._pending.get(question_id)
-            if not pending:
-                logger.warning(f"Question {question_id} not found")
-                return None
-
-            # Use try-except to handle race condition where another coroutine
-            # could resolve the future between our check and set_result
-            try:
-                pending.future.set_result(pending.answers)
-            except asyncio.InvalidStateError:
-                logger.warning(f"Question {question_id} already resolved")
-                # Remove from _pending to prevent memory leak
-                cls._pending.pop(question_id, None)
-                return None
+        pending = await cls._pending.get(question_id)
+        if not pending:
+            logger.warning(f"Question {question_id} not found")
+            return None
+        try:
+            pending.future.set_result(pending.answers)
+        except asyncio.InvalidStateError:
+            logger.warning(f"Question {question_id} already resolved")
+            await cls._pending.pop(question_id)
+            return None
 
         logger.info(f"Question {question_id} resolved with answers: {pending.answers}")
         return pending
@@ -324,8 +306,7 @@ class QuestionManager:
         Returns:
             Dict of answers (question_index -> selected labels), or None if cancelled
         """
-        async with cls._lock:
-            pending = cls._pending.get(question_id)
+        pending = await cls._pending.get(question_id)
         if not pending:
             return None
 
@@ -339,14 +320,12 @@ class QuestionManager:
             return None
 
         finally:
-            async with cls._lock:
-                cls._pending.pop(question_id, None)
+            await cls._pending.pop(question_id)
 
     @classmethod
     async def get_pending(cls, question_id: str) -> Optional[PendingQuestion]:
         """Get a pending question by ID."""
-        async with cls._lock:
-            return cls._pending.get(question_id)
+        return await cls._pending.get(question_id)
 
     @classmethod
     async def cancel(cls, question_id: str) -> bool:
@@ -358,16 +337,7 @@ class QuestionManager:
         Returns:
             True if question was found and cancelled
         """
-        async with cls._lock:
-            pending = cls._pending.get(question_id)
-            if not pending:
-                return False
-
-            if not pending.future.done():
-                pending.future.cancel()
-
-            cls._pending.pop(question_id, None)
-        return True
+        return await cls._pending.cancel(question_id)
 
     @classmethod
     async def cancel_for_session(cls, session_id: str) -> int:
@@ -379,17 +349,7 @@ class QuestionManager:
         Returns:
             Number of questions cancelled
         """
-        async with cls._lock:
-            to_cancel = [qid for qid, q in cls._pending.items() if q.session_id == session_id]
-
-            for question_id in to_cancel:
-                pending = cls._pending.get(question_id)
-                if pending:
-                    if not pending.future.done():
-                        pending.future.cancel()
-                    cls._pending.pop(question_id, None)
-
-        return len(to_cancel)
+        return await cls._pending.cancel_for_session(session_id)
 
     @classmethod
     def format_answer_for_claude(cls, pending: PendingQuestion) -> str:
@@ -426,8 +386,7 @@ class QuestionManager:
     @classmethod
     async def count_pending(cls) -> int:
         """Get count of pending questions."""
-        async with cls._lock:
-            return len(cls._pending)
+        return await cls._pending.count()
 
     @classmethod
     async def cleanup_expired(cls, max_age_seconds: int = 3600) -> int:
@@ -444,22 +403,18 @@ class QuestionManager:
         now = datetime.now(timezone.utc)
         expired = []
 
-        async with cls._lock:
-            for qid, pending in cls._pending.items():
-                # Calculate age
-                age = now - pending.created_at
-                if age.total_seconds() > max_age_seconds:
-                    expired.append(qid)
-                    logger.info(
-                        f"Cleaning up expired question {qid} (age: {age.total_seconds():.0f}s)"
-                    )
+        pendings = await cls._pending.list()
+        for pending in pendings:
+            qid = pending.question_id
+            # Calculate age
+            age = now - pending.created_at
+            if age.total_seconds() > max_age_seconds:
+                expired.append(qid)
+                logger.info(
+                    f"Cleaning up expired question {qid} (age: {age.total_seconds():.0f}s)"
+                )
 
-            # Cancel expired questions within the lock
-            for qid in expired:
-                pending = cls._pending.get(qid)
-                if pending:
-                    if not pending.future.done():
-                        pending.future.cancel()
-                    cls._pending.pop(qid, None)
+        for qid in expired:
+            await cls._pending.cancel(qid)
 
         return len(expired)

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from loguru import logger
 
+from src.backends.process_registry import ProcessRegistry
 from src.codex.approval_bridge import default_approval_payload
 from src.codex.capabilities import normalize_codex_approval_mode
 from src.config import config, parse_model_effort
@@ -78,10 +79,12 @@ class SubprocessExecutor:
         self,
         db: Optional["DatabaseRepository"] = None,
     ) -> None:
-        self._active_processes: dict[str, asyncio.subprocess.Process] = {}
-        self._process_channels: dict[str, str] = {}  # track_id -> channel_id
-        self._process_scopes: dict[str, str] = {}  # track_id -> session_scope
-        self._execution_track_ids: dict[str, str] = {}  # execution_id -> track_id
+        self._registry = ProcessRegistry()
+        # Backwards-compatible aliases retained for tests/integration points.
+        self._active_processes = self._registry.active_processes
+        self._process_channels = self._registry.process_channels
+        self._process_scopes = self._registry.process_scopes
+        self._execution_track_ids = self._registry.execution_track_ids
         self._active_turns_by_scope: dict[str, _ActiveTurnState] = {}
         self._active_turns_by_track: dict[str, _ActiveTurnState] = {}
         self._metrics: dict[str, int] = {
@@ -271,17 +274,19 @@ class SubprocessExecutor:
                 error=f"Failed to start codex app-server: {e}",
             )
 
-        track_id = execution_id or session_id or "default"
-        if channel_id:
-            track_id = f"{channel_id}_{track_id}"
+        track_id = ProcessRegistry.build_track_id(
+            execution_id=execution_id,
+            session_id=session_id,
+            channel_id=channel_id,
+        )
         session_scope = build_session_scope(channel_id or "", thread_ts)
-        async with self._lock:
-            self._active_processes[track_id] = process
-            if channel_id:
-                self._process_channels[track_id] = channel_id
-            self._process_scopes[track_id] = session_scope
-            if execution_id:
-                self._execution_track_ids[execution_id] = track_id
+        await self._registry.register(
+            track_id=track_id,
+            process=process,
+            channel_id=channel_id,
+            session_scope=session_scope,
+            execution_id=execution_id,
+        )
 
         parser = StreamParser()
         accumulated_output = ""
@@ -951,15 +956,10 @@ class SubprocessExecutor:
                             turn_id=current_turn_id,
                         )
                     )
+            await self._registry.unregister(
+                track_id=track_id, execution_id=execution_id
+            )
             async with self._lock:
-                self._active_processes.pop(track_id, None)
-                self._process_channels.pop(track_id, None)
-                self._process_scopes.pop(track_id, None)
-                if (
-                    execution_id
-                    and self._execution_track_ids.get(execution_id) == track_id
-                ):
-                    self._execution_track_ids.pop(execution_id, None)
                 if self._active_turns_by_track.get(track_id):
                     self._active_turns_by_track.pop(track_id, None)
                 scope_state = self._active_turns_by_scope.get(session_scope)
@@ -1386,83 +1386,43 @@ class SubprocessExecutor:
 
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""
-        scope = None
-        async with self._lock:
-            process_key = None
-            if execution_id in self._active_processes:
-                process_key = execution_id
-            else:
-                mapped_track = self._execution_track_ids.get(execution_id)
-                if mapped_track and mapped_track in self._active_processes:
-                    process_key = mapped_track
+        tracked = await self._registry.pop_for_execution(execution_id)
+        if tracked is None:
+            return False
 
-            if process_key is None:
-                return False
-            scope = self._process_scopes.get(process_key)
-
+        scope = tracked.session_scope
         if scope:
             await self.interrupt_active_turn(scope, timeout=1.0)
             await self._wait_for_turn_settle(scope, timeout=1.5)
 
         async with self._lock:
-            process_key = None
-            if execution_id in self._active_processes:
-                process_key = execution_id
-            else:
-                mapped_track = self._execution_track_ids.get(execution_id)
-                if mapped_track and mapped_track in self._active_processes:
-                    process_key = mapped_track
-            if process_key is None:
-                return True
-            process = self._active_processes.pop(process_key)
-            self._process_channels.pop(process_key, None)
-            self._process_scopes.pop(process_key, None)
-            active_turn = self._active_turns_by_track.pop(process_key, None)
+            active_turn = self._active_turns_by_track.pop(tracked.track_id, None)
             if active_turn:
                 scope_state = self._active_turns_by_scope.get(active_turn.scope)
-                if scope_state and scope_state.track_id == process_key:
+                if scope_state and scope_state.track_id == tracked.track_id:
                     self._active_turns_by_scope.pop(active_turn.scope, None)
                 active_turn.done_event.set()
 
-            mapped_track_id = self._execution_track_ids.get(execution_id)
-            if mapped_track_id == process_key:
-                self._execution_track_ids.pop(execution_id, None)
-
-        await terminate_process_safely(process)
+        await terminate_process_safely(tracked.process)
         return True
 
     async def cancel_by_scope(self, session_scope: str) -> int:
         """Cancel active executions for a channel/thread session scope."""
-        async with self._lock:
-            initial_count = sum(
-                1 for scope in self._process_scopes.values() if scope == session_scope
-            )
+        initial_count = await self._registry.count_for_scope(session_scope)
         await self.interrupt_active_turn(session_scope, timeout=1.0)
         await self._wait_for_turn_settle(session_scope, timeout=1.5)
 
+        tracked = await self._registry.pop_for_scope(session_scope)
         async with self._lock:
-            track_ids_to_cancel = [
-                track_id
-                for track_id, scope in self._process_scopes.items()
-                if scope == session_scope
-            ]
-            processes = []
-            for track_id in track_ids_to_cancel:
-                process = self._active_processes.pop(track_id, None)
-                if process:
-                    processes.append(process)
-                self._process_channels.pop(track_id, None)
-                self._process_scopes.pop(track_id, None)
-                active_turn = self._active_turns_by_track.pop(track_id, None)
+            for entry in tracked:
+                active_turn = self._active_turns_by_track.pop(entry.track_id, None)
                 if active_turn:
                     active_turn.done_event.set()
                     scope_state = self._active_turns_by_scope.get(active_turn.scope)
-                    if scope_state and scope_state.track_id == track_id:
+                    if scope_state and scope_state.track_id == entry.track_id:
                         self._active_turns_by_scope.pop(active_turn.scope, None)
-            for execution_id, track_id in list(self._execution_track_ids.items()):
-                if track_id in track_ids_to_cancel:
-                    self._execution_track_ids.pop(execution_id, None)
 
+        processes = [entry.process for entry in tracked]
         if processes:
             await asyncio.gather(
                 *(terminate_process_safely(process) for process in processes),
@@ -1479,42 +1439,23 @@ class SubprocessExecutor:
         Returns:
             Number of processes cancelled.
         """
-        async with self._lock:
-            initial_count = sum(
-                1 for ch_id in self._process_channels.values() if ch_id == channel_id
-            )
-        async with self._lock:
-            channel_scopes = {
-                scope
-                for track_id, scope in self._process_scopes.items()
-                if self._process_channels.get(track_id) == channel_id
-            }
+        initial_count = await self._registry.count_for_channel(channel_id)
+        channel_scopes = await self._registry.scopes_for_channel(channel_id)
         for scope in channel_scopes:
             await self.interrupt_active_turn(scope, timeout=1.0)
             await self._wait_for_turn_settle(scope, timeout=1.5)
 
+        tracked = await self._registry.pop_for_channel(channel_id)
         async with self._lock:
-            track_ids_to_cancel = [
-                track_id
-                for track_id, ch_id in self._process_channels.items()
-                if ch_id == channel_id
-            ]
-            processes = []
-            for track_id in track_ids_to_cancel:
-                if track_id in self._active_processes:
-                    processes.append(self._active_processes.pop(track_id))
-                    self._process_channels.pop(track_id, None)
-                    self._process_scopes.pop(track_id, None)
-                    active_turn = self._active_turns_by_track.pop(track_id, None)
-                    if active_turn:
-                        active_turn.done_event.set()
-                        scope_state = self._active_turns_by_scope.get(active_turn.scope)
-                        if scope_state and scope_state.track_id == track_id:
-                            self._active_turns_by_scope.pop(active_turn.scope, None)
-            for execution_id, track_id in list(self._execution_track_ids.items()):
-                if track_id in track_ids_to_cancel:
-                    self._execution_track_ids.pop(execution_id, None)
+            for entry in tracked:
+                active_turn = self._active_turns_by_track.pop(entry.track_id, None)
+                if active_turn:
+                    active_turn.done_event.set()
+                    scope_state = self._active_turns_by_scope.get(active_turn.scope)
+                    if scope_state and scope_state.track_id == entry.track_id:
+                        self._active_turns_by_scope.pop(active_turn.scope, None)
 
+        processes = [entry.process for entry in tracked]
         if processes:
             await asyncio.gather(
                 *(terminate_process_safely(process) for process in processes),
@@ -1524,24 +1465,19 @@ class SubprocessExecutor:
 
     async def cancel_all(self) -> int:
         """Cancel all active executions."""
-        async with self._lock:
-            initial_count = len(self._active_processes)
-        async with self._lock:
-            active_scopes = list(self._active_turns_by_scope.keys())
+        initial_count = len(self._active_processes)
+        active_scopes = list(self._active_turns_by_scope.keys())
         for scope in active_scopes:
             await self.interrupt_active_turn(scope, timeout=1.0)
             await self._wait_for_turn_settle(scope, timeout=1.5)
 
+        tracked = await self._registry.pop_all()
         async with self._lock:
-            processes = list(self._active_processes.values())
-            self._active_processes.clear()
-            self._process_channels.clear()
-            self._process_scopes.clear()
-            self._execution_track_ids.clear()
             for active_turn in self._active_turns_by_track.values():
                 active_turn.done_event.set()
             self._active_turns_by_scope.clear()
             self._active_turns_by_track.clear()
+        processes = [entry.process for entry in tracked]
         if processes:
             await asyncio.gather(
                 *(terminate_process_safely(process) for process in processes),

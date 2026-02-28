@@ -15,6 +15,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from ..database.repository import DatabaseRepository
 from ..hooks.registry import HookRegistry, create_context
 from ..hooks.types import HookEvent, HookEventType
+from ..utils.pending_manager import PendingManager
 from .slack_ui import build_approval_blocks
 
 
@@ -34,7 +35,9 @@ async def _post_permission_notification(
 
         # Build thread link
         if thread_ts:
-            thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
+            thread_link = (
+                f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
+            )
             message = f"⚠️ Claude needs permission • <{thread_link}|Respond in thread>"
         else:
             message = "⚠️ Claude needs permission"
@@ -51,7 +54,9 @@ async def _post_permission_notification(
         pass
     except Exception as e:
         # Log with type for debugging unexpected errors
-        logger.warning(f"Failed to post permission notification: {type(e).__name__}: {e}")
+        logger.warning(
+            f"Failed to post permission notification: {type(e).__name__}: {e}"
+        )
 
 
 @dataclass
@@ -66,21 +71,8 @@ class PendingApproval:
     user_id: Optional[str] = None
     thread_ts: Optional[str] = None
     message_ts: Optional[str] = None
-    _future: Optional[asyncio.Future] = field(default=None, repr=False)
+    future: Optional[asyncio.Future] = field(default=None, repr=False)
     created_at: datetime = field(default_factory=datetime.now)
-
-    @property
-    def future(self) -> asyncio.Future:
-        """Lazily create the Future when first accessed in async context."""
-        if self._future is None:
-            try:
-                loop = asyncio.get_running_loop()
-                self._future = loop.create_future()
-            except RuntimeError:
-                # Not in async context - create a new event loop's future
-                loop = asyncio.new_event_loop()
-                self._future = loop.create_future()
-        return self._future
 
 
 class PermissionManager:
@@ -90,8 +82,7 @@ class PermissionManager:
     Thread-safe via asyncio.Lock for all _pending dictionary access.
     """
 
-    _pending: dict[str, PendingApproval] = {}
-    _lock: asyncio.Lock = asyncio.Lock()
+    _pending = PendingManager[PendingApproval]()
 
     @classmethod
     async def request_approval(
@@ -130,6 +121,7 @@ class PermissionManager:
             return True
 
         approval_id = str(uuid.uuid4())[:8]
+        future = asyncio.get_running_loop().create_future()
 
         approval = PendingApproval(
             approval_id=approval_id,
@@ -139,10 +131,10 @@ class PermissionManager:
             tool_input=tool_input,
             user_id=user_id,
             thread_ts=thread_ts,
+            future=future,
         )
 
-        async with cls._lock:
-            cls._pending[approval_id] = approval
+        await cls._pending.add(approval_id, approval)
 
         # Emit APPROVAL_NEEDED hook
         await HookRegistry.emit(
@@ -182,7 +174,9 @@ class PermissionManager:
                 approval.message_ts = result.get("ts")
 
                 # Post channel notification (triggers sound + unread badge)
-                await _post_permission_notification(slack_client, channel_id, thread_ts, db)
+                await _post_permission_notification(
+                    slack_client, channel_id, thread_ts, db
+                )
 
             # Wait for response indefinitely (no timeout)
             approved = await approval.future
@@ -193,8 +187,7 @@ class PermissionManager:
             return False
 
         finally:
-            async with cls._lock:
-                cls._pending.pop(approval_id, None)
+            await cls._pending.pop(approval_id)
 
     @classmethod
     async def resolve(
@@ -215,21 +208,10 @@ class PermissionManager:
         Returns:
             The PendingApproval if found and resolved, None otherwise
         """
-        async with cls._lock:
-            approval = cls._pending.get(approval_id)
-            if not approval:
-                logger.warning(f"Approval {approval_id} not found")
-                return None
-
-            # Use try-except to handle race condition where another coroutine
-            # could resolve the future between our check and set_result
-            try:
-                approval.future.set_result(approved)
-            except asyncio.InvalidStateError:
-                logger.warning(f"Approval {approval_id} already resolved")
-                # Remove from _pending to prevent memory leak
-                cls._pending.pop(approval_id, None)
-                return None
+        approval = await cls._pending.resolve(approval_id, approved)
+        if not approval:
+            logger.warning(f"Approval {approval_id} not found or already resolved")
+            return None
 
         logger.info(
             f"Approval {approval_id} {'approved' if approved else 'denied'} "
@@ -266,16 +248,7 @@ class PermissionManager:
         Returns:
             True if approval was found and cancelled
         """
-        async with cls._lock:
-            approval = cls._pending.get(approval_id)
-            if not approval:
-                return False
-
-            if not approval.future.done():
-                approval.future.cancel()
-
-            cls._pending.pop(approval_id, None)
-        return True
+        return await cls._pending.cancel(approval_id)
 
     @classmethod
     async def cancel_for_session(cls, session_id: str) -> int:
@@ -287,20 +260,12 @@ class PermissionManager:
         Returns:
             Number of approvals cancelled
         """
-        async with cls._lock:
-            to_cancel = [aid for aid, a in cls._pending.items() if a.session_id == session_id]
-
-            for approval_id in to_cancel:
-                approval = cls._pending.get(approval_id)
-                if approval:
-                    if not approval.future.done():
-                        approval.future.cancel()
-                    cls._pending.pop(approval_id, None)
-
-        return len(to_cancel)
+        return await cls._pending.cancel_for_session(session_id)
 
     @classmethod
-    async def get_pending(cls, session_id: Optional[str] = None) -> list[PendingApproval]:
+    async def get_pending(
+        cls, session_id: Optional[str] = None
+    ) -> list[PendingApproval]:
         """Get pending approvals.
 
         Args:
@@ -309,14 +274,9 @@ class PermissionManager:
         Returns:
             List of pending approvals
         """
-        async with cls._lock:
-            approvals = list(cls._pending.values())
-            if session_id:
-                approvals = [a for a in approvals if a.session_id == session_id]
-        return approvals
+        return await cls._pending.list(session_id=session_id)
 
     @classmethod
     async def count_pending(cls) -> int:
         """Get count of pending approvals."""
-        async with cls._lock:
-            return len(cls._pending)
+        return await cls._pending.count()

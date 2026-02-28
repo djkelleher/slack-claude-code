@@ -1,11 +1,14 @@
 """Parser for Codex CLI stream-json output format."""
 
-import json
-import time
-from typing import Any, Iterator, Optional
+from typing import Iterator, Optional
 
 from loguru import logger
 
+from src.backends.stream_parsing_common import (
+    create_tool_activity,
+    create_tool_result,
+    parse_json_line_with_buffer,
+)
 from src.utils.stream_models import (
     BaseToolActivity,
     StreamMessage,
@@ -72,36 +75,23 @@ class StreamParser:
         self,
         tool_id: str,
         tool_name: str,
-        tool_input: Any,
+        tool_input: object,
         raw_data: dict,
     ) -> StreamMessage:
         """Create a normalized tool-call StreamMessage."""
-        tool_input = self._normalize_tool_input(tool_input)
-
-        tool_activity = ToolActivity(
-            id=tool_id,
-            name=tool_name,
-            input=tool_input,
-            input_summary=ToolActivity.create_input_summary(tool_name, tool_input),
-            started_at=time.monotonic(),
-            timestamp=time.time(),
+        tool_activity, detailed_addition, collision = create_tool_activity(
+            tool_cls=ToolActivity,
+            pending_tools=self.pending_tools,
+            tool_id=tool_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
         )
 
-        if tool_id in self.pending_tools:
+        if collision:
             logger.warning(
                 f"Tool ID collision detected: {tool_id} already tracked. "
                 "This may indicate duplicate tool invocations."
             )
-        self.pending_tools[tool_id] = tool_activity
-
-        detailed_addition = f"\n\n[Tool: {tool_name}]\n"
-        for key, value in tool_input.items():
-            if isinstance(value, str) and len(value) > 100:
-                value_preview = value[:100] + "..."
-            else:
-                value_preview = value
-            detailed_addition += f"  {key}: {value_preview}\n"
-
         self.accumulated_detailed += detailed_addition
 
         return StreamMessage(
@@ -111,23 +101,6 @@ class StreamParser:
             raw=raw_data,
         )
 
-    @staticmethod
-    def _normalize_tool_input(tool_input: Any) -> dict:
-        """Normalize tool input payload into a dictionary."""
-        if isinstance(tool_input, str):
-            try:
-                tool_input = json.loads(tool_input)
-            except json.JSONDecodeError:
-                return {"raw": tool_input}
-
-        if isinstance(tool_input, dict):
-            return tool_input
-
-        if tool_input is None:
-            return {}
-
-        return {"raw": tool_input}
-
     def _create_tool_result(
         self,
         tool_use_id: str,
@@ -136,36 +109,13 @@ class StreamParser:
         raw_data: dict,
     ) -> StreamMessage:
         """Create a normalized tool-result StreamMessage."""
-        full_content = content or ""
-        content_preview = (
-            full_content[:500] + "..." if len(full_content) > 500 else full_content
+        tool_activities, detailed_addition = create_tool_result(
+            tool_cls=ToolActivity,
+            pending_tools=self.pending_tools,
+            tool_use_id=tool_use_id,
+            content=content,
+            is_error=is_error,
         )
-        tool_activities = []
-
-        if tool_use_id in self.pending_tools:
-            tool_activity = self.pending_tools.pop(tool_use_id)
-            tool_activity.result = content_preview
-            tool_activity.full_result = full_content
-            tool_activity.is_error = is_error
-            if tool_activity.started_at:
-                tool_activity.duration_ms = int(
-                    (time.monotonic() - tool_activity.started_at) * 1000
-                )
-            tool_activities.append(tool_activity)
-        else:
-            tool_activity = ToolActivity(
-                id=tool_use_id,
-                name="unknown",
-                input={},
-                input_summary="",
-                result=content_preview,
-                full_result=full_content,
-                is_error=is_error,
-            )
-            tool_activities.append(tool_activity)
-
-        status = "ERROR" if is_error else "SUCCESS"
-        detailed_addition = f"\n\n[Tool Result: {status}]\n{content_preview}\n"
         self.accumulated_detailed += detailed_addition
 
         return StreamMessage(
@@ -192,32 +142,22 @@ class StreamParser:
 
     def parse_line(self, line: str) -> Optional[StreamMessage]:
         """Parse a single line of stream-json output."""
-        line = line.strip()
-        if not line:
+        data, self.buffer, overflow_error = parse_json_line_with_buffer(
+            line=line,
+            buffer=self.buffer,
+            max_buffer_size=MAX_BUFFER_SIZE,
+        )
+        if overflow_error:
+            logger.error(
+                f"{overflow_error} This may indicate a malformed JSON stream or extremely large output. Resetting buffer."
+            )
+            return StreamMessage(
+                type="error",
+                content=f"Stream buffer overflow: JSON chunk exceeded {MAX_BUFFER_SIZE // 1024}KB limit",
+                raw={},
+            )
+        if data is None:
             return None
-
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            # Might be partial JSON, buffer it
-            self.buffer += line
-            # Prevent unbounded buffer growth
-            if len(self.buffer) > MAX_BUFFER_SIZE:
-                logger.error(
-                    f"Stream buffer overflow ({len(self.buffer)} bytes exceeds {MAX_BUFFER_SIZE} limit). "
-                    "This may indicate a malformed JSON stream or extremely large output. Resetting buffer."
-                )
-                self.buffer = ""
-                return StreamMessage(
-                    type="error",
-                    content=f"Stream buffer overflow: JSON chunk exceeded {MAX_BUFFER_SIZE // 1024}KB limit",
-                    raw={},
-                )
-            try:
-                data = json.loads(self.buffer)
-                self.buffer = ""
-            except json.JSONDecodeError:
-                return None
 
         # Determine event type - Codex uses different event structure
         event_type = data.get("type", data.get("event", "unknown"))

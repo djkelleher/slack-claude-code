@@ -108,6 +108,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         # Send processing message
         response = await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
             text=f"Running: {claude_command}",
             blocks=processing_message(claude_command),
         )

@@ -14,8 +14,10 @@ from typing import Optional
 from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
-from .slack_ui import build_plan_approval_blocks
+from src.utils.pending_manager import PendingManager
 from src.utils.slack_helpers import post_text_snippet, sanitize_snippet_content
+
+from .slack_ui import build_plan_approval_blocks
 
 
 @dataclass
@@ -31,21 +33,8 @@ class PendingPlanApproval:
     user_id: Optional[str] = None
     thread_ts: Optional[str] = None
     message_ts: Optional[str] = None
-    _future: Optional[asyncio.Future] = field(default=None, repr=False)
+    future: Optional[asyncio.Future] = field(default=None, repr=False)
     created_at: datetime = field(default_factory=datetime.now)
-
-    @property
-    def future(self) -> asyncio.Future:
-        """Lazily create the Future when first accessed in async context."""
-        if self._future is None:
-            try:
-                loop = asyncio.get_running_loop()
-                self._future = loop.create_future()
-            except RuntimeError:
-                # Not in async context - create a new event loop's future
-                loop = asyncio.new_event_loop()
-                self._future = loop.create_future()
-        return self._future
 
 
 class PlanApprovalManager:
@@ -55,8 +44,7 @@ class PlanApprovalManager:
     Thread-safe via asyncio.Lock for all _pending dictionary access.
     """
 
-    _pending: dict[str, PendingPlanApproval] = {}
-    _lock: asyncio.Lock = asyncio.Lock()
+    _pending = PendingManager[PendingPlanApproval]()
 
     @classmethod
     async def request_approval(
@@ -88,6 +76,7 @@ class PlanApprovalManager:
             True if approved, False if denied
         """
         approval_id = str(uuid.uuid4())[:8]
+        future = asyncio.get_running_loop().create_future()
 
         approval = PendingPlanApproval(
             approval_id=approval_id,
@@ -98,10 +87,10 @@ class PlanApprovalManager:
             prompt=prompt,
             user_id=user_id,
             thread_ts=thread_ts,
+            future=future,
         )
 
-        async with cls._lock:
-            cls._pending[approval_id] = approval
+        await cls._pending.add(approval_id, approval)
 
         try:
             # Post approval message to Slack
@@ -109,7 +98,11 @@ class PlanApprovalManager:
                 # Post the plan as an inline message (avoids binary file issues)
                 if plan_content:
                     try:
-                        filename = os.path.basename(plan_file_path) if plan_file_path else "plan.md"
+                        filename = (
+                            os.path.basename(plan_file_path)
+                            if plan_file_path
+                            else "plan.md"
+                        )
                         await post_text_snippet(
                             client=slack_client,
                             channel_id=channel_id,
@@ -146,8 +139,7 @@ class PlanApprovalManager:
             return False
 
         finally:
-            async with cls._lock:
-                cls._pending.pop(approval_id, None)
+            await cls._pending.pop(approval_id)
 
     @classmethod
     async def resolve(
@@ -168,21 +160,10 @@ class PlanApprovalManager:
         Returns:
             The PendingPlanApproval if found and resolved, None otherwise
         """
-        async with cls._lock:
-            approval = cls._pending.get(approval_id)
-            if not approval:
-                logger.warning(f"Plan approval {approval_id} not found")
-                return None
-
-            # Use try-except to handle race condition where another coroutine
-            # could resolve the future between our check and set_result
-            try:
-                approval.future.set_result(approved)
-            except asyncio.InvalidStateError:
-                logger.warning(f"Plan approval {approval_id} already resolved")
-                # Remove from _pending to prevent memory leak
-                cls._pending.pop(approval_id, None)
-                return None
+        approval = await cls._pending.resolve(approval_id, approved)
+        if not approval:
+            logger.warning(f"Plan approval {approval_id} not found or already resolved")
+            return None
 
         logger.info(
             f"Plan approval {approval_id} {'approved' if approved else 'denied'} "
@@ -201,16 +182,7 @@ class PlanApprovalManager:
         Returns:
             True if approval was found and cancelled
         """
-        async with cls._lock:
-            approval = cls._pending.get(approval_id)
-            if not approval:
-                return False
-
-            if not approval.future.done():
-                approval.future.cancel()
-
-            cls._pending.pop(approval_id, None)
-        return True
+        return await cls._pending.cancel(approval_id)
 
     @classmethod
     async def cancel_for_session(cls, session_id: str) -> int:
@@ -222,20 +194,12 @@ class PlanApprovalManager:
         Returns:
             Number of approvals cancelled
         """
-        async with cls._lock:
-            to_cancel = [aid for aid, a in cls._pending.items() if a.session_id == session_id]
-
-            for approval_id in to_cancel:
-                approval = cls._pending.get(approval_id)
-                if approval:
-                    if not approval.future.done():
-                        approval.future.cancel()
-                    cls._pending.pop(approval_id, None)
-
-        return len(to_cancel)
+        return await cls._pending.cancel_for_session(session_id)
 
     @classmethod
-    async def get_pending(cls, session_id: Optional[str] = None) -> list[PendingPlanApproval]:
+    async def get_pending(
+        cls, session_id: Optional[str] = None
+    ) -> list[PendingPlanApproval]:
         """Get pending plan approvals.
 
         Args:
@@ -244,14 +208,9 @@ class PlanApprovalManager:
         Returns:
             List of pending plan approvals
         """
-        async with cls._lock:
-            approvals = list(cls._pending.values())
-            if session_id:
-                approvals = [a for a in approvals if a.session_id == session_id]
-        return approvals
+        return await cls._pending.list(session_id=session_id)
 
     @classmethod
     async def count_pending(cls) -> int:
         """Get count of pending plan approvals."""
-        async with cls._lock:
-            return len(cls._pending)
+        return await cls._pending.count()

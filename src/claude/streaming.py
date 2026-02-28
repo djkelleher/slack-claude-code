@@ -1,9 +1,13 @@
 import json
-import time
 from typing import Iterator, Optional
 
 from loguru import logger
 
+from src.backends.stream_parsing_common import (
+    create_tool_activity,
+    create_tool_result,
+    parse_json_line_with_buffer,
+)
 from src.utils.stream_models import (
     BaseToolActivity,
     StreamMessage,
@@ -51,33 +55,22 @@ class StreamParser:
 
     def parse_line(self, line: str) -> Optional[StreamMessage]:
         """Parse a single line of stream-json output."""
-        line = line.strip()
-        if not line:
+        data, self.buffer, overflow_error = parse_json_line_with_buffer(
+            line=line,
+            buffer=self.buffer,
+            max_buffer_size=MAX_BUFFER_SIZE,
+        )
+        if overflow_error:
+            logger.error(
+                f"{overflow_error} This may indicate a malformed JSON stream or extremely large output. Resetting buffer."
+            )
+            return StreamMessage(
+                type="error",
+                content=f"Stream buffer overflow: JSON chunk exceeded {MAX_BUFFER_SIZE // 1024}KB limit",
+                raw={},
+            )
+        if data is None:
             return None
-
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            # Might be partial JSON, buffer it
-            self.buffer += line
-            # Prevent unbounded buffer growth
-            if len(self.buffer) > MAX_BUFFER_SIZE:
-                logger.error(
-                    f"Stream buffer overflow ({len(self.buffer)} bytes exceeds {MAX_BUFFER_SIZE} limit). "
-                    "This may indicate a malformed JSON stream or extremely large output. Resetting buffer."
-                )
-                # Create error message to inform user
-                self.buffer = ""
-                return StreamMessage(
-                    type="error",
-                    content=f"Stream buffer overflow: JSON chunk exceeded {MAX_BUFFER_SIZE // 1024}KB limit",
-                    raw={},
-                )
-            try:
-                data = json.loads(self.buffer)
-                self.buffer = ""
-            except json.JSONDecodeError:
-                return None
 
         if not isinstance(data, dict):
             # Handle unexpected non-object JSON (e.g., a JSON string) as plain text output
@@ -164,34 +157,22 @@ class StreamParser:
                     tool_name = block.get("name", "unknown")
                     tool_input = block.get("input", {})
 
-                    # Create ToolActivity object
-                    tool_activity = ToolActivity(
-                        id=tool_id,
-                        name=tool_name,
-                        input=tool_input,
-                        input_summary=ToolActivity.create_input_summary(tool_name, tool_input),
-                        started_at=time.monotonic(),  # Use monotonic time for duration
-                        timestamp=time.time(),  # Wall-clock time for display
+                    tool_activity, tool_detailed, collision = create_tool_activity(
+                        tool_cls=ToolActivity,
+                        pending_tools=self.pending_tools,
+                        tool_id=tool_id,
+                        tool_name=tool_name,
+                        tool_input=tool_input,
                     )
                     tool_activities.append(tool_activity)
 
                     # Track for linking with results (detect collisions)
-                    if tool_id in self.pending_tools:
+                    if collision:
                         logger.warning(
                             f"Tool ID collision detected: {tool_id} already tracked. "
                             "This may indicate duplicate tool invocations."
                         )
-                    self.pending_tools[tool_id] = tool_activity
-
-                    # Include tool use in detailed output
-                    detailed_content += f"\n\n[Tool: {tool_name}]\n"
-                    # Format tool input nicely
-                    for key, value in tool_input.items():
-                        if isinstance(value, str) and len(value) > 100:
-                            value_preview = value[:100] + "..."
-                        else:
-                            value_preview = value
-                        detailed_content += f"  {key}: {value_preview}\n"
+                    detailed_content += tool_detailed
 
             if text_content:
                 self.accumulated_content = _concat_with_spacing(
@@ -264,38 +245,15 @@ class StreamParser:
                                 full_content += item
                     else:
                         full_content = coerce_text(content)
-
-                    content_preview = (
-                        full_content[:500] + "..." if len(full_content) > 500 else full_content
+                    parsed_activities, parsed_detailed = create_tool_result(
+                        tool_cls=ToolActivity,
+                        pending_tools=self.pending_tools,
+                        tool_use_id=tool_use_id,
+                        content=full_content,
+                        is_error=is_error,
                     )
-
-                    # Update linked ToolActivity if we have it
-                    if tool_use_id in self.pending_tools:
-                        tool_activity = self.pending_tools.pop(tool_use_id)
-                        tool_activity.result = content_preview
-                        tool_activity.full_result = full_content
-                        tool_activity.is_error = is_error
-                        # Compute duration using monotonic time
-                        if tool_activity.started_at:
-                            tool_activity.duration_ms = int(
-                                (time.monotonic() - tool_activity.started_at) * 1000
-                            )
-                        tool_activities.append(tool_activity)
-                    else:
-                        # Create a result-only activity for untracked tools
-                        tool_activity = ToolActivity(
-                            id=tool_use_id,
-                            name="unknown",
-                            input={},
-                            input_summary="",
-                            result=content_preview,
-                            full_result=full_content,
-                            is_error=is_error,
-                        )
-                        tool_activities.append(tool_activity)
-
-                    status = "ERROR" if is_error else "SUCCESS"
-                    detailed_addition += f"\n\n[Tool Result: {status}]\n{content_preview}\n"
+                    tool_activities.extend(parsed_activities)
+                    detailed_addition += parsed_detailed
 
             if detailed_addition:
                 self.accumulated_detailed += detailed_addition

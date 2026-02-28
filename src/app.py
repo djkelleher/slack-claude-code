@@ -32,22 +32,18 @@ from src.handlers import register_commands
 from src.handlers.actions import register_actions
 from src.handlers.claude.queue import ensure_queue_processor
 from src.handlers.command_router import execute_for_session
+from src.handlers.response_delivery import deliver_command_response
 from src.question.manager import QuestionManager
-from src.utils.detail_cache import DetailCache
 from src.utils.file_downloader import (
     FileDownloadError,
     FileTooLargeError,
     download_slack_file,
 )
 from src.utils.formatters.command import (
-    command_response_with_file,
-    command_response_with_tables,
     error_message,
-    should_attach_file,
 )
 from src.utils.formatters.streaming import processing_message, streaming_update
 from src.utils.execution_scope import build_session_scope
-from src.utils.slack_helpers import post_text_snippet
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 
@@ -390,66 +386,20 @@ async def _execute_codex_message(
         # Send final response
         output = result.output or result.error or "No output"
 
-        if should_attach_file(output):
-            # Large response - attach as file
-            blocks, file_content, file_title = command_response_with_file(
-                prompt=prompt,
-                output=output,
-                command_id=cmd_history.id,
-                duration_ms=result.duration_ms,
-                cost_usd=result.cost_usd,
-                is_error=not result.success,
-            )
-            await slack_api_with_retry(
-                lambda: client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    text=output[:100] + "..." if len(output) > 100 else output,
-                    blocks=blocks,
-                )
-            )
-            # Post response content
-            try:
-                await post_text_snippet(
-                    client=client,
-                    channel_id=channel_id,
-                    content=file_content,
-                    title="📄 Response summary",
-                    thread_ts=thread_ts,
-                    format_as_text=True,
-                    render_tables=True,
-                )
-            except Exception as post_error:
-                logger.error(f"Failed to post snippet: {post_error}")
-        else:
-            # Format response with table support
-            message_blocks_list = command_response_with_tables(
-                prompt=prompt,
-                output=output,
-                command_id=cmd_history.id,
-                duration_ms=result.duration_ms,
-                cost_usd=result.cost_usd,
-                is_error=not result.success,
-            )
-
-            # Update the first message
-            await slack_api_with_retry(
-                lambda: client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    text=output[:100] + "..." if len(output) > 100 else output,
-                    blocks=message_blocks_list[0],
-                )
-            )
-
-            # Post additional messages for tables
-            for blocks in message_blocks_list[1:]:
-                await client.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    text="Table",
-                    blocks=blocks,
-                )
+        await deliver_command_response(
+            client=client,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            message_ts=message_ts,
+            prompt=prompt,
+            output=output,
+            command_id=cmd_history.id,
+            duration_ms=result.duration_ms,
+            cost_usd=result.cost_usd,
+            is_error=not result.success,
+            logger=logger,
+            api_with_retry=slack_api_with_retry,
+        )
 
     except asyncio.CancelledError:
         logger.info("Codex command execution was cancelled")
@@ -854,9 +804,8 @@ async def main():
                 f"Created Plan: <full path to plan file>]"
             )
             logger.info(
-                "Plan mode: session %s execution %s, using Claude's designated plan file",
-                session.id,
-                execution_id,
+                f"Plan mode: session {session.id} execution {execution_id}, "
+                "using Claude's designated plan file"
             )
 
         try:
@@ -1280,99 +1229,23 @@ async def main():
             # Send final response
             output = result.output or result.error or "No output"
 
-            if should_attach_file(output):
-                # Large response - attach as file
-                blocks, file_content, file_title = command_response_with_file(
-                    prompt=prompt,
-                    output=output,
-                    command_id=cmd_history.id,
-                    duration_ms=result.duration_ms,
-                    cost_usd=result.cost_usd,
-                    is_error=not result.success,
-                )
-                await slack_api_with_retry(
-                    lambda: client.chat_update(
-                        channel=channel_id,
-                        ts=message_ts,
-                        text=output[:100] + "..." if len(output) > 100 else output,
-                        blocks=blocks,
-                    )
-                )
-                # Post response content
-                try:
-                    # Post summary as formatted text (converts markdown to Slack mrkdwn)
-                    await post_text_snippet(
-                        client=client,
-                        channel_id=channel_id,
-                        content=file_content,
-                        title="📄 Response summary",
-                        thread_ts=thread_ts,
-                        format_as_text=True,
-                        render_tables=True,
-                    )
-                    # Store detailed output in cache and post button to view it
-                    if result.detailed_output and result.detailed_output != output:
-                        DetailCache.store(cmd_history.id, result.detailed_output)
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            text="📋 Detailed output available",
-                            blocks=[
-                                {
-                                    "type": "section",
-                                    "text": {
-                                        "type": "mrkdwn",
-                                        "text": f"📋 *Detailed output* ({len(result.detailed_output):,} chars)",
-                                    },
-                                    "accessory": {
-                                        "type": "button",
-                                        "text": {
-                                            "type": "plain_text",
-                                            "text": "View Details",
-                                            "emoji": True,
-                                        },
-                                        "action_id": "view_detailed_output",
-                                        "value": str(cmd_history.id),
-                                    },
-                                },
-                            ],
-                        )
-                except Exception as post_error:
-                    logger.error(f"Failed to post snippet: {post_error}")
-                    await client.chat_postMessage(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        text=f"⚠️ Could not post detailed output: {str(post_error)[:100]}",
-                    )
-            else:
-                # Format response with table support (may produce multiple messages)
-                message_blocks_list = command_response_with_tables(
-                    prompt=prompt,
-                    output=output,
-                    command_id=cmd_history.id,
-                    duration_ms=result.duration_ms,
-                    cost_usd=result.cost_usd,
-                    is_error=not result.success,
-                )
-
-                # Update the first message (the original processing message)
-                await slack_api_with_retry(
-                    lambda: client.chat_update(
-                        channel=channel_id,
-                        ts=message_ts,
-                        text=output[:100] + "..." if len(output) > 100 else output,
-                        blocks=message_blocks_list[0],
-                    )
-                )
-
-                # Post additional messages for tables (each table needs its own message)
-                for blocks in message_blocks_list[1:]:
-                    await client.chat_postMessage(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        text="Table",
-                        blocks=blocks,
-                    )
+            await deliver_command_response(
+                client=client,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                prompt=prompt,
+                output=output,
+                command_id=cmd_history.id,
+                duration_ms=result.duration_ms,
+                cost_usd=result.cost_usd,
+                is_error=not result.success,
+                logger=logger,
+                detailed_output=result.detailed_output,
+                post_detail_button=True,
+                notify_on_snippet_failure=True,
+                api_with_retry=slack_api_with_retry,
+            )
 
         except asyncio.CancelledError:
             logger.info("Command execution was cancelled")
