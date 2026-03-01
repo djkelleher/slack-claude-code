@@ -947,6 +947,10 @@ async def main():
                 )
                 result.success = False
 
+            if pending_question:
+                await QuestionManager.cancel(pending_question.question_id)
+                pending_question = None
+
             # Update command history
             if result.success:
                 await deps.db.update_command_status(cmd_history.id, "completed", result.output)
