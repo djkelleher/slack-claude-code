@@ -67,15 +67,13 @@ Use these when your session model is a Codex model.
 | Command | Description | Example |
 |---------|-------------|---------|
 | `/usage` | Show Codex session state and modes | `/usage` |
+| `/review` | Start a Codex review for uncommitted changes (or custom target text) | `/review`, `/review review API auth flow` |
+| `/review status [thread_id\|current]` | Inspect latest review/thread lifecycle status | `/review status`, `/review status current` |
+| `/mcp` | Show Codex MCP server status | `/mcp` |
 
 Codex transport uses `codex app-server` JSON-RPC for all modes.
 See [Codex app-server JSON-RPC integration notes](CODEX_APP_SERVER_JSON_RPC.md) for
 the exact request/notification methods this app handles.
-
-Codex session command support:
-- `/review` starts a Codex review when the active session backend is Codex
-- `/review status [thread_id|current]` inspects latest review/thread lifecycle status
-- `/mcp` shows Codex MCP server status when the active session backend is Codex
 
 `/mode` in Codex sessions:
 - `/mode bypass` -> `approval=never`
@@ -112,13 +110,27 @@ Each Slack thread maintains an isolated Claude session with its own context.
 | `/cost` | Show session cost | `/cost` |
 | `/usage` | Show usage/cost (Claude) or session status (Codex) | `/usage` |
 
+#### Claude CLI Utilities
+These map to terminal Claude Code slash commands. In Codex sessions, unsupported ones return a hint.
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/claude-help` | Show Claude Code help | `/claude-help` |
+| `/doctor` | Run Claude Code diagnostics | `/doctor` |
+| `/claude-config` | Show Claude Code config | `/claude-config` |
+| `/context` | Show Claude context usage | `/context` |
+| `/init` | Initialize project memory files | `/init` |
+| `/memory` | Manage `CLAUDE.md` memory | `/memory` |
+| `/todos` | Show Claude TODO list | `/todos` |
+| `/stats` | Show stats availability note (terminal-only feature) | `/stats` |
+
 #### Navigation
 Control the working directory and additional directories for Claude's file operations.
 
 | Command | Description | Example |
 |---------|-------------|---------|
 | `/ls` | List directory contents | `/ls`, `/ls src/` |
-| `/cd` | Change working directory | `/cd /home/user/project`, `cd subfolder`, `cd ..` |
+| `/cd` | Change working directory | `/cd /home/user/project`, `/cd subfolder`, `/cd ..` |
 | `/pwd` | Print working directory | `/pwd` |
 | `/add-dir` | Add directory to context | `/add-dir /home/user/other-project` |
 | `/remove-dir` | Remove directory from context | `/remove-dir /home/user/other-project` |
@@ -162,8 +174,10 @@ Monitor and control long-running operations with real-time progress updates.
 | Command | Description | Example |
 |---------|-------------|---------|
 | `/st` | Show active job status | `/st` |
-| `/cc` | Cancel jobs | `/cc` or `/cc abc123` |
-| `/esc` | Send interrupt (Ctrl+C) | `/esc` |
+| `/cc` | Cancel tracked background jobs | `/cc` or `/cc abc123` |
+| `/cancel` | Cancel active Claude/Codex executions in current channel/thread | `/cancel` |
+| `/c` | Alias for `/cancel` | `/c` |
+| `/esc` | Interrupt current operation (Escape/Ctrl+C style) | `/esc` |
 
 #### Git
 Full git workflow without leaving Slack. Includes branch name and commit message validation.
