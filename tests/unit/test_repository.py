@@ -38,9 +38,7 @@ class TestSessionOperations:
         assert session1.id == session2.id
 
     @pytest.mark.asyncio
-    async def test_get_or_create_session_channel_level_does_not_duplicate(
-        self, db_repo
-    ):
+    async def test_get_or_create_session_channel_level_does_not_duplicate(self, db_repo):
         """Channel-level sessions should reuse one row even with thread_ts=None."""
         session1 = await db_repo.get_or_create_session("C123ABC", None)
         session2 = await db_repo.get_or_create_session("C123ABC", None)
@@ -93,13 +91,29 @@ class TestSessionOperations:
     async def test_get_or_create_session_thread_isolation(self, db_repo):
         """Different threads get different sessions."""
         channel_session = await db_repo.get_or_create_session("C123ABC", None)
-        thread_session = await db_repo.get_or_create_session(
-            "C123ABC", "1234567890.123456"
-        )
+        thread_session = await db_repo.get_or_create_session("C123ABC", "1234567890.123456")
 
         assert channel_session.id != thread_session.id
         assert channel_session.thread_ts is None
         assert thread_session.thread_ts == "1234567890.123456"
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_normalizes_empty_thread_ts(self, db_repo):
+        """Empty thread_ts should map to the same channel-level session scope."""
+        session_with_none = await db_repo.get_or_create_session("C123ABC", None)
+        session_with_empty = await db_repo.get_or_create_session("C123ABC", "")
+
+        assert session_with_none.id == session_with_empty.id
+        assert session_with_empty.thread_ts is None
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_thread_inherits_channel_model(self, db_repo):
+        """New thread sessions inherit channel-level model selection at creation time."""
+        await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.update_session_model("C123ABC", None, "gpt-5.3-codex-high")
+
+        thread_session = await db_repo.get_or_create_session("C123ABC", "1234567890.123456")
+        assert thread_session.model == "gpt-5.3-codex-high"
 
     @pytest.mark.asyncio
     async def test_update_session_cwd(self, db_repo):
@@ -146,6 +160,23 @@ class TestSessionOperations:
 
         session = await db_repo.get_or_create_session("C123ABC", None)
         assert session.model == "opus"
+
+    @pytest.mark.asyncio
+    async def test_update_session_model_creates_missing_session(self, db_repo):
+        """update_session_model creates a session when one doesn't exist yet."""
+        await db_repo.update_session_model("C123ABC", None, "gpt-5.3-codex")
+
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        assert session.model == "gpt-5.3-codex"
+
+    @pytest.mark.asyncio
+    async def test_restore_channel_model_selections_returns_saved_models(self, db_repo):
+        """restore_channel_model_selections returns persisted channel model selections."""
+        await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.update_session_model("C123ABC", None, "gpt-5.3-codex-high")
+
+        selections = await db_repo.restore_channel_model_selections()
+        assert selections["C123ABC"] == "gpt-5.3-codex-high"
 
     @pytest.mark.asyncio
     async def test_add_session_dir_requires_existing_session(self, db_repo):
@@ -225,9 +256,7 @@ class TestCommandHistoryOperations:
         """update_command_status updates to failed with error."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         cmd = await db_repo.add_command(session.id, "test")
-        await db_repo.update_command_status(
-            cmd.id, "failed", error_message="Something broke"
-        )
+        await db_repo.update_command_status(cmd.id, "failed", error_message="Something broke")
 
         updated = await db_repo.get_command_by_id(cmd.id)
         assert updated.status == "failed"
@@ -253,9 +282,7 @@ class TestCommandHistoryOperations:
             await db_repo.add_command(session.id, f"command {i}")
 
         # Get first page
-        history, total = await db_repo.get_command_history(
-            session.id, limit=5, offset=0
-        )
+        history, total = await db_repo.get_command_history(session.id, limit=5, offset=0)
         assert len(history) == 5
         assert total == 15
 
@@ -402,9 +429,7 @@ class TestQueueOperations:
         channel_session = await db_repo.get_or_create_session("C123ABC", None)
         thread_session = await db_repo.get_or_create_session("C123ABC", "123.456")
         await db_repo.add_to_queue(channel_session.id, "C123ABC", None, "channel item")
-        await db_repo.add_to_queue(
-            thread_session.id, "C123ABC", "123.456", "thread item"
-        )
+        await db_repo.add_to_queue(thread_session.id, "C123ABC", "123.456", "thread item")
 
         channel_pending = await db_repo.get_pending_queue_items("C123ABC", None)
         thread_pending = await db_repo.get_pending_queue_items("C123ABC", "123.456")
@@ -423,9 +448,7 @@ class TestParallelJobOperations:
         """create_parallel_job creates a job."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         config = {"n_instances": 3, "commands": ["cmd1", "cmd2"]}
-        job = await db_repo.create_parallel_job(
-            session.id, "C123ABC", "parallel_analysis", config
-        )
+        job = await db_repo.create_parallel_job(session.id, "C123ABC", "parallel_analysis", config)
 
         assert job.id is not None
         assert job.job_type == "parallel_analysis"
@@ -568,9 +591,7 @@ class TestGitCheckpointOperations:
         """get_checkpoints excludes auto checkpoints by default."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         await db_repo.create_checkpoint(session.id, "C123ABC", "manual", "stash@{0}")
-        await db_repo.create_checkpoint(
-            session.id, "C123ABC", "auto", "stash@{1}", is_auto=True
-        )
+        await db_repo.create_checkpoint(session.id, "C123ABC", "auto", "stash@{1}", is_auto=True)
 
         checkpoints = await db_repo.get_checkpoints("C123ABC", include_auto=False)
 
@@ -606,12 +627,8 @@ class TestGitCheckpointOperations:
         """delete_auto_checkpoints removes only auto checkpoints."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         await db_repo.create_checkpoint(session.id, "C123ABC", "manual", "stash@{0}")
-        await db_repo.create_checkpoint(
-            session.id, "C123ABC", "auto1", "stash@{1}", is_auto=True
-        )
-        await db_repo.create_checkpoint(
-            session.id, "C123ABC", "auto2", "stash@{2}", is_auto=True
-        )
+        await db_repo.create_checkpoint(session.id, "C123ABC", "auto1", "stash@{1}", is_auto=True)
+        await db_repo.create_checkpoint(session.id, "C123ABC", "auto2", "stash@{2}", is_auto=True)
 
         count = await db_repo.delete_auto_checkpoints("C123ABC")
 

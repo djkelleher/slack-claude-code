@@ -38,18 +38,36 @@ class DatabaseRepository:
         self._initialized = False
 
     @staticmethod
+    def _normalize_thread_ts(thread_ts: Optional[str]) -> Optional[str]:
+        """Normalize blank thread timestamps to None for stable session scope."""
+        if thread_ts is None:
+            return None
+        normalized = thread_ts.strip()
+        return normalized or None
+
+    @staticmethod
     def _session_scope_params(
         channel_id: str, thread_ts: Optional[str]
     ) -> tuple[Optional[str], ...]:
         """Return standard SQL parameters for channel/thread scoped session queries."""
-        return (channel_id, thread_ts, thread_ts, thread_ts)
+        normalized_thread_ts = DatabaseRepository._normalize_thread_ts(thread_ts)
+        return (
+            channel_id,
+            normalized_thread_ts,
+            normalized_thread_ts,
+            normalized_thread_ts,
+        )
 
     @staticmethod
-    def _queue_scope_params(
-        channel_id: str, thread_ts: Optional[str]
-    ) -> tuple[Optional[str], ...]:
+    def _queue_scope_params(channel_id: str, thread_ts: Optional[str]) -> tuple[Optional[str], ...]:
         """Return standard SQL parameters for channel/thread scoped queue queries."""
-        return (channel_id, thread_ts, thread_ts, thread_ts)
+        normalized_thread_ts = DatabaseRepository._normalize_thread_ts(thread_ts)
+        return (
+            channel_id,
+            normalized_thread_ts,
+            normalized_thread_ts,
+            normalized_thread_ts,
+        )
 
     def _get_connection(self) -> aiosqlite.Connection:
         return aiosqlite.connect(self.db_path, timeout=self.timeout)
@@ -95,6 +113,7 @@ class DatabaseRepository:
             thread_ts: Slack thread timestamp (None for channel-level session)
             default_cwd: Default working directory for new sessions
         """
+        normalized_thread_ts = self._normalize_thread_ts(thread_ts)
         async with self._transact() as db:
             now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -114,7 +133,7 @@ class DatabaseRepository:
                        last_active DESC,
                        id DESC
                    LIMIT 1""",
-                self._session_scope_params(channel_id, thread_ts),
+                self._session_scope_params(channel_id, normalized_thread_ts),
             )
             row = await cursor.fetchone()
 
@@ -141,10 +160,24 @@ class DatabaseRepository:
                 return Session.from_row(updated_row)
 
             # Create new session when none exists.
+            model = config.DEFAULT_MODEL
+            if normalized_thread_ts is not None:
+                # New thread sessions inherit channel-level model selection.
+                channel_cursor = await db.execute(
+                    """SELECT model FROM sessions
+                       WHERE channel_id = ? AND thread_ts IS NULL
+                       ORDER BY last_active DESC, id DESC
+                       LIMIT 1""",
+                    (channel_id,),
+                )
+                channel_row = await channel_cursor.fetchone()
+                if channel_row and channel_row[0] is not None:
+                    model = channel_row[0]
+
             cursor = await db.execute(
                 """INSERT INTO sessions (channel_id, thread_ts, working_directory, model, last_active)
                    VALUES (?, ?, ?, ?, ?)""",
-                (channel_id, thread_ts, default_cwd, config.DEFAULT_MODEL, now_iso),
+                (channel_id, normalized_thread_ts, default_cwd, model, now_iso),
             )
             session_id = cursor.lastrowid
             if session_id is None:
@@ -165,9 +198,7 @@ class DatabaseRepository:
                 )
             return Session.from_row(row)
 
-    async def update_session_cwd(
-        self, channel_id: str, thread_ts: Optional[str], cwd: str
-    ) -> None:
+    async def update_session_cwd(self, channel_id: str, thread_ts: Optional[str], cwd: str) -> None:
         """Update the working directory for a session."""
         async with self._transact() as db:
             await db.execute(
@@ -229,15 +260,54 @@ class DatabaseRepository:
     ) -> None:
         """Update the model for a session."""
         async with self._transact() as db:
-            await db.execute(
+            normalized_thread_ts = self._normalize_thread_ts(thread_ts)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            cursor = await db.execute(
                 f"""UPDATE sessions SET model = ?, last_active = ?
                    WHERE {self._SESSION_SCOPE_WHERE}""",
                 (
                     model,
-                    datetime.now(timezone.utc).isoformat(),
-                    *self._session_scope_params(channel_id, thread_ts),
+                    now_iso,
+                    *self._session_scope_params(channel_id, normalized_thread_ts),
                 ),
             )
+            if cursor.rowcount == 0:
+                await db.execute(
+                    """INSERT INTO sessions (
+                           channel_id, thread_ts, working_directory, model, last_active
+                       ) VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        channel_id,
+                        normalized_thread_ts,
+                        config.DEFAULT_WORKING_DIR,
+                        model,
+                        now_iso,
+                    ),
+                )
+
+    async def get_channel_model_selections(self) -> dict[str, str]:
+        """Return latest non-null channel-level model selections keyed by channel ID."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """SELECT channel_id, model
+                   FROM sessions
+                   WHERE thread_ts IS NULL AND model IS NOT NULL
+                   ORDER BY last_active DESC, id DESC"""
+            )
+            rows = await cursor.fetchall()
+
+        selections: dict[str, str] = {}
+        for channel_id, model in rows:
+            if channel_id not in selections and model is not None:
+                selections[channel_id] = model
+        return selections
+
+    async def restore_channel_model_selections(self) -> dict[str, str]:
+        """Ensure channel sessions are initialized with persisted channel model selections."""
+        selections = await self.get_channel_model_selections()
+        for channel_id, model in selections.items():
+            await self.update_session_model(channel_id, None, model)
+        return selections
 
     async def add_session_dir(
         self, channel_id: str, thread_ts: Optional[str], directory: str
@@ -271,9 +341,7 @@ class DatabaseRepository:
                 ),
             )
             if cursor.rowcount == 0:
-                raise RuntimeError(
-                    f"Session not found for channel {channel_id} thread {thread_ts}"
-                )
+                raise RuntimeError(f"Session not found for channel {channel_id} thread {thread_ts}")
             return current_dirs
 
     async def remove_session_dir(
@@ -308,14 +376,10 @@ class DatabaseRepository:
                 ),
             )
             if cursor.rowcount == 0:
-                raise RuntimeError(
-                    f"Session not found for channel {channel_id} thread {thread_ts}"
-                )
+                raise RuntimeError(f"Session not found for channel {channel_id} thread {thread_ts}")
             return current_dirs
 
-    async def clear_session_dirs(
-        self, channel_id: str, thread_ts: Optional[str]
-    ) -> None:
+    async def clear_session_dirs(self, channel_id: str, thread_ts: Optional[str]) -> None:
         """Clear all added directories from a session."""
         async with self._transact() as db:
             await db.execute(
@@ -351,9 +415,7 @@ class DatabaseRepository:
             row = await cursor.fetchone()
             return Session.from_row(row) if row else None
 
-    async def delete_session(
-        self, channel_id: str, thread_ts: Optional[str] = None
-    ) -> bool:
+    async def delete_session(self, channel_id: str, thread_ts: Optional[str] = None) -> bool:
         """Delete a specific session."""
         async with self._get_connection() as db:
             cursor = await db.execute(
@@ -450,9 +512,7 @@ class DatabaseRepository:
     async def get_command_by_id(self, command_id: int) -> Optional[CommandHistory]:
         """Get a specific command by ID."""
         async with self._get_connection() as db:
-            cursor = await db.execute(
-                "SELECT * FROM command_history WHERE id = ?", (command_id,)
-            )
+            cursor = await db.execute("SELECT * FROM command_history WHERE id = ?", (command_id,))
             row = await cursor.fetchone()
             return CommandHistory.from_row(row) if row else None
 
@@ -530,15 +590,11 @@ class DatabaseRepository:
     async def get_parallel_job(self, job_id: int) -> Optional[ParallelJob]:
         """Get a parallel job by ID."""
         async with self._get_connection() as db:
-            cursor = await db.execute(
-                "SELECT * FROM parallel_jobs WHERE id = ?", (job_id,)
-            )
+            cursor = await db.execute("SELECT * FROM parallel_jobs WHERE id = ?", (job_id,))
             row = await cursor.fetchone()
             return ParallelJob.from_row(row) if row else None
 
-    async def get_active_jobs(
-        self, channel_id: Optional[str] = None
-    ) -> list[ParallelJob]:
+    async def get_active_jobs(self, channel_id: Optional[str] = None) -> list[ParallelJob]:
         """Get all active (pending/running) jobs, optionally filtered by channel."""
         async with self._get_connection() as db:
             if channel_id:
@@ -805,9 +861,7 @@ class DatabaseRepository:
             rows = await cursor.fetchall()
             return [GitCheckpoint.from_row(row) for row in rows]
 
-    async def get_checkpoint_by_name(
-        self, channel_id: str, name: str
-    ) -> Optional[GitCheckpoint]:
+    async def get_checkpoint_by_name(self, channel_id: str, name: str) -> Optional[GitCheckpoint]:
         """Get a specific checkpoint by name."""
         async with self._get_connection() as db:
             cursor = await db.execute(
@@ -823,9 +877,7 @@ class DatabaseRepository:
     async def delete_checkpoint(self, checkpoint_id: int) -> bool:
         """Delete a checkpoint."""
         async with self._get_connection() as db:
-            cursor = await db.execute(
-                "DELETE FROM git_checkpoints WHERE id = ?", (checkpoint_id,)
-            )
+            cursor = await db.execute("DELETE FROM git_checkpoints WHERE id = ?", (checkpoint_id,))
             await db.commit()
             return cursor.rowcount > 0
 
@@ -843,9 +895,7 @@ class DatabaseRepository:
     # Notification Settings
     # -------------------------------------------------------------------------
 
-    async def get_notification_settings(
-        self, channel_id: str
-    ) -> "NotificationSettings":
+    async def get_notification_settings(self, channel_id: str) -> "NotificationSettings":
         """
         Get notification settings for a channel.
 

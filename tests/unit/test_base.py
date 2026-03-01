@@ -58,6 +58,20 @@ class TestCommandContext:
 
         assert ctx.command_name == ""
 
+    def test_from_command_normalizes_blank_thread_ts(self):
+        """Blank thread timestamp should normalize to None."""
+        command = {
+            "channel_id": "C123ABC",
+            "user_id": "U456DEF",
+            "text": "test",
+            "thread_ts": "   ",
+        }
+        client = MagicMock()
+        logger = MagicMock()
+
+        ctx = CommandContext.from_command(command, client, logger)
+        assert ctx.thread_ts is None
+
 
 class TestHandlerDependencies:
     """Tests for HandlerDependencies dataclass."""

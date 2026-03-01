@@ -59,7 +59,7 @@ class CommandContext:
             command_name=command.get("command", ""),
             client=client,
             logger=logger,
-            thread_ts=command.get("thread_ts"),
+            thread_ts=(command.get("thread_ts") or "").strip() or None,
         )
 
 
