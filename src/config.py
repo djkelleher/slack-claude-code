@@ -301,6 +301,7 @@ class Config(BaseSettings):
     # Valid approval modes for Codex app-server
     VALID_APPROVAL_MODES: tuple[str, ...] = (
         "untrusted",
+        "on-failure",
         "on-request",
         "never",
     )

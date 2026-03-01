@@ -80,7 +80,7 @@ the exact request/notification methods this app handles.
 - `/mode ask`, `/mode default`, and `/mode plan` -> `approval=on-request`
 - `/mode plan` sets native app-server `turn/start.collaborationMode` to `plan`
 - `/mode accept` and `/mode delegate` remain unsupported for Codex
-- `/mode approval <untrusted|on-request|never>` sets explicit approval policy
+- `/mode approval <untrusted|on-failure|on-request|never>` sets explicit approval policy
 - `/mode sandbox <read-only|workspace-write|danger-full-access>` sets sandbox policy
 
 Supported Codex models:

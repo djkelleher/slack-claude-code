@@ -6,9 +6,7 @@ import json
 from typing import Optional
 
 
-def format_approval_request_for_slack(
-    method: str, params: dict
-) -> tuple[str, Optional[str]]:
+def format_approval_request_for_slack(method: str, params: dict) -> tuple[str, Optional[str]]:
     """Map an app-server approval request into PermissionManager fields."""
     normalized_method = (method or "").strip()
     safe_params = params if isinstance(params, dict) else {}
@@ -36,23 +34,11 @@ def format_approval_request_for_slack(
             input_lines.append(f"grantRoot: {grant_root}")
         return "file_change", "\n".join(input_lines) if input_lines else None
 
-    if normalized_method == "skill/requestApproval":
-        skill_name = str(safe_params.get("skillName") or "unknown")
-        return f"skill:{skill_name}", None
-
     return normalized_method or "codex_approval", json.dumps(safe_params, default=str)
 
 
 def approval_payload_from_decision(method: str, approved: bool) -> dict:
-    """Convert a boolean Slack decision into app-server approval payload."""
-    normalized_method = (method or "").strip()
-
-    if normalized_method == "skill/requestApproval":
-        return {"decision": "approve" if approved else "decline"}
-
-    if normalized_method in {"execCommandApproval", "applyPatchApproval"}:
-        return {"decision": "approved" if approved else "denied"}
-
+    """Convert a boolean Slack decision into v2 app-server approval payload."""
     return {"decision": "accept" if approved else "decline"}
 
 

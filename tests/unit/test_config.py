@@ -131,10 +131,14 @@ class TestConfig:
         assert config.SLACK_BLOCK_TEXT_LIMIT == 2900
         assert config.SLACK_FILE_THRESHOLD == 2000
 
-    def test_codex_approval_modes_exclude_deprecated(self):
-        """Deprecated Codex approval modes are not offered as valid options."""
-        assert "on-failure" not in config.VALID_APPROVAL_MODES
-        assert set(config.VALID_APPROVAL_MODES) == {"untrusted", "on-request", "never"}
+    def test_codex_approval_modes_include_v2_values(self):
+        """Codex approval mode list matches supported app-server v2 values."""
+        assert set(config.VALID_APPROVAL_MODES) == {
+            "untrusted",
+            "on-failure",
+            "on-request",
+            "never",
+        }
 
     def test_validate_missing_tokens(self):
         """validate_required() catches missing required config."""
@@ -161,6 +165,7 @@ class TestConfig:
 
         errors = test_config.validate_required()
         assert errors == []
+
 
 class TestAutoApproveToolsParsing:
     """Tests for AUTO_APPROVE_TOOLS parsing."""

@@ -105,13 +105,15 @@ def _sent_messages(process: _DummyProcess) -> list[dict]:
 
 
 def _sent_requests(process: _DummyProcess) -> list[dict]:
-    return [
-        msg for msg in _sent_messages(process) if "method" in msg and "params" in msg
-    ]
+    return [msg for msg in _sent_messages(process) if "method" in msg and "params" in msg]
 
 
 def _sent_responses(process: _DummyProcess) -> list[dict]:
     return [msg for msg in _sent_messages(process) if "id" in msg and "result" in msg]
+
+
+def _sent_errors(process: _DummyProcess) -> list[dict]:
+    return [msg for msg in _sent_messages(process) if "id" in msg and "error" in msg]
 
 
 class TestCodexSubprocessExecutor:
@@ -227,9 +229,7 @@ class TestCodexSubprocessExecutor:
         }
 
     @pytest.mark.asyncio
-    async def test_assistant_deltas_preserve_text_and_skip_completed_duplicate(
-        self, monkeypatch
-    ):
+    async def test_assistant_deltas_preserve_text_and_skip_completed_duplicate(self, monkeypatch):
         """Delta chunks should be concatenated verbatim and not replayed by item/completed."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
@@ -402,9 +402,7 @@ class TestCodexSubprocessExecutor:
             )
 
         assert result.success is True
-        on_user_input_request.assert_awaited_once_with(
-            "item_1", {"questions": [question]}
-        )
+        on_user_input_request.assert_awaited_once_with("item_1", {"questions": [question]})
 
         response_by_id = {msg["id"]: msg for msg in _sent_responses(process)}
         assert response_by_id[10]["result"] == callback_payload
@@ -471,9 +469,112 @@ class TestCodexSubprocessExecutor:
         assert response_by_id[20]["result"] == {"decision": "decline"}
 
     @pytest.mark.asyncio
-    async def test_default_approval_decision_respects_mode_when_no_callback(
-        self, monkeypatch
-    ):
+    async def test_dynamic_tool_call_returns_structured_failure(self, monkeypatch):
+        """Dynamic tool requests should return schema-valid failure payloads."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        params = {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "callId": "call-1",
+            "tool": "custom_tool",
+            "arguments": {"value": "x"},
+        }
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 30,
+                        "method": "item/tool/call",
+                        "params": params,
+                    }
+                ),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            result = await executor.execute(
+                prompt="run dynamic tool",
+                working_directory="/tmp/workspace",
+            )
+
+        assert result.success is True
+        response_by_id = {msg["id"]: msg for msg in _sent_responses(process)}
+        assert response_by_id[30]["result"]["success"] is False
+        assert response_by_id[30]["result"]["contentItems"][0]["type"] == "inputText"
+        assert "not supported" in response_by_id[30]["result"]["contentItems"][0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_legacy_approval_request_methods_are_rejected(self, monkeypatch):
+        """Legacy non-v2 approval request methods should return method-not-found."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 31,
+                        "method": "skill/requestApproval",
+                        "params": {"skillName": "legacy"},
+                    }
+                ),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            result = await executor.execute(
+                prompt="legacy request",
+                working_directory="/tmp/workspace",
+            )
+
+        assert result.success is True
+        errors_by_id = {msg["id"]: msg for msg in _sent_errors(process)}
+        assert errors_by_id[31]["error"]["code"] == -32601
+
+    @pytest.mark.asyncio
+    async def test_default_approval_decision_respects_mode_when_no_callback(self, monkeypatch):
         """Without callback, never-mode auto-accepts while on-request declines."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
@@ -534,9 +635,7 @@ class TestCodexSubprocessExecutor:
         assert result_on_request.success is True
 
         response_never = {msg["id"]: msg for msg in _sent_responses(process_never)}[21]
-        response_on_request = {
-            msg["id"]: msg for msg in _sent_responses(process_on_request)
-        }[21]
+        response_on_request = {msg["id"]: msg for msg in _sent_responses(process_on_request)}[21]
         assert response_never["result"] == {"decision": "accept"}
         assert response_on_request["result"] == {"decision": "decline"}
 
@@ -599,15 +698,11 @@ class TestCodexSubprocessExecutor:
         assert second_methods == ["initialize", "thread/start", "turn/start"]
 
     @pytest.mark.asyncio
-    async def test_exec_prepends_default_instructions_when_file_exists(
-        self, monkeypatch, tmp_path
-    ):
+    async def test_exec_prepends_default_instructions_when_file_exists(self, monkeypatch, tmp_path):
         """Executor prepends default instructions from file before turn/start input."""
         instructions = tmp_path / "default_instructions.txt"
         instructions.write_text("ALWAYS BE CONCISE", encoding="utf-8")
-        monkeypatch.setattr(
-            config, "CODEX_DEFAULT_INSTRUCTIONS_FILE", str(instructions)
-        )
+        monkeypatch.setattr(config, "CODEX_DEFAULT_INSTRUCTIONS_FILE", str(instructions))
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", True)
 
         process = _DummyProcess(
@@ -643,10 +738,7 @@ class TestCodexSubprocessExecutor:
 
         assert result.success is True
         turn_start = _sent_requests(process)[2]
-        assert (
-            turn_start["params"]["input"][0]["text"]
-            == "ALWAYS BE CONCISE\n\ndo a repo review"
-        )
+        assert turn_start["params"]["input"][0]["text"] == "ALWAYS BE CONCISE\n\ndo a repo review"
 
     @pytest.mark.asyncio
     async def test_cancel_resolves_channel_prefixed_track_id(self):
@@ -766,9 +858,7 @@ class TestCodexSubprocessExecutor:
         async def consume_once():
             request = await control_queue.get()
             request.future.set_result(
-                TurnControlResult(
-                    success=True, message="interrupt accepted", turn_id="turn-4"
-                )
+                TurnControlResult(success=True, message="interrupt accepted", turn_id="turn-4")
             )
 
         consumer_task = asyncio.create_task(consume_once())
@@ -823,9 +913,7 @@ class TestCodexSubprocessExecutor:
         assert event_order == ["interrupt", "settle", "terminate"]
 
     @pytest.mark.asyncio
-    async def test_dual_ready_rpc_and_control_does_not_timeout_control(
-        self, monkeypatch
-    ):
+    async def test_dual_ready_rpc_and_control_does_not_timeout_control(self, monkeypatch):
         """When rpc/control complete together, control should not be dropped and time out."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
@@ -839,9 +927,7 @@ class TestCodexSubprocessExecutor:
                         "result": {"thread": {"id": "thread-1"}},
                     }
                 ),
-                _json_line(
-                    {"jsonrpc": "2.0", "id": 3, "result": {"turn": {"id": "turn-1"}}}
-                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {"turn": {"id": "turn-1"}}}),
                 _json_line(
                     {
                         "jsonrpc": "2.0",

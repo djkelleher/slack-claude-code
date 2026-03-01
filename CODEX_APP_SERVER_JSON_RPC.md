@@ -33,13 +33,13 @@ Additional metadata/lifecycle RPCs (invoked on-demand by commands/status):
 - `mcpServerStatus/list`
 
 Used by Slack command surfaces:
-- `/codex-thread` -> thread lifecycle/read APIs
-- `/codex-config` -> config/model/account/feature APIs
+- `/usage` -> status APIs (`model/list`, `account/read`, `mcpServerStatus/list`, `experimentalFeature/list`)
+- `/mcp` -> `mcpServerStatus/list`
 - `/review status` -> `thread/read` status inspection
 
 `thread/start|resume` parameters sent:
 - `cwd`
-- `approvalPolicy` (`untrusted`, `on-request`, `never`)
+- `approvalPolicy` (`untrusted`, `on-failure`, `on-request`, `never`)
 - `sandbox` (`read-only`, `workspace-write`, `danger-full-access`)
 - `model` (optional)
 
@@ -80,11 +80,9 @@ Item lifecycle types currently normalized:
 ## Server Requests Handled
 
 - `item/tool/requestUserInput`
+- `item/tool/call` (returns a structured unsupported response in Slack integration)
 - `item/commandExecution/requestApproval`
 - `item/fileChange/requestApproval`
-- `skill/requestApproval`
-- `execCommandApproval`
-- `applyPatchApproval`
 
 Unsupported request methods receive JSON-RPC `-32601`.
 
@@ -92,13 +90,11 @@ Unsupported request methods receive JSON-RPC `-32601`.
 
 Bridge helpers: `src/codex/approval_bridge.py`
 
-- `skill/requestApproval` -> `approve|decline`
-- `execCommandApproval` / `applyPatchApproval` -> `approved|denied`
 - command/file approval methods -> `accept|decline`
 
 If no interactive decision is available, defaults are based on approval mode:
 - `never` -> accept/approve
-- `on-request` or `untrusted` -> decline
+- `on-request`, `on-failure`, or `untrusted` -> decline
 
 ## User Input Mapping
 

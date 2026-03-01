@@ -49,6 +49,7 @@ class TestCodexModeMappings:
         """Unknown approvals are normalized to supported values."""
         assert normalize_codex_approval_mode("invalid-mode") == "on-request"
         assert normalize_codex_approval_mode("never") == "never"
+        assert normalize_codex_approval_mode("on-failure") == "on-failure"
 
     def test_mode_alias_derivation(self):
         """Best-effort compatibility alias derives from approval mode."""

@@ -32,19 +32,16 @@ def test_approval_payload_decisions():
     assert approval_payload_from_decision("item/fileChange/requestApproval", False) == {
         "decision": "decline"
     }
-    assert approval_payload_from_decision("skill/requestApproval", True) == {
-        "decision": "approve"
-    }
-    assert approval_payload_from_decision("skill/requestApproval", False) == {
-        "decision": "decline"
+    assert approval_payload_from_decision("item/commandExecution/requestApproval", True) == {
+        "decision": "accept"
     }
 
 
 def test_default_approval_payload_uses_mode():
     """Default payload auto-accepts in never mode and declines otherwise."""
-    assert default_approval_payload(
-        "item/commandExecution/requestApproval", "never"
-    ) == {"decision": "accept"}
-    assert default_approval_payload(
-        "item/commandExecution/requestApproval", "on-request"
-    ) == {"decision": "decline"}
+    assert default_approval_payload("item/commandExecution/requestApproval", "never") == {
+        "decision": "accept"
+    }
+    assert default_approval_payload("item/commandExecution/requestApproval", "on-request") == {
+        "decision": "decline"
+    }

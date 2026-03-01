@@ -75,7 +75,7 @@ def normalize_codex_approval_mode(approval_mode: Optional[str]) -> str:
         return "on-request"
 
     mode = approval_mode.strip().lower()
-    if mode in {"untrusted", "on-request", "never"}:
+    if mode in {"untrusted", "on-failure", "on-request", "never"}:
         return mode
     return "on-request"
 
