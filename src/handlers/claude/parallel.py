@@ -5,7 +5,7 @@ from slack_bolt.async_app import AsyncApp
 from src.utils.formatters.command import error_message
 from src.utils.formatters.job import job_status_list
 
-from ..base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, get_command_name, slack_command
 
 
 def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
@@ -19,7 +19,7 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
         Shared handler dependencies.
     """
 
-    @app.command("/st")
+    @app.command(get_command_name("/st"))
     @slack_command()
     async def handle_status(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /st command - show active jobs."""
@@ -30,7 +30,7 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
             blocks=job_status_list(jobs),
         )
 
-    @app.command("/cc")
+    @app.command(get_command_name("/cc"))
     @slack_command()
     async def handle_cancel(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /cc [job_id] command - cancel jobs."""

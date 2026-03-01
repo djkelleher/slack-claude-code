@@ -11,7 +11,7 @@ from src.config import config
 from src.database.models import Session
 from src.utils.formatters.command import error_message
 
-from ..base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, get_command_name, slack_command
 
 # Mode aliases: short name -> CLI mode value
 CLAUDE_MODE_ALIASES = {
@@ -38,7 +38,7 @@ def register_mode_command(app: AsyncApp, deps: HandlerDependencies) -> None:
         Shared handler dependencies.
     """
 
-    @app.command("/mode")
+    @app.command(get_command_name("/mode"))
     @slack_command(
         require_text=False, usage_hint="Usage: /mode [bypass|accept|plan|ask|default|delegate]"
     )
