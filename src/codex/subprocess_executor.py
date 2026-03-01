@@ -388,6 +388,14 @@ class SubprocessExecutor:
                 return await handle_stream_message(msg)
             return False
 
+        def _suffix_prefix_overlap(existing: str, incoming: str) -> int:
+            """Return max overlap where existing suffix equals incoming prefix."""
+            max_check = min(len(existing), len(incoming))
+            for size in range(max_check, 0, -1):
+                if existing[-size:] == incoming[:size]:
+                    return size
+            return 0
+
         def _extract_item_id(params: dict) -> Optional[str]:
             """Extract item identifier from app-server delta params when available."""
             for key in ("itemId", "item_id", "id"):
@@ -465,9 +473,22 @@ class SubprocessExecutor:
                     item_text_raw = item.get("text")
                     item_text = str(item_text_raw) if item_text_raw is not None else ""
                     # item/completed includes full text already streamed as deltas.
-                    if delta_seen_for_item or (
-                        item_text and accumulated_output.endswith(item_text)
-                    ):
+                    if item_text and accumulated_output.endswith(item_text):
+                        logger.debug(
+                            f"{log_prefix}Skipping duplicate completed assistant item "
+                            f"{item_id or '<unknown>'}"
+                        )
+                        return False
+                    if delta_seen_for_item and item_text:
+                        overlap = _suffix_prefix_overlap(accumulated_output, item_text)
+                        missing_tail = item_text[overlap:]
+                        if missing_tail:
+                            logger.debug(
+                                f"{log_prefix}Repairing assistant item "
+                                f"{item_id or '<unknown>'} by appending missing tail "
+                                f"({len(missing_tail)} chars)"
+                            )
+                            return await emit_assistant_delta(missing_tail)
                         logger.debug(
                             f"{log_prefix}Skipping duplicate completed assistant item "
                             f"{item_id or '<unknown>'}"

@@ -296,6 +296,65 @@ class TestCodexSubprocessExecutor:
         assert "\n\n" not in result.output
 
     @pytest.mark.asyncio
+    async def test_assistant_completed_repairs_missing_delta_tail(self, monkeypatch):
+        """Completed assistant items should backfill missing delta tail text."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "item/agentMessage/delta",
+                        "params": {"itemId": "item_1", "delta": "I'm testing forma"},
+                    }
+                ),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "item/completed",
+                        "params": {
+                            "item": {
+                                "id": "item_1",
+                                "type": "agentMessage",
+                                "text": "I'm testing formatting.",
+                            }
+                        },
+                    }
+                ),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            result = await executor.execute(
+                prompt="format",
+                working_directory="/tmp/workspace",
+            )
+
+        assert result.success is True
+        assert result.output == "I'm testing formatting."
+
+    @pytest.mark.asyncio
     async def test_agent_message_completed_without_deltas_is_retained(self, monkeypatch):
         """item/completed assistant text should still be captured when no deltas were emitted."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)

@@ -143,6 +143,27 @@ def test_parse_web_search_item_lifecycle():
     assert tool_result.tool_activities[0].is_error is False
 
 
+def test_parse_web_search_item_with_query_in_action():
+    """Parser should extract query from action payload when top-level query is absent."""
+    parser = StreamParser()
+    parser.parse_line('{"type":"thread.started","thread_id":"thread-123"}')
+
+    tool_call = parser.parse_line(
+        '{"type":"item.started","item":{"id":"ws_2","type":"webSearch","action":{"type":"search","query":"pricing error types"}}}'
+    )
+    assert tool_call is not None
+    assert tool_call.type == "tool_call"
+    assert tool_call.tool_activities[0].name == "web_search"
+    assert "pricing error types" in tool_call.tool_activities[0].input_summary
+
+    tool_result = parser.parse_line(
+        '{"type":"item.completed","item":{"id":"ws_2","type":"webSearch","action":{"type":"search","query":"pricing error types"}}}'
+    )
+    assert tool_result is not None
+    assert tool_result.type == "tool_result"
+    assert "pricing error types" in (tool_result.tool_activities[0].result or "")
+
+
 def test_parse_fuzzy_file_search_item_lifecycle():
     """Parser should map fuzzyFileSearch items to tool call/result."""
     parser = StreamParser()

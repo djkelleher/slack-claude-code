@@ -63,6 +63,34 @@ class StreamParser:
         self.accumulated_content += content
         self.accumulated_detailed += content
 
+    @staticmethod
+    def _extract_web_search_query(item: dict) -> str:
+        """Best-effort query extraction across webSearch payload variants."""
+        direct_query = item.get("query")
+        if isinstance(direct_query, str) and direct_query.strip():
+            return direct_query
+
+        action = item.get("action")
+        if isinstance(action, dict):
+            action_query = action.get("query")
+            if isinstance(action_query, str) and action_query.strip():
+                return action_query
+            input_obj = action.get("input")
+            if isinstance(input_obj, dict):
+                input_query = input_obj.get("query")
+                if isinstance(input_query, str) and input_query.strip():
+                    return input_query
+
+        searches = item.get("searches")
+        if isinstance(searches, list):
+            for search in searches:
+                if isinstance(search, dict):
+                    search_query = search.get("query")
+                    if isinstance(search_query, str) and search_query.strip():
+                        return search_query
+
+        return ""
+
     def _create_tool_call(
         self,
         tool_id: str,
@@ -183,10 +211,11 @@ class StreamParser:
                 )
             if item_type == "webSearch":
                 tool_id = str(item.get("id", "unknown"))
+                query = self._extract_web_search_query(item)
                 return self._create_tool_call(
                     tool_id=tool_id,
                     tool_name="web_search",
-                    tool_input={"query": item.get("query", "")},
+                    tool_input={"query": query},
                     raw_data=data,
                 )
             if item_type == "fuzzyFileSearch":
@@ -298,8 +327,9 @@ class StreamParser:
                 )
             if item_type == "webSearch":
                 tool_id = str(item.get("id", "unknown"))
+                query = self._extract_web_search_query(item)
                 action = item.get("action", {})
-                content = f"Web search query: {item.get('query', '')}"
+                content = f"Web search query: {query}" if query else "Web search completed."
                 if isinstance(action, dict) and action:
                     content += f"\nAction: {action.get('type', 'other')}"
                 return self._create_tool_result(
