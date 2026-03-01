@@ -114,8 +114,8 @@ class TestCommandRouter:
             )
 
     @pytest.mark.asyncio
-    async def test_execute_for_session_codex_plan_mode_enriches_prompt(self):
-        """Codex plan mode appends plan-only guidance to the prompt."""
+    async def test_execute_for_session_codex_plan_mode_passes_permission_mode(self):
+        """Codex plan mode keeps original prompt and forwards permission mode."""
         deps = SimpleNamespace(
             db=SimpleNamespace(
                 update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()
@@ -149,8 +149,7 @@ class TestCommandRouter:
         )
 
         kwargs = deps.codex_executor.execute.await_args.kwargs
-        called_prompt = kwargs["prompt"]
-        assert "Provide a concrete implementation plan first" in called_prompt
+        assert kwargs["prompt"] == "Implement feature"
         assert kwargs["permission_mode"] == "plan"
 
     @pytest.mark.asyncio

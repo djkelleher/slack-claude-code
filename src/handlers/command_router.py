@@ -9,7 +9,7 @@ from src.codex.approval_bridge import (
     approval_payload_from_decision,
     format_approval_request_for_slack,
 )
-from src.codex.capabilities import apply_codex_mode_to_prompt, is_likely_plan_content
+from src.codex.capabilities import is_likely_plan_content
 from src.config import config
 from src.database.models import Session
 from src.question.manager import QuestionManager
@@ -155,9 +155,8 @@ async def execute_for_session(
             )
             return approval_payload_from_decision(method, approved)
 
-        execution_prompt = apply_codex_mode_to_prompt(prompt, session.permission_mode)
         result = await deps.codex_executor.execute(
-            prompt=execution_prompt,
+            prompt=prompt,
             working_directory=session.working_directory,
             session_id=session_scope,
             resume_session_id=session.codex_session_id,

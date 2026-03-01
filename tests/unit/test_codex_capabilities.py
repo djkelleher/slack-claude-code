@@ -1,7 +1,6 @@
 """Unit tests for Codex capability mappings."""
 
 from src.codex.capabilities import (
-    apply_codex_mode_to_prompt,
     codex_mode_alias_for_approval,
     get_codex_hint_for_claude_command,
     is_likely_plan_content,
@@ -55,17 +54,6 @@ class TestCodexModeMappings:
         """Best-effort compatibility alias derives from approval mode."""
         assert codex_mode_alias_for_approval("never") == "bypass"
         assert codex_mode_alias_for_approval("on-request") == "ask"
-
-    def test_plan_mode_prompt_enrichment(self):
-        """Plan mode adds plan-only instruction to the prompt."""
-        prompt = apply_codex_mode_to_prompt("Implement feature X", "plan")
-        assert "Provide a concrete implementation plan first" in prompt
-        assert "Do not execute commands or edit files yet" in prompt
-
-    def test_non_plan_prompt_unchanged(self):
-        """Non-plan mode leaves the prompt untouched."""
-        prompt = apply_codex_mode_to_prompt("Implement feature X", "default")
-        assert prompt == "Implement feature X"
 
     def test_plan_content_detector_rejects_clarification_text(self):
         """Short clarification messages should not trigger plan approval."""

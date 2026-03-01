@@ -79,7 +79,6 @@ the exact request/notification methods this app handles.
 - `/mode bypass` -> `approval=never`
 - `/mode ask`, `/mode default`, and `/mode plan` -> `approval=on-request`
 - `/mode plan` sets native app-server `turn/start.collaborationMode` to `plan`
-- `/mode plan` also adds a plan-first, no-execution instruction to Codex prompts
 - `/mode accept` and `/mode delegate` remain unsupported for Codex
 - `/mode approval <untrusted|on-request|never>` sets explicit approval policy
 - `/mode sandbox <read-only|workspace-write|danger-full-access>` sets sandbox policy

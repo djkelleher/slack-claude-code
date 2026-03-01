@@ -111,20 +111,6 @@ def resolve_codex_compat_mode(alias: str) -> CodexModeResolution:
     )
 
 
-def apply_codex_mode_to_prompt(prompt: str, permission_mode: Optional[str]) -> str:
-    """Adjust Codex prompt behavior based on Slack session mode."""
-    mode = (permission_mode or "").strip().lower()
-    if mode != "plan":
-        return prompt
-
-    return (
-        f"{prompt}\n\n"
-        "[Plan mode: Provide a concrete implementation plan first. "
-        "Do not execute commands or edit files yet. "
-        "Wait for user confirmation before making changes.]"
-    )
-
-
 def is_likely_plan_content(text: Optional[str]) -> bool:
     """Heuristically detect whether assistant output is an actionable plan.
 
