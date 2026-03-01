@@ -11,7 +11,7 @@ from src.utils.formatters.base import escape_markdown
 from src.utils.formatters.command import error_message
 from src.utils.formatters.queue import queue_item_complete, queue_item_running, queue_status
 
-from ..base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, get_command_name, slack_command
 from ..command_router import execute_for_session
 
 # Default timeout for queue processors (1 hour)
@@ -63,7 +63,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         Shared handler dependencies.
     """
 
-    @app.command("/q")
+    @app.command(get_command_name("/q"))
     @slack_command(require_text=True, usage_hint="Usage: /q <prompt>")
     async def handle_queue_add(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /q <prompt> command - add command to FIFO queue."""
@@ -111,7 +111,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 ctx.logger,
             )
 
-    @app.command("/qv")
+    @app.command(get_command_name("/qv"))
     @slack_command()
     async def handle_queue_view(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /qv command - view queue status."""
@@ -124,7 +124,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             blocks=queue_status(pending, running),
         )
 
-    @app.command("/qc")
+    @app.command(get_command_name("/qc"))
     @slack_command()
     async def handle_queue_clear(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /qc command - clear pending queue items."""
@@ -144,7 +144,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             ],
         )
 
-    @app.command("/qr")
+    @app.command(get_command_name("/qr"))
     @slack_command(require_text=True, usage_hint="Usage: /qr <item_id>")
     async def handle_queue_remove(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /qr <id> command - remove specific queue item."""

@@ -6,13 +6,13 @@ from src.codex.capabilities import normalize_codex_approval_mode
 from src.config import config
 from src.utils.formatters.command import error_message
 
-from ..base import CommandContext, HandlerDependencies, slack_command
+from ..base import CommandContext, HandlerDependencies, get_command_name, slack_command
 
 
 def register_codex_mode_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register Codex mode switching commands."""
 
-    @app.command("/sandbox")
+    @app.command(get_command_name("/sandbox"))
     @slack_command()
     async def handle_sandbox(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Set sandbox mode for the session (Codex)."""
@@ -75,7 +75,7 @@ def register_codex_mode_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             ],
         )
 
-    @app.command("/approval")
+    @app.command(get_command_name("/approval"))
     @slack_command()
     async def handle_approval(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Set approval mode for the session (Codex)."""
