@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import uuid
+from typing import Any
 
 from slack_bolt.async_app import AsyncApp
 
@@ -19,6 +20,13 @@ from src.config import (
     looks_like_codex_model,
     parse_model_effort,
 )
+from src.git.service import GitError, GitService
+from src.question.manager import QuestionManager
+from src.question.slack_ui import (
+    build_custom_answer_modal,
+    build_question_result_blocks,
+)
+from src.utils.detail_cache import DetailCache
 from src.utils.formatters.base import markdown_to_mrkdwn
 from src.utils.formatters.command import command_response_with_tables, error_message
 from src.utils.formatters.job import parallel_job_status, sequential_job_status
@@ -26,11 +34,9 @@ from src.utils.formatters.streaming import processing_message
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
-from .base import HandlerDependencies
-from .base import CommandContext
+from .base import CommandContext, HandlerDependencies
 from .claude.worktree import _handle_merge, _handle_remove, _handle_switch
 from .command_router import execute_for_session
-from src.git.service import GitError, GitService
 
 
 async def _get_git_commit_hash(working_directory: str) -> str | None:
@@ -184,6 +190,64 @@ async def _handle_approval_action(
             channel=channel_id,
             user=user_id,
             text=f"{approval_type} request `{approval_id}` not found or already resolved.",
+        )
+
+
+async def _update_question_result_message(
+    client: Any,
+    logger: Any,
+    resolved: Any,
+    user_id: str,
+    channel_id: str,
+    message_ts: str,
+) -> None:
+    """Update a question message with resolved answers."""
+    try:
+        await client.chat_update(
+            channel=channel_id,
+            ts=message_ts,
+            blocks=build_question_result_blocks(resolved, user_id),
+            text="Question answered",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to update question message: {e}")
+
+
+async def _set_session_model_and_notify(
+    deps: HandlerDependencies,
+    client: Any,
+    logger: Any,
+    channel_id: str,
+    thread_ts: str | None,
+    model_value: str | None,
+    display_name: str,
+    log_prefix: str,
+) -> None:
+    """Persist model selection and post a success or error message."""
+    try:
+        await deps.db.update_session_model(channel_id, thread_ts, model_value)
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"Model changed to {display_name}",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":heavy_check_mark: Model changed to *{display_name}*",
+                    },
+                }
+            ],
+        )
+        logger.info(f"{log_prefix} changed to {model_value} for channel {channel_id}")
+    except Exception as e:
+        logger.error(f"{log_prefix} change failed: {e}")
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"Error changing model: {str(e)}",
+            blocks=error_message(str(e)),
         )
 
 
@@ -820,9 +884,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle per-question custom answer button - open modal for text input."""
         await ack()
 
-        from src.question.manager import QuestionManager
-        from src.question.slack_ui import build_custom_answer_modal
-
         try:
             # Parse question_id and question_index from action value
             action_value = action["value"]
@@ -865,9 +926,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle single-select question button click."""
         await ack()
 
-        from src.question.manager import QuestionManager
-        from src.question.slack_ui import build_question_result_blocks
-
         try:
             # Validate size before parsing to prevent resource exhaustion
             action_value = action["value"]
@@ -903,17 +961,14 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 user_id = body["user"]["id"]
                 channel_id = body["channel"]["id"]
                 message_ts = body["message"]["ts"]
-
-                try:
-                    await client.chat_update(
-                        channel=channel_id,
-                        ts=message_ts,
-                        blocks=build_question_result_blocks(resolved, user_id),
-                        text="Question answered",
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to update question message: {e}")
-
+                await _update_question_result_message(
+                    client=client,
+                    logger=logger,
+                    resolved=resolved,
+                    user_id=user_id,
+                    channel_id=channel_id,
+                    message_ts=message_ts,
+                )
                 logger.info(f"Question {question_id} answered by {user_id}: {resolved.answers}")
         else:
             # Multi-question: show ephemeral confirmation, wait for Confirm button
@@ -930,8 +985,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         """Handle multi-select checkbox change."""
         await ack()
 
-        from src.question.manager import QuestionManager
-
         # Extract question info from block_id
         block_id = action.get("block_id", "")
         # Format: question_checkbox_{question_id}_{question_index}
@@ -941,7 +994,11 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         question_id = parts[2]
-        question_index = int(parts[3])
+        try:
+            question_index = int(parts[3])
+        except ValueError:
+            logger.error(f"Invalid question index in checkbox block_id: {block_id}")
+            return
 
         # Get selected options
         selected_options = action.get("selected_options", [])
@@ -966,9 +1023,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
     async def handle_question_confirm_submit(ack, action, body, client, logger):
         """Handle the single confirm button for multi-question or multi-select responses."""
         await ack()
-
-        from src.question.manager import QuestionManager
-        from src.question.slack_ui import build_question_result_blocks
 
         question_id = action["value"]
 
@@ -1003,26 +1057,20 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             user_id = body["user"]["id"]
             channel_id = body["channel"]["id"]
             message_ts = body["message"]["ts"]
-
-            try:
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    blocks=build_question_result_blocks(resolved, user_id),
-                    text="Question answered",
-                )
-            except Exception as e:
-                logger.warning(f"Failed to update question message: {e}")
-
+            await _update_question_result_message(
+                client=client,
+                logger=logger,
+                resolved=resolved,
+                user_id=user_id,
+                channel_id=channel_id,
+                message_ts=message_ts,
+            )
             logger.info(f"Question {question_id} confirmed by {user_id}: {resolved.answers}")
 
     @app.view("question_custom_submit")
     async def handle_question_custom_submit(ack, body, client, view, logger):
         """Handle custom answer modal submission."""
         await ack()
-
-        from src.question.manager import QuestionManager
-        from src.question.slack_ui import build_question_result_blocks
 
         # Parse question_id and question_index from private_metadata
         try:
@@ -1050,17 +1098,14 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             resolved = await QuestionManager.resolve(question_id)
             if resolved and resolved.message_ts:
                 user_id = body["user"]["id"]
-
-                try:
-                    await client.chat_update(
-                        channel=resolved.channel_id,
-                        ts=resolved.message_ts,
-                        blocks=build_question_result_blocks(resolved, user_id),
-                        text="Question answered",
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to update question message: {e}")
-
+                await _update_question_result_message(
+                    client=client,
+                    logger=logger,
+                    resolved=resolved,
+                    user_id=user_id,
+                    channel_id=resolved.channel_id,
+                    message_ts=resolved.message_ts,
+                )
                 logger.info(
                     f"Question {question_id} custom answered by {user_id}: {custom_answer[:50]}..."
                 )
@@ -1089,8 +1134,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
     async def handle_view_detailed_output(ack, action, body, client, logger):
         """Handle View Details button - show detailed output in modal."""
         await ack()
-
-        from src.utils.detail_cache import DetailCache
 
         command_id = int(action["value"])
         content = DetailCache.get(command_id)
@@ -1260,36 +1303,17 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             )
             return
 
-        try:
-            # Update session with the custom model
-            await deps.db.update_session_model(channel_id, thread_ts, model_value)
-            display_name = model_value or "Default (recommended)"
-
-            # Post confirmation message
-            await client.chat_postMessage(
-                channel=channel_id,
-                thread_ts=thread_ts,
-                text=f"Model changed to {display_name}",
-                blocks=[
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f":heavy_check_mark: Model changed to *{display_name}*",
-                        },
-                    }
-                ],
-            )
-            logger.info(f"Custom model changed to {model_value} for channel {channel_id}")
-
-        except Exception as e:
-            logger.error(f"Custom model change failed: {e}")
-            await client.chat_postMessage(
-                channel=channel_id,
-                thread_ts=thread_ts,
-                text=f"Error changing model: {str(e)}",
-                blocks=error_message(str(e)),
-            )
+        display_name = model_value or "Default (recommended)"
+        await _set_session_model_and_notify(
+            deps=deps,
+            client=client,
+            logger=logger,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            model_value=model_value,
+            display_name=display_name,
+            log_prefix="Custom model",
+        )
 
     @app.action(re.compile(r"^select_model_(?!custom$).*$"))
     async def handle_model_selection(ack, action, body, client, logger):
@@ -1324,32 +1348,13 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         }
         display_name = model_display.get(model_value, model_name)
 
-        try:
-            # Update session with the selected model
-            await deps.db.update_session_model(channel_id, thread_ts, model_value)
-
-            # Post confirmation message
-            await client.chat_postMessage(
-                channel=channel_id,
-                thread_ts=thread_ts,
-                text=f"Model changed to {display_name}",
-                blocks=[
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f":heavy_check_mark: Model changed to *{display_name}*",
-                        },
-                    }
-                ],
-            )
-            logger.info(f"Model changed to {model_value} for channel {channel_id}")
-
-        except Exception as e:
-            logger.error(f"Model change failed: {e}")
-            await client.chat_postMessage(
-                channel=channel_id,
-                thread_ts=thread_ts,
-                text=f"Error changing model: {str(e)}",
-                blocks=error_message(str(e)),
-            )
+        await _set_session_model_and_notify(
+            deps=deps,
+            client=client,
+            logger=logger,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            model_value=model_value,
+            display_name=display_name,
+            log_prefix="Model",
+        )

@@ -136,13 +136,13 @@ def command_response_with_file(
         # Add truncation notice
         if len(output) > len(preview):
             blocks.append(
-                {"type": "section", "text": {"type": "mrkdwn", "text": "_... (continued in thread)_"}}
+                {"type": "section", "text": {"type": "mrkdwn", "text": "_... (continued below)_"}}
             )
     else:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}})
 
     # Add footer with metadata
-    footer_parts = [f":speech_balloon: Full response in thread ({len(output):,} chars)"]
+    footer_parts = [f":speech_balloon: Full response below ({len(output):,} chars)"]
     if duration_ms:
         footer_parts.append(f":stopwatch: {duration_ms / 1000:.1f}s")
     if cost_usd:
@@ -304,4 +304,8 @@ def command_response_with_tables(
                 }
             )
 
-    return messages if messages else [[{"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}}]]
+    return (
+        messages
+        if messages
+        else [[{"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}}]]
+    )

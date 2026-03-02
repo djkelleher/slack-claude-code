@@ -66,7 +66,7 @@ def test_command_response_with_file_truncates_preview_and_adds_notice(monkeypatc
     assert file_title == "claude_response_7.txt"
     assert captured_previews[0].endswith(".")
     assert len(captured_previews[0]) < len(output)
-    assert any(block.get("text", {}).get("text") == "_... (continued in thread)_" for block in blocks)
+    assert any(block.get("text", {}).get("text") == "_... (continued below)_" for block in blocks)
 
 
 def test_error_message_uses_sanitized_text(monkeypatch) -> None:

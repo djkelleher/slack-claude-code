@@ -35,6 +35,7 @@ from src.handlers.claude.queue import ensure_queue_processor
 from src.handlers.command_router import execute_for_session
 from src.handlers.response_delivery import deliver_command_response
 from src.question.manager import QuestionManager
+from src.utils.execution_scope import build_session_scope
 from src.utils.file_downloader import (
     FileDownloadError,
     FileTooLargeError,
@@ -44,7 +45,6 @@ from src.utils.formatters.command import (
     error_message,
 )
 from src.utils.formatters.streaming import processing_message, streaming_update
-from src.utils.execution_scope import build_session_scope
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 
@@ -177,6 +177,75 @@ async def post_channel_notification(
     except Exception as e:
         # Don't fail the main operation if all notification attempts fail
         logger.error(f"Failed to post channel notification after {max_retries} attempts: {e}")
+
+
+async def _cleanup_streaming_state(
+    streaming_state: StreamingMessageState,
+    pending_question_id: str | None = None,
+    session_id: str | None = None,
+) -> None:
+    """Stop streaming heartbeat and cancel pending interactive questions."""
+    await streaming_state.stop_heartbeat()
+    if pending_question_id:
+        await QuestionManager.cancel(pending_question_id)
+    if session_id:
+        await QuestionManager.cancel_for_session(session_id)
+
+
+def _try_read_plan_file(
+    plan_path: str,
+    source_label: str,
+    attempt: int,
+    logger,
+    min_mtime: float | None = None,
+) -> tuple[str | None, bool]:
+    """Read a plan file with shared logging and retry semantics."""
+    try:
+        mtime = os.path.getmtime(plan_path)
+        if min_mtime is not None and mtime < min_mtime:
+            return None, False
+        with open(plan_path) as f:
+            plan_content = f.read()
+        if not plan_content:
+            return None, False
+        logger.info(
+            f"Plan file read successfully from {source_label} on attempt {attempt + 1}: "
+            f"{plan_path} (mtime={mtime:.0f})"
+        )
+        return plan_content, False
+    except PermissionError:
+        logger.warning(f"Cannot read plan file (permission denied): {plan_path}")
+        return None, True
+    except Exception as e:
+        logger.warning(f"Failed to read plan file {plan_path}: {e}")
+        return None, False
+
+
+async def _handle_typed_model_command(
+    client,
+    channel_id: str,
+    thread_ts: str | None,
+    message_ts: str | None,
+) -> None:
+    """Guide users to use the Slack slash command when /model is typed as plain text."""
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts or message_ts,
+        text="Use `/model` slash command to open model picker buttons.",
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        ":information_source: `/model` was sent as regular message text, "
+                        "so it was treated like a normal prompt.\n"
+                        "Run the Slack slash command `/model` to open the model buttons."
+                    ),
+                },
+            }
+        ],
+    )
 
 
 async def _route_codex_message_to_active_turn_or_queue(
@@ -413,8 +482,10 @@ async def _execute_codex_message(
 
     except asyncio.CancelledError:
         logger.info("Codex command execution was cancelled")
-        await streaming_state.stop_heartbeat()
-        await QuestionManager.cancel_for_session(str(session.id))
+        await _cleanup_streaming_state(
+            streaming_state=streaming_state,
+            session_id=str(session.id),
+        )
         await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
         await client.chat_update(
             channel=channel_id,
@@ -424,8 +495,10 @@ async def _execute_codex_message(
         )
     except SlackApiError as e:
         logger.error(f"Slack API error executing Codex command: {e}\n{traceback.format_exc()}")
-        await streaming_state.stop_heartbeat()
-        await QuestionManager.cancel_for_session(str(session.id))
+        await _cleanup_streaming_state(
+            streaming_state=streaming_state,
+            session_id=str(session.id),
+        )
         await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         try:
             await client.chat_postMessage(
@@ -440,8 +513,10 @@ async def _execute_codex_message(
         logger.error(
             f"Error executing Codex command: {type(e).__name__}: {e}\n{traceback.format_exc()}"
         )
-        await streaming_state.stop_heartbeat()
-        await QuestionManager.cancel_for_session(str(session.id))
+        await _cleanup_streaming_state(
+            streaming_state=streaming_state,
+            session_id=str(session.id),
+        )
         await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         await client.chat_update(
             channel=channel_id,
@@ -543,6 +618,17 @@ async def main():
         # Allow messages with files but no text
         if not prompt and not files:
             logger.debug("Empty prompt and no files, ignoring")
+            return
+
+        normalized_prompt = prompt.strip().lower()
+        if normalized_prompt == "/model" or normalized_prompt.startswith("/model "):
+            logger.info("Detected typed /model message; redirecting user to slash command handler")
+            await _handle_typed_model_command(
+                client=client,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                message_ts=event.get("ts"),
+            )
             return
 
         # Get or create session (thread-aware)
@@ -1009,49 +1095,37 @@ async def main():
                 for attempt in range(max_retries):
                     # Explicit override from Plan agent output (if provided)
                     if plan_override_path and os.path.isfile(plan_override_path):
-                        try:
-                            mtime = os.path.getmtime(plan_override_path)
-                            if mtime >= plan_start_time:
-                                with open(plan_override_path) as f:
-                                    plan_content = f.read()
-                                if plan_content:
-                                    plan_file_path = plan_override_path
-                                    logger.info(
-                                        f"Plan file read successfully from override path on attempt {attempt + 1}: "
-                                        f"{plan_override_path} (mtime={mtime:.0f})"
-                                    )
-                                    break
-                        except PermissionError:
-                            logger.warning(
-                                f"Cannot read plan file (permission denied): {plan_override_path}"
-                            )
-                            break  # Don't retry permission errors
-                        except Exception as e:
-                            logger.warning(f"Failed to read plan file {plan_override_path}: {e}")
+                        plan_content_candidate, stop_retry = _try_read_plan_file(
+                            plan_path=plan_override_path,
+                            source_label="override path",
+                            attempt=attempt,
+                            logger=logger,
+                            min_mtime=plan_start_time,
+                        )
+                        if plan_content_candidate:
+                            plan_content = plan_content_candidate
+                            plan_file_path = plan_override_path
+                            break
+                        if stop_retry:
+                            break
 
                     # Prefer any plan file written during this session via Write tools
                     candidate_path = streaming_state.get_recent_plan_write_path(
                         plan_start_time - 5.0
                     )
                     if candidate_path:
-                        try:
-                            mtime = os.path.getmtime(candidate_path)
-                            with open(candidate_path) as f:
-                                plan_content = f.read()
-                            if plan_content:
-                                plan_file_path = candidate_path
-                                logger.info(
-                                    f"Plan file read successfully from Write activity on attempt {attempt + 1}: "
-                                    f"{candidate_path} (mtime={mtime:.0f})"
-                                )
-                                break
-                        except PermissionError:
-                            logger.warning(
-                                f"Cannot read plan file (permission denied): {candidate_path}"
-                            )
-                            break  # Don't retry permission errors
-                        except Exception as e:
-                            logger.warning(f"Failed to read plan file {candidate_path}: {e}")
+                        plan_content_candidate, stop_retry = _try_read_plan_file(
+                            plan_path=candidate_path,
+                            source_label="Write activity",
+                            attempt=attempt,
+                            logger=logger,
+                        )
+                        if plan_content_candidate:
+                            plan_content = plan_content_candidate
+                            plan_file_path = candidate_path
+                            break
+                        if stop_retry:
+                            break
 
                     # Wait before retrying (except on last attempt)
                     if attempt < max_retries - 1:
@@ -1221,9 +1295,10 @@ async def main():
 
         except asyncio.CancelledError:
             logger.info("Command execution was cancelled")
-            await streaming_state.stop_heartbeat()
-            if pending_question:
-                await QuestionManager.cancel(pending_question.question_id)
+            await _cleanup_streaming_state(
+                streaming_state=streaming_state,
+                pending_question_id=(pending_question.question_id if pending_question else None),
+            )
             await deps.db.update_command_status(
                 cmd_history.id, "cancelled", error_message="Cancelled"
             )
@@ -1235,9 +1310,10 @@ async def main():
             )
         except SlackApiError as e:
             logger.error(f"Slack API error executing command: {e}\n{traceback.format_exc()}")
-            await streaming_state.stop_heartbeat()
-            if pending_question:
-                await QuestionManager.cancel(pending_question.question_id)
+            await _cleanup_streaming_state(
+                streaming_state=streaming_state,
+                pending_question_id=(pending_question.question_id if pending_question else None),
+            )
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             # Try to post a new error message instead of updating (in case update is failing)
             try:
@@ -1251,9 +1327,10 @@ async def main():
                 logger.error(f"Failed to post Slack API error notification: {notify_error}")
         except (OSError, IOError) as e:
             logger.error(f"I/O error executing command: {e}\n{traceback.format_exc()}")
-            await streaming_state.stop_heartbeat()
-            if pending_question:
-                await QuestionManager.cancel(pending_question.question_id)
+            await _cleanup_streaming_state(
+                streaming_state=streaming_state,
+                pending_question_id=(pending_question.question_id if pending_question else None),
+            )
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
@@ -1266,9 +1343,10 @@ async def main():
             logger.error(
                 f"Unexpected error executing command: {type(e).__name__}: {e}\n{traceback.format_exc()}"
             )
-            await streaming_state.stop_heartbeat()
-            if pending_question:
-                await QuestionManager.cancel(pending_question.question_id)
+            await _cleanup_streaming_state(
+                streaming_state=streaming_state,
+                pending_question_id=(pending_question.question_id if pending_question else None),
+            )
             await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,

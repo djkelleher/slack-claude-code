@@ -27,12 +27,10 @@ async def deliver_command_response(
     detailed_output: Optional[str] = None,
     post_detail_button: bool = False,
     notify_on_snippet_failure: bool = False,
-    api_with_retry: Optional[
-        Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]
-    ] = None,
+    api_with_retry: Optional[Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]] = None,
 ) -> None:
     """Render and deliver final command output to Slack with shared formatting logic."""
-    response_thread_ts = thread_ts or message_ts
+    response_thread_ts = thread_ts
 
     async def _run_update(call: Callable[[], Awaitable[Any]]) -> Any:
         if api_with_retry:

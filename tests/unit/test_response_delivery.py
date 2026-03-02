@@ -9,7 +9,7 @@ from src.handlers import response_delivery
 
 
 @pytest.mark.asyncio
-async def test_file_response_posts_snippet_in_processing_thread_when_thread_missing(
+async def test_file_response_posts_snippet_in_channel_when_thread_missing(
     monkeypatch,
 ) -> None:
     client = SimpleNamespace(
@@ -41,7 +41,7 @@ async def test_file_response_posts_snippet_in_processing_thread_when_thread_miss
         logger=logger,
     )
 
-    assert snippet_mock.await_args.kwargs["thread_ts"] == "111.222"
+    assert snippet_mock.await_args.kwargs["thread_ts"] is None
 
 
 @pytest.mark.asyncio
@@ -77,15 +77,12 @@ async def test_file_response_notifies_when_snippet_post_fails(monkeypatch) -> No
     )
 
     assert client.chat_postMessage.await_count == 1
-    assert client.chat_postMessage.await_args.kwargs["thread_ts"] == "111.222"
-    assert (
-        "Could not post detailed output"
-        in client.chat_postMessage.await_args.kwargs["text"]
-    )
+    assert client.chat_postMessage.await_args.kwargs["thread_ts"] is None
+    assert "Could not post detailed output" in client.chat_postMessage.await_args.kwargs["text"]
 
 
 @pytest.mark.asyncio
-async def test_table_followups_use_processing_thread_when_thread_missing(
+async def test_table_followups_stay_in_channel_when_thread_missing(
     monkeypatch,
 ) -> None:
     client = SimpleNamespace(
@@ -115,4 +112,4 @@ async def test_table_followups_use_processing_thread_when_thread_missing(
     )
 
     assert client.chat_postMessage.await_count == 1
-    assert client.chat_postMessage.await_args.kwargs["thread_ts"] == "111.222"
+    assert client.chat_postMessage.await_args.kwargs["thread_ts"] is None
