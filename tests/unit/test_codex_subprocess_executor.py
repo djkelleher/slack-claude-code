@@ -229,6 +229,48 @@ class TestCodexSubprocessExecutor:
         }
 
     @pytest.mark.asyncio
+    async def test_execute_non_plan_mode_sets_default_collaboration_mode(self, monkeypatch):
+        """Non-plan modes should explicitly set default collaboration mode."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}, "model": "gpt-5.3-codex"},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            result = await executor.execute(
+                prompt="implement this plan",
+                working_directory="/tmp/workspace",
+                model="gpt-5.3-codex-high",
+                permission_mode="bypassPermissions",
+            )
+
+        assert result.success is True
+        turn_start = _sent_requests(process)[2]
+        assert turn_start["params"]["collaborationMode"] == {"mode": "default"}
+
+    @pytest.mark.asyncio
     async def test_assistant_deltas_preserve_text_and_skip_completed_duplicate(self, monkeypatch):
         """Delta chunks should be concatenated verbatim and not replayed by item/completed."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)

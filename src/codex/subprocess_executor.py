@@ -917,6 +917,9 @@ class SubprocessExecutor:
                             "developer_instructions": None,
                         },
                     }
+            elif mode:
+                # Explicitly set default mode so resumed plan threads exit plan mode.
+                turn_params["collaborationMode"] = {"mode": "default"}
 
             turn_req_id = await send_request("turn/start", turn_params)
             turn_resp = await await_response(turn_req_id)
