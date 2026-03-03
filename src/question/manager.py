@@ -176,7 +176,7 @@ class QuestionManager:
             channel=pending.channel_id,
             thread_ts=pending.thread_ts,
             blocks=blocks,
-            text="Claude has a question for you",
+            text="Assistant has a question for you",
         )
 
         pending.message_ts = result.get("ts")
@@ -206,9 +206,9 @@ class QuestionManager:
             # Build thread link
             if thread_ts:
                 thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
-                message = f":question: Claude has a question • <{thread_link}|Answer in thread>"
+                message = f":question: Assistant has a question • <{thread_link}|Answer in thread>"
             else:
-                message = ":question: Claude has a question"
+                message = ":question: Assistant has a question"
 
             # Post to channel (NOT thread) - triggers sound + unread badge
             await slack_client.chat_postMessage(

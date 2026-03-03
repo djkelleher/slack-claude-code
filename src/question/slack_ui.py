@@ -31,7 +31,7 @@ def build_question_blocks(pending: "PendingQuestion", context_text: str = "") ->
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": ":question: Claude has a question",
+                "text": ":question: Assistant has a question",
                 "emoji": True,
             },
         }
