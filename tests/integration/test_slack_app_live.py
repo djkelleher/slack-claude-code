@@ -122,11 +122,11 @@ async def test_app_mention_roundtrip(
             after_ts=user_message_ts,
             predicate=lambda msg: (
                 msg.get("user") == slack_bot_user_id
-                and "Hi! I'm Claude Code Bot." in msg.get("text", "")
+                and "Hi! I'm the code assistant bot." in msg.get("text", "")
             ),
         )
         bot_response_ts = bot_message["ts"]
-        assert "Hi! I'm Claude Code Bot." in bot_message.get("text", "")
+        assert "Hi! I'm the code assistant bot." in bot_message.get("text", "")
     finally:
         if bot_response_ts:
             await slack_client.chat_delete(channel=slack_test_channel, ts=bot_response_ts)

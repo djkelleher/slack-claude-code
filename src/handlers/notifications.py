@@ -85,7 +85,7 @@ def register_notifications_command(app: AsyncApp, deps: HandlerDependencies) -> 
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": "🔔 *Notifications enabled*\n\nYou'll receive channel alerts when Claude finishes or needs permission.",
+                            "text": "🔔 *Notifications enabled*\n\nYou'll receive channel alerts when the assistant finishes or needs permission.",
                         },
                     }
                 ],

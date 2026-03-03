@@ -156,14 +156,14 @@ async def post_channel_notification(
         if thread_ts:
             thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
             if notification_type == "completion":
-                message = f"✅ Claude finished • <{thread_link}|View thread>"
+                message = f"✅ Assistant finished • <{thread_link}|View thread>"
             else:
-                message = f"⚠️ Claude needs permission • <{thread_link}|Respond in thread>"
+                message = f"⚠️ Assistant needs permission • <{thread_link}|Respond in thread>"
         else:
             if notification_type == "completion":
-                message = "✅ Claude finished"
+                message = "✅ Assistant finished"
             else:
-                message = "⚠️ Claude needs permission"
+                message = "⚠️ Assistant needs permission"
 
         await slack_api_with_retry(
             lambda: client.chat_postMessage(
@@ -575,7 +575,7 @@ async def main():
     @app.event("app_mention")
     async def handle_mention(event, say, logger):
         """Respond to @mentions."""
-        await say(text="Hi! I'm Claude Code Bot. Just send me a message to run commands.")
+        await say(text="Hi! I'm the code assistant bot. Just send me a message to run commands.")
 
     @app.event("message")
     async def handle_message(event, client, logger):
@@ -1162,14 +1162,14 @@ async def main():
                     )
                     if result.plan_write_timeout:
                         plan_content = (
-                            "⚠️ Plan not ready yet — timed out waiting for Claude to write the plan file.\n\n"
-                            "Claude should have written a plan to a markdown file before requesting approval. "
+                            "⚠️ Plan not ready yet — timed out waiting for assistant to write the plan file.\n\n"
+                            "Assistant should have written a plan to a markdown file before requesting approval. "
                             "Please check that the plan was written correctly."
                         )
                     else:
                         plan_content = (
                             "⚠️ No plan file was found.\n\n"
-                            "Claude should have written a plan to a markdown file before requesting approval. "
+                            "Assistant should have written a plan to a markdown file before requesting approval. "
                             "Please check that the plan was written correctly."
                         )
 

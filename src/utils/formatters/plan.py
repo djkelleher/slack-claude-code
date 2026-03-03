@@ -29,7 +29,7 @@ def plan_processing_message(prompt: str) -> list[dict]:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": ":hourglass_flowing_sand: *Creating implementation plan...*\n\nClaude is exploring the codebase and designing an approach.",
+                "text": ":hourglass_flowing_sand: *Creating implementation plan...*\n\nAssistant is exploring the codebase and designing an approach.",
             },
         },
     ]

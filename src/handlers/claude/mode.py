@@ -342,8 +342,8 @@ def _get_mode_description(mode: str) -> str:
         "bypass": "Auto-approve all operations (files, commands, etc.)",
         "accept": "Auto-accept file edits only",
         "plan": "Plan mode - assistant provides a plan before execution",
-        "ask": "Default behavior - Claude asks for permission before operations",
-        "default": "Default Claude behavior",
+        "ask": "Default behavior - assistant asks for permission before operations",
+        "default": "Default assistant behavior",
         "delegate": "Delegate permission decisions",
     }
     return descriptions.get(mode, "")

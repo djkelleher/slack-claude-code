@@ -35,7 +35,7 @@ def build_approval_blocks(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"Claude wants to use *{tool_name}*",
+                "text": f"Assistant wants to use *{tool_name}*",
             },
         },
     ]
@@ -227,7 +227,7 @@ def build_plan_approval_blocks(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": "Claude has created an implementation plan. Review the attached plan file and approve to continue with execution.",
+                "text": "Assistant has created an implementation plan. Review the attached plan file and approve to continue with execution.",
             },
         },
         {

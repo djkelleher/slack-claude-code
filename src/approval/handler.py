@@ -38,9 +38,9 @@ async def _post_permission_notification(
             thread_link = (
                 f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
             )
-            message = f"⚠️ Claude needs permission • <{thread_link}|Respond in thread>"
+            message = f"⚠️ Assistant needs permission • <{thread_link}|Respond in thread>"
         else:
-            message = "⚠️ Claude needs permission"
+            message = "⚠️ Assistant needs permission"
 
         # Post to channel (NOT thread) - triggers sound + unread badge
         await slack_client.chat_postMessage(
