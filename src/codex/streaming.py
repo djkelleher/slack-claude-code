@@ -75,6 +75,24 @@ class StreamParser(BaseStreamParser):
 
         return ""
 
+    @staticmethod
+    def _extract_file_change_meta(item: dict) -> tuple[int, str]:
+        """Extract change count and first path from fileChange payloads."""
+        raw_changes = item.get("changes")
+        if isinstance(raw_changes, dict):
+            path = raw_changes.get("path")
+            return 1, str(path) if isinstance(path, str) else ""
+        if isinstance(raw_changes, list):
+            first_path = ""
+            for change in raw_changes:
+                if isinstance(change, dict):
+                    path = change.get("path")
+                    if isinstance(path, str) and path:
+                        first_path = path
+                        break
+            return len(raw_changes), first_path
+        return 0, ""
+
     def _create_tool_call(
         self,
         tool_id: str,
@@ -203,11 +221,11 @@ class StreamParser(BaseStreamParser):
                 )
             if item_type == "fileChange":
                 tool_id = str(item.get("id", "unknown"))
-                first_change = (item.get("changes") or [{}])[0]
+                _, first_change_path = self._extract_file_change_meta(item)
                 return self._create_tool_call(
                     tool_id=tool_id,
                     tool_name="file_change",
-                    tool_input={"path": first_change.get("path", "")},
+                    tool_input={"path": first_change_path},
                     raw_data=data,
                 )
             if item_type == "mcpToolCall":
@@ -273,11 +291,10 @@ class StreamParser(BaseStreamParser):
                 )
             if item_type == "fileChange":
                 tool_id = str(item.get("id", "unknown"))
-                changes = item.get("changes", [])
-                content = f"Applied {len(changes)} file change(s)."
-                if changes:
-                    first = changes[0]
-                    content += f" First path: {first.get('path', 'unknown')}"
+                change_count, first_change_path = self._extract_file_change_meta(item)
+                content = f"Applied {change_count} file change(s)."
+                if first_change_path:
+                    content += f" First path: {first_change_path}"
                 status = str(item.get("status", "")).lower()
                 return self._create_tool_result(
                     tool_use_id=tool_id,

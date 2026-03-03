@@ -204,6 +204,28 @@ def test_parse_file_change_item_lifecycle():
     assert tool_result.tool_activities[0].is_error is False
 
 
+def test_parse_file_change_with_non_dict_changes_entries():
+    """Parser should not crash when fileChange `changes` contains non-dict entries."""
+    parser = StreamParser()
+    parser.parse_line('{"type":"thread.started","thread_id":"thread-123"}')
+
+    tool_call = parser.parse_line(
+        '{"type":"item.started","item":{"id":"fc_2","type":"fileChange","changes":["src/app.py"]}}'
+    )
+    assert tool_call is not None
+    assert tool_call.type == "tool_call"
+    assert tool_call.tool_activities[0].name == "file_change"
+    assert tool_call.tool_activities[0].input["path"] == ""
+
+    tool_result = parser.parse_line(
+        '{"type":"item.completed","item":{"id":"fc_2","type":"fileChange","status":"completed","changes":["src/app.py"]}}'
+    )
+    assert tool_result is not None
+    assert tool_result.type == "tool_result"
+    assert tool_result.tool_activities[0].is_error is False
+    assert "Applied 1 file change(s)." in (tool_result.tool_activities[0].result or "")
+
+
 def test_parse_mcp_tool_call_item_lifecycle():
     """Parser should map mcpToolCall items to tool call/result."""
     parser = StreamParser()
@@ -229,9 +251,7 @@ def test_parse_reasoning_item_lifecycle():
     parser = StreamParser()
     parser.parse_line('{"type":"thread.started","thread_id":"thread-123"}')
 
-    tool_call = parser.parse_line(
-        '{"type":"item.started","item":{"id":"r_1","type":"reasoning"}}'
-    )
+    tool_call = parser.parse_line('{"type":"item.started","item":{"id":"r_1","type":"reasoning"}}')
     assert tool_call is not None
     assert tool_call.type == "tool_call"
     assert tool_call.tool_activities[0].name == "reasoning"
