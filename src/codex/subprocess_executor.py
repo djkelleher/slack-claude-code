@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from loguru import logger
 
+from src.backends.execution_result import BackendExecutionResult
 from src.backends.process_executor_base import ProcessExecutorBase
 from src.backends.process_termination import terminate_processes
 from src.codex.approval_bridge import default_approval_payload
@@ -26,17 +27,8 @@ _terminate_process_safely = terminate_process_safely
 
 
 @dataclass
-class ExecutionResult:
+class ExecutionResult(BackendExecutionResult):
     """Result of a Codex execution."""
-
-    success: bool
-    output: str
-    detailed_output: str = ""  # Full output with tool use details
-    session_id: Optional[str] = None
-    error: Optional[str] = None
-    cost_usd: Optional[float] = None
-    duration_ms: Optional[int] = None
-    was_cancelled: bool = False
 
 
 @dataclass

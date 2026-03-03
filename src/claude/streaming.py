@@ -4,10 +4,6 @@ from typing import Optional
 from loguru import logger
 
 from src.backends.stream_parser_base import BaseStreamParser
-from src.backends.stream_parsing_common import (
-    create_tool_activity,
-    create_tool_result,
-)
 from src.utils.stream_models import (
     BaseToolActivity,
     StreamMessage,
@@ -60,17 +56,8 @@ class StreamParser(BaseStreamParser):
             return None
 
         if not isinstance(data, dict):
-            # Handle unexpected non-object JSON (e.g., a JSON string) as plain text output
-            text = str(data)
-            self.accumulated_content += text
-            self.accumulated_detailed += text
-            return StreamMessage(
-                type="assistant",
-                content=text,
-                detailed_content=text,
-                session_id=self.session_id,
-                raw={},
-            )
+            # Handle unexpected non-object JSON (e.g., a JSON string) as plain text output.
+            return self._assistant_message_from_non_dict(data)
 
         msg_type = data.get("type", "unknown")
 
@@ -144,9 +131,8 @@ class StreamParser(BaseStreamParser):
                     tool_name = block.get("name", "unknown")
                     tool_input = block.get("input", {})
 
-                    tool_activity, tool_detailed, collision = create_tool_activity(
+                    tool_activity, tool_detailed, collision = self._create_tool_call_activity(
                         tool_cls=ToolActivity,
-                        pending_tools=self.pending_tools,
                         tool_id=tool_id,
                         tool_name=tool_name,
                         tool_input=tool_input,
@@ -232,9 +218,8 @@ class StreamParser(BaseStreamParser):
                                 full_content += item
                     else:
                         full_content = coerce_text(content)
-                    parsed_activities, parsed_detailed = create_tool_result(
+                    parsed_activities, parsed_detailed = self._create_tool_result_activities(
                         tool_cls=ToolActivity,
-                        pending_tools=self.pending_tools,
                         tool_use_id=tool_use_id,
                         content=full_content,
                         is_error=is_error,

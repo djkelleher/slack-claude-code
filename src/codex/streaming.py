@@ -5,10 +5,6 @@ from typing import Optional
 from loguru import logger
 
 from src.backends.stream_parser_base import BaseStreamParser
-from src.backends.stream_parsing_common import (
-    create_tool_activity,
-    create_tool_result,
-)
 from src.utils.stream_models import BaseToolActivity, StreamMessage
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
@@ -87,9 +83,8 @@ class StreamParser(BaseStreamParser):
         raw_data: dict,
     ) -> StreamMessage:
         """Create a normalized tool-call StreamMessage."""
-        tool_activity, detailed_addition, collision = create_tool_activity(
+        tool_activity, detailed_addition, collision = self._create_tool_call_activity(
             tool_cls=ToolActivity,
-            pending_tools=self.pending_tools,
             tool_id=tool_id,
             tool_name=tool_name,
             tool_input=tool_input,
@@ -117,9 +112,8 @@ class StreamParser(BaseStreamParser):
         raw_data: dict,
     ) -> StreamMessage:
         """Create a normalized tool-result StreamMessage."""
-        tool_activities, detailed_addition = create_tool_result(
+        tool_activities, detailed_addition = self._create_tool_result_activities(
             tool_cls=ToolActivity,
-            pending_tools=self.pending_tools,
             tool_use_id=tool_use_id,
             content=content,
             is_error=is_error,
@@ -159,15 +153,7 @@ class StreamParser(BaseStreamParser):
         if data is None:
             return None
         if not isinstance(data, dict):
-            content = str(data)
-            self._append_assistant_content(content)
-            return StreamMessage(
-                type="assistant",
-                content=content,
-                detailed_content=content,
-                session_id=self.session_id,
-                raw={},
-            )
+            return self._assistant_message_from_non_dict(data)
 
         # Determine event type - Codex uses different event structure
         event_type = data.get("type", data.get("event", "unknown"))

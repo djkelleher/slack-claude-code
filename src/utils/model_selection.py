@@ -1,5 +1,6 @@
-"""Shared model normalization and validation helpers for Slack handlers."""
+"""Shared model normalization and selection helpers for Slack handlers."""
 
+import functools
 from typing import Optional
 
 from src.config import (
@@ -57,6 +58,85 @@ _CODEX_MODEL_ALIASES: dict[str, str] = {
 
 _CLAUDE_DEFAULT_ALIASES: set[str] = {"default", "opus", "claude-opus-4-6"}
 
+_CLAUDE_MODEL_OPTIONS: tuple[dict[str, str | None], ...] = (
+    {
+        "name": "default",
+        "value": None,
+        "display": "Default (recommended)",
+        "desc": "Opus 4.6 · Most capable for complex work",
+    },
+    {
+        "name": "opus-1m",
+        "value": "claude-opus-4-6[1m]",
+        "display": "Opus (1M context)",
+        "desc": "Opus 4.6 with 1M context · Billed as extra usage · $10/$37.50 per Mtok",
+    },
+    {
+        "name": "sonnet",
+        "value": "sonnet",
+        "display": "Sonnet",
+        "desc": "Sonnet 4.6 · Best for everyday tasks",
+    },
+    {
+        "name": "sonnet-1m",
+        "value": "claude-sonnet-4-6[1m]",
+        "display": "Sonnet (1M context)",
+        "desc": "Sonnet 4.6 with 1M context · Billed as extra usage · $6/$22.50 per Mtok",
+    },
+    {
+        "name": "haiku",
+        "value": "haiku",
+        "display": "Haiku",
+        "desc": "Haiku 4.5 · Fastest for quick answers",
+    },
+)
+
+_CODEX_BASE_MODEL_OPTIONS: tuple[dict[str, str | None], ...] = (
+    {
+        "name": "gpt-5.3-codex",
+        "value": "gpt-5.3-codex",
+        "display": "GPT-5.3 Codex",
+        "desc": "Latest frontier agentic coding model",
+    },
+    {
+        "name": "gpt-5.3-codex-spark",
+        "value": "gpt-5.3-codex-spark",
+        "display": "GPT-5.3 Codex Spark",
+        "desc": "Ultra-fast coding model",
+    },
+    {
+        "name": "gpt-5.2-codex",
+        "value": "gpt-5.2-codex",
+        "display": "GPT-5.2 Codex",
+        "desc": "Frontier agentic coding model",
+    },
+    {
+        "name": "gpt-5.1-codex-max",
+        "value": "gpt-5.1-codex-max",
+        "display": "GPT-5.1 Codex Max",
+        "desc": "Codex-optimized flagship for deep and fast reasoning",
+    },
+    {
+        "name": "gpt-5.2",
+        "value": "gpt-5.2",
+        "display": "GPT-5.2",
+        "desc": "Latest frontier model with improvements across knowledge, reasoning and coding",
+    },
+    {
+        "name": "gpt-5.1-codex-mini",
+        "value": "gpt-5.1-codex-mini",
+        "display": "GPT-5.1 Codex Mini",
+        "desc": "Optimized for codex. Cheaper, faster, but less capable",
+    },
+)
+
+_CODEX_EFFORT_LABELS: dict[str, str] = {
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "xhigh": "Extra-High",
+}
+
 
 def normalize_model_name(model_name: str) -> Optional[str]:
     """Normalize model input into stored model identifier.
@@ -88,6 +168,77 @@ def normalize_model_name(model_name: str) -> Optional[str]:
     return resolved_base
 
 
+def get_claude_model_options() -> list[dict[str, str | None]]:
+    """Return Claude model picker options."""
+    return [dict(option) for option in _CLAUDE_MODEL_OPTIONS]
+
+
+def get_codex_model_options() -> list[dict[str, str | None]]:
+    """Return Codex model picker options including effort variants."""
+    base_models = [dict(option) for option in _CODEX_BASE_MODEL_OPTIONS]
+    effort_variants: list[dict[str, str | None]] = []
+    for model in base_models:
+        model_name = model["name"]
+        model_value = model["value"]
+        model_display = model["display"]
+        model_desc = model["desc"]
+        if not model_name or not model_value or not model_display:
+            continue
+        for effort_key, effort_label in _CODEX_EFFORT_LABELS.items():
+            effort_variants.append(
+                {
+                    "name": f"{model_name}-{effort_key}",
+                    "value": f"{model_value}-{effort_key}",
+                    "display": f"{model_display} ({effort_label})",
+                    "desc": model_desc,
+                }
+            )
+    return base_models + effort_variants
+
+
+def get_all_model_options() -> list[dict[str, str | None]]:
+    """Return combined Claude and Codex model picker options."""
+    return get_claude_model_options() + get_codex_model_options()
+
+
+@functools.lru_cache(maxsize=1)
+def _model_selection_map() -> dict[str, tuple[Optional[str], str]]:
+    """Build selection map from model button action key to value/display tuple."""
+    mapping: dict[str, tuple[Optional[str], str]] = {}
+    for option in get_all_model_options():
+        option_name = option.get("name")
+        option_value = option.get("value")
+        option_display = option.get("display")
+        if not option_name or not option_display:
+            continue
+        mapping[option_name] = (option_value, option_display)
+    return mapping
+
+
+def resolve_model_selection_action(model_name: str) -> tuple[Optional[str], str]:
+    """Resolve a model-picker action key to normalized model value + display name."""
+    normalized_name = (model_name or "").strip().lower()
+    selection = _model_selection_map().get(normalized_name)
+    if selection:
+        return selection
+
+    model_value = normalize_model_name(normalized_name)
+    return model_value, model_display_name(model_value)
+
+
+@functools.lru_cache(maxsize=1)
+def _display_name_map() -> dict[Optional[str], str]:
+    """Build model value -> display name lookup map."""
+    mapping: dict[Optional[str], str] = dict(CLAUDE_MODEL_DISPLAY)
+    for option in get_all_model_options():
+        option_value = option.get("value")
+        option_display = option.get("display")
+        if not option_display:
+            continue
+        mapping[option_value] = option_display
+    return mapping
+
+
 def normalize_current_model(model: Optional[str]) -> Optional[str]:
     """Normalize persisted current model aliases for UI display."""
     if model is None:
@@ -101,7 +252,7 @@ def normalize_current_model(model: Optional[str]) -> Optional[str]:
 def model_display_name(model: Optional[str]) -> str:
     """Return human-readable display name for a model identifier."""
     normalized = normalize_current_model(model)
-    return CLAUDE_MODEL_DISPLAY.get(normalized, normalized or "Default (recommended)")
+    return _display_name_map().get(normalized, normalized or "Default (recommended)")
 
 
 def codex_model_validation_error(model: Optional[str]) -> Optional[str]:

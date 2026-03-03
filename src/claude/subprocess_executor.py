@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from loguru import logger
 
+from src.backends.execution_result import BackendExecutionResult
 from src.backends.process_executor_base import ProcessExecutorBase
 from src.utils.process_utils import terminate_process_safely
 from src.utils.stream_models import concat_with_spacing
@@ -33,17 +34,9 @@ UUID_PATTERN = re.compile(
 
 
 @dataclass
-class ExecutionResult:
+class ExecutionResult(BackendExecutionResult):
     """Result of a Claude CLI execution."""
 
-    success: bool
-    output: str
-    detailed_output: str = ""  # Full output with tool use details
-    session_id: Optional[str] = None
-    error: Optional[str] = None
-    cost_usd: Optional[float] = None
-    duration_ms: Optional[int] = None
-    was_cancelled: bool = False
     has_pending_question: bool = False  # True if terminated due to AskUserQuestion
     has_pending_plan_approval: bool = False  # True if terminated due to ExitPlanMode
     plan_subagent_result: Optional[str] = None  # Plan content from Plan subagent output

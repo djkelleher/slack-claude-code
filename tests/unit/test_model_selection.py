@@ -3,9 +3,13 @@
 from src.utils.model_selection import (
     backend_label_for_model,
     codex_model_validation_error,
+    get_all_model_options,
+    get_claude_model_options,
+    get_codex_model_options,
     model_display_name,
     normalize_current_model,
     normalize_model_name,
+    resolve_model_selection_action,
 )
 
 
@@ -42,6 +46,8 @@ class TestModelDisplayName:
         """Known model IDs should return friendly labels."""
         assert model_display_name("claude-opus-4-6[1m]") == "Opus (1M context)"
         assert model_display_name("haiku") == "Haiku"
+        assert model_display_name("gpt-5.3-codex") == "GPT-5.3 Codex"
+        assert model_display_name("gpt-5.3-codex-xhigh") == "GPT-5.3 Codex (Extra-High)"
 
     def test_unknown_model_display_name(self):
         """Unknown model IDs should display raw model name."""
@@ -88,3 +94,40 @@ class TestBackendLabelForModel:
         """Helper should return backend labels used in Slack copy."""
         assert backend_label_for_model(None) == "Claude Code"
         assert backend_label_for_model("gpt-5.3-codex") == "OpenAI Codex"
+
+
+class TestModelOptionsCatalog:
+    """Tests for shared model options catalog helpers."""
+
+    def test_claude_and_codex_options_include_expected_entries(self):
+        """Catalog helpers should return known model entries."""
+        claude_options = get_claude_model_options()
+        codex_options = get_codex_model_options()
+
+        assert any(option["name"] == "default" for option in claude_options)
+        assert any(option["name"] == "sonnet" for option in claude_options)
+        assert any(option["name"] == "gpt-5.3-codex" for option in codex_options)
+        assert any(option["name"] == "gpt-5.3-codex-xhigh" for option in codex_options)
+
+    def test_get_all_model_options_combines_backends(self):
+        """Combined options should contain both Claude and Codex entries."""
+        all_options = get_all_model_options()
+        names = {option["name"] for option in all_options}
+        assert "default" in names
+        assert "gpt-5.2-codex-high" in names
+
+
+class TestResolveModelSelectionAction:
+    """Tests for action-id model resolver."""
+
+    def test_resolves_known_action_key_with_display(self):
+        """Known picker action IDs should return canonical value and display name."""
+        model_value, display_name = resolve_model_selection_action("gpt-5.3-codex-xhigh")
+        assert model_value == "gpt-5.3-codex-xhigh"
+        assert display_name == "GPT-5.3 Codex (Extra-High)"
+
+    def test_resolves_unknown_action_key_via_normalizer(self):
+        """Unknown picker action IDs should fall back to model normalization."""
+        model_value, display_name = resolve_model_selection_action("codex-extra-high")
+        assert model_value == "gpt-5.3-codex-xhigh"
+        assert display_name == "GPT-5.3 Codex (Extra-High)"

@@ -18,9 +18,11 @@ from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.command import command_response_with_tables, error_message
 from src.utils.formatters.streaming import processing_message
 from src.utils.model_selection import (
-    CLAUDE_MODEL_DISPLAY,
     backend_label_for_model,
     codex_model_validation_error,
+    get_all_model_options,
+    get_claude_model_options,
+    get_codex_model_options,
     model_display_name,
     normalize_current_model,
     normalize_model_name,
@@ -622,103 +624,14 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             current_backend = backend_label_for_model(normalized_current_model)
 
             # Available models (organized by backend)
-            claude_models = [
-                {
-                    "name": "default",
-                    "value": None,
-                    "display": "Default (recommended)",
-                    "desc": "Opus 4.6 · Most capable for complex work",
-                },
-                {
-                    "name": "opus-1m",
-                    "value": "claude-opus-4-6[1m]",
-                    "display": "Opus (1M context)",
-                    "desc": "Opus 4.6 with 1M context · Billed as extra usage · $10/$37.50 per Mtok",
-                },
-                {
-                    "name": "sonnet",
-                    "value": "sonnet",
-                    "display": "Sonnet",
-                    "desc": "Sonnet 4.6 · Best for everyday tasks",
-                },
-                {
-                    "name": "sonnet-1m",
-                    "value": "claude-sonnet-4-6[1m]",
-                    "display": "Sonnet (1M context)",
-                    "desc": "Sonnet 4.6 with 1M context · Billed as extra usage · $6/$22.50 per Mtok",
-                },
-                {
-                    "name": "haiku",
-                    "value": "haiku",
-                    "display": "Haiku",
-                    "desc": "Haiku 4.5 · Fastest for quick answers",
-                },
-            ]
-
-            codex_models = [
-                {
-                    "name": "gpt-5.3-codex",
-                    "value": "gpt-5.3-codex",
-                    "display": "GPT-5.3 Codex",
-                    "desc": "Latest frontier agentic coding model",
-                },
-                {
-                    "name": "gpt-5.3-codex-spark",
-                    "value": "gpt-5.3-codex-spark",
-                    "display": "GPT-5.3 Codex Spark",
-                    "desc": "Ultra-fast coding model",
-                },
-                {
-                    "name": "gpt-5.2-codex",
-                    "value": "gpt-5.2-codex",
-                    "display": "GPT-5.2 Codex",
-                    "desc": "Frontier agentic coding model",
-                },
-                {
-                    "name": "gpt-5.1-codex-max",
-                    "value": "gpt-5.1-codex-max",
-                    "display": "GPT-5.1 Codex Max",
-                    "desc": "Codex-optimized flagship for deep and fast reasoning",
-                },
-                {
-                    "name": "gpt-5.2",
-                    "value": "gpt-5.2",
-                    "display": "GPT-5.2",
-                    "desc": "Latest frontier model with improvements across knowledge, reasoning and coding",
-                },
-                {
-                    "name": "gpt-5.1-codex-mini",
-                    "value": "gpt-5.1-codex-mini",
-                    "display": "GPT-5.1 Codex Mini",
-                    "desc": "Optimized for codex. Cheaper, faster, but less capable",
-                },
-            ]
-            effort_labels = {
-                "low": "Low",
-                "medium": "Medium",
-                "high": "High",
-                "xhigh": "Extra-High",
-            }
-            effort_variants = []
-            for model in codex_models:
-                for effort_key, effort_label in effort_labels.items():
-                    effort_variants.append(
-                        {
-                            "name": f"{model['name']}-{effort_key}",
-                            "value": f"{model['value']}-{effort_key}",
-                            "display": f"{model['display']} ({effort_label})",
-                            "desc": model["desc"],
-                        }
-                    )
-            codex_models = codex_models + effort_variants
+            claude_models = get_claude_model_options()
+            codex_models = get_codex_model_options()
 
             # Get display name for current model
-            all_models = claude_models + codex_models
+            all_models = get_all_model_options()
             current_display = next(
                 (m["display"] for m in all_models if m["value"] == normalized_current_model),
-                CLAUDE_MODEL_DISPLAY.get(
-                    normalized_current_model, model_display_name(normalized_current_model)
-                ),
+                model_display_name(normalized_current_model),
             )
 
             # Build button blocks

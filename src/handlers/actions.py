@@ -29,6 +29,7 @@ from src.utils.model_selection import (
     codex_model_validation_error,
     model_display_name,
     normalize_model_name,
+    resolve_model_selection_action,
 )
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
@@ -1310,8 +1311,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         channel_id = value_parts[0]
         thread_ts = value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
 
-        model_value = normalize_model_name(model_name)
-        display_name = model_display_name(model_value)
+        model_value, display_name = resolve_model_selection_action(model_name)
 
         await _set_session_model_and_notify(
             deps=deps,
