@@ -199,3 +199,111 @@ class TestCommandRouter:
             )
 
         mock_request_approval.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_codex_plan_mode_namespaces_tool_activity_ids_per_turn(self):
+        """Post-approval execution tool activity IDs should not collide with plan turn IDs."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock()),
+        )
+
+        call_index = 0
+
+        async def _fake_codex_execute(**kwargs):
+            nonlocal call_index
+            call_index += 1
+            on_chunk = kwargs["on_chunk"]
+
+            await on_chunk(
+                SimpleNamespace(
+                    type="tool_call",
+                    content="",
+                    tool_activities=[SimpleNamespace(id="item_1")],
+                )
+            )
+
+            if call_index == 1:
+                await on_chunk(
+                    SimpleNamespace(
+                        type="assistant",
+                        content=(
+                            "# Implementation Plan\n"
+                            "1. Add streaming tool ID namespacing for multi-turn Codex flows.\n"
+                            "2. Preserve tool activity visibility after plan approval.\n"
+                            "3. Add regression tests for turn separation.\n\n"
+                            "## Test Plan\n"
+                            "- Run command router unit tests.\n"
+                        ),
+                        tool_activities=[],
+                    )
+                )
+                return SimpleNamespace(
+                    session_id="codex-new",
+                    success=True,
+                    output=(
+                        "# Implementation Plan\n"
+                        "1. Add streaming tool ID namespacing for multi-turn Codex flows.\n"
+                        "2. Preserve tool activity visibility after plan approval.\n"
+                        "3. Add regression tests for turn separation.\n\n"
+                        "## Test Plan\n"
+                        "- Run command router unit tests.\n"
+                    ),
+                )
+
+            await on_chunk(
+                SimpleNamespace(
+                    type="assistant",
+                    content="Implementation complete.",
+                    tool_activities=[],
+                )
+            )
+            return SimpleNamespace(
+                session_id="codex-new",
+                success=True,
+                output="Implementation complete.",
+            )
+
+        deps.codex_executor.execute = AsyncMock(side_effect=_fake_codex_execute)
+
+        session = Session(
+            id=13,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            permission_mode="plan",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+
+        on_chunk = AsyncMock()
+        with patch(
+            "src.handlers.command_router.PlanApprovalManager.request_approval",
+            new=AsyncMock(return_value=True),
+        ):
+            await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="Ship this",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-6",
+                on_chunk=on_chunk,
+                slack_client=SimpleNamespace(),
+                user_id="U123",
+            )
+
+        assert deps.codex_executor.execute.await_count == 2
+        tool_ids: list[str] = []
+        for call in on_chunk.await_args_list:
+            msg = call.args[0]
+            for tool in msg.tool_activities:
+                tool_ids.append(tool.id)
+
+        assert "turn1:item_1" in tool_ids
+        assert "turn2:item_1" in tool_ids

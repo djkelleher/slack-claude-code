@@ -87,9 +87,19 @@ async def execute_for_session(
         accumulated_context = ""
         question_count = 0
         max_questions = config.timeouts.execution.max_questions_per_conversation
+        codex_turn_index = 1
+        tool_id_namespace = f"turn{codex_turn_index}:"
 
         async def wrapped_on_chunk(msg: Any) -> None:
             nonlocal accumulated_context
+            if msg.tool_activities:
+                # Codex item IDs can restart each turn (e.g., item_1), so namespace
+                # by turn to keep Slack tool activity updates distinct across plan
+                # generation and post-approval execution.
+                for tool in msg.tool_activities:
+                    tool_id = str(tool.id)
+                    if tool_id and not tool_id.startswith(tool_id_namespace):
+                        tool.id = f"{tool_id_namespace}{tool_id}"
             if on_chunk:
                 await on_chunk(msg)
 
@@ -207,6 +217,8 @@ async def execute_for_session(
             )
 
             if approved:
+                codex_turn_index += 1
+                tool_id_namespace = f"turn{codex_turn_index}:"
                 await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
                 session.permission_mode = config.DEFAULT_BYPASS_MODE
 
