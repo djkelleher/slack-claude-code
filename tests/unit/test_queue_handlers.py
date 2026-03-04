@@ -192,22 +192,23 @@ async def test_process_queue_cancelled_marks_running_item_cancelled():
 
 
 @pytest.mark.asyncio
-async def test_register_queue_commands_uses_only_q_and_qc():
-    """Queue command registration should expose only /q and /qc controls."""
+async def test_register_queue_commands_exposes_current_queue_commands():
+    """Queue command registration should expose /q, /qv, /qclear, and /qr."""
     app = _FakeApp()
     deps = SimpleNamespace(db=SimpleNamespace())
 
     register_queue_commands(app, deps)
 
     assert "/q" in app.handlers
-    assert "/qc" in app.handlers
-    assert "/qv" not in app.handlers
-    assert "/qr" not in app.handlers
+    assert "/qv" in app.handlers
+    assert "/qclear" in app.handlers
+    assert "/qr" in app.handlers
+    assert "/qc" not in app.handlers
 
 
 @pytest.mark.asyncio
-async def test_qc_view_subcommand_posts_queue_status():
-    """`/qc view` should render queue state."""
+async def test_qv_posts_queue_status():
+    """`/qv` should render queue state."""
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
@@ -217,15 +218,15 @@ async def test_qc_view_subcommand_posts_queue_status():
     )
     register_queue_commands(app, deps)
 
-    handler = app.handlers["/qc"]
+    handler = app.handlers["/qv"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
     await handler(
         ack=AsyncMock(),
         command={
             "channel_id": "C123",
             "user_id": "U123",
-            "text": "view",
-            "command": "/qc",
+            "text": "",
+            "command": "/qv",
         },
         client=client,
         logger=MagicMock(),
@@ -238,8 +239,8 @@ async def test_qc_view_subcommand_posts_queue_status():
 
 
 @pytest.mark.asyncio
-async def test_qc_remove_without_id_removes_next_pending_item():
-    """`/qc remove` should remove the next pending queue item."""
+async def test_qr_without_id_removes_next_pending_item():
+    """`/qr` should remove the next pending queue item."""
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
@@ -249,15 +250,15 @@ async def test_qc_remove_without_id_removes_next_pending_item():
     )
     register_queue_commands(app, deps)
 
-    handler = app.handlers["/qc"]
+    handler = app.handlers["/qr"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
     await handler(
         ack=AsyncMock(),
         command={
             "channel_id": "C123",
             "user_id": "U123",
-            "text": "remove",
-            "command": "/qc",
+            "text": "",
+            "command": "/qr",
         },
         client=client,
         logger=MagicMock(),
@@ -266,3 +267,33 @@ async def test_qc_remove_without_id_removes_next_pending_item():
     deps.db.remove_queue_item.assert_awaited_once_with(11, "C123", None)
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Removed item #11 from queue"
+
+
+@pytest.mark.asyncio
+async def test_qclear_clears_pending_items():
+    """`/qclear` should clear pending queue items."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            clear_queue=AsyncMock(return_value=3),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/qclear"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "",
+            "command": "/qclear",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    deps.db.clear_queue.assert_awaited_once_with("C123", None)
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Cleared 3 item(s) from queue"

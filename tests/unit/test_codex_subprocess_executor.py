@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.config import config
 from src.codex.subprocess_executor import (
     SubprocessExecutor,
     TurnControlResult,
     _ActiveTurnState,
     _terminate_process_safely,
 )
+from src.config import config
 
 
 class _DummyStdout:

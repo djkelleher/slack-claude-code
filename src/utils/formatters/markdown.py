@@ -37,6 +37,7 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
     # Use \x00 (null byte) as delimiter since it won't appear in normal text
     # and won't be matched by the bold/italic regexes
     code_blocks = []
+
     def preserve_code_block(match):
         code_blocks.append(match.group(0))
         return f"\x00CODEBLOCK{len(code_blocks) - 1}\x00"
@@ -45,6 +46,7 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
 
     # Preserve inline code by replacing temporarily
     inline_codes = []
+
     def preserve_inline_code(match):
         inline_codes.append(match.group(0))
         return f"\x00INLINECODE{len(inline_codes) - 1}\x00"
@@ -57,6 +59,7 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
 
     # Preserve Slack bold by using placeholders for converted bold text
     slack_bolds = []
+
     def preserve_slack_bold(match):
         slack_bolds.append(f"*{match.group(1)}*")
         return f"\x00SLACKBOLD{len(slack_bolds) - 1}\x00"

@@ -3,7 +3,6 @@
 import re
 from typing import Optional
 
-
 MAX_TABLE_ROWS = 100
 MAX_TABLE_COLUMNS = 20
 

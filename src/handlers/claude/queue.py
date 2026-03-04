@@ -1,4 +1,4 @@
-"""Queue command handlers: /q and /qc."""
+"""Queue command handlers: /q, /qv, /qclear, and /qr."""
 
 import asyncio
 from typing import Optional
@@ -148,129 +148,119 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         await ensure_queue_processor(ctx.channel_id, ctx.thread_ts, deps, ctx.client, ctx.logger)
 
-    @app.command("/qc")
-    @slack_command(require_text=True, usage_hint="Usage: /qc <view|clear|remove [item_id]>")
-    async def handle_queue_command(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /qc queue control subcommands."""
-        parts = ctx.text.split()
-        subcommand = parts[0].lower()
-        args = parts[1:]
-
-        if subcommand == "view":
-            if args:
-                await ctx.client.chat_postMessage(
-                    channel=ctx.channel_id,
-                    thread_ts=ctx.thread_ts,
-                    text="Invalid queue command",
-                    blocks=error_message("Usage: /qc view"),
-                )
-                return
-
-            pending = await deps.db.get_pending_queue_items(ctx.channel_id, ctx.thread_ts)
-            running = await deps.db.get_running_queue_item(ctx.channel_id, ctx.thread_ts)
-
+    @app.command("/qv")
+    @slack_command()
+    async def handle_queue_view(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /qv command - view queue status."""
+        if ctx.text:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
-                text="Queue status",
-                blocks=queue_status(pending, running),
+                text="Invalid queue command",
+                blocks=error_message("Usage: /qv"),
             )
             return
 
-        if subcommand == "clear":
-            if args:
+        pending = await deps.db.get_pending_queue_items(ctx.channel_id, ctx.thread_ts)
+        running = await deps.db.get_running_queue_item(ctx.channel_id, ctx.thread_ts)
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text="Queue status",
+            blocks=queue_status(pending, running),
+        )
+
+    @app.command("/qclear")
+    @slack_command()
+    async def handle_queue_clear(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /qclear command - clear pending queue items."""
+        if ctx.text:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Invalid queue command",
+                blocks=error_message("Usage: /qclear"),
+            )
+            return
+
+        cleared = await deps.db.clear_queue(ctx.channel_id, ctx.thread_ts)
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text=f"Cleared {cleared} item(s) from queue",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":wastebasket: Cleared {cleared} pending item(s) from queue.",
+                    },
+                },
+            ],
+        )
+
+    @app.command("/qr")
+    @slack_command()
+    async def handle_queue_remove(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /qr command - remove next queue item or specific item by id."""
+        if ctx.text:
+            parts = ctx.text.split()
+            if len(parts) != 1:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text="Invalid queue command",
-                    blocks=error_message("Usage: /qc clear"),
+                    blocks=error_message("Usage: /qr [item_id]"),
                 )
                 return
+            try:
+                item_id = int(parts[0])
+            except ValueError:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid item ID",
+                    blocks=error_message("Invalid item ID. Usage: /qr [item_id]"),
+                )
+                return
+        else:
+            pending = await deps.db.get_pending_queue_items(ctx.channel_id, ctx.thread_ts)
+            if not pending:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Queue is empty",
+                    blocks=error_message("Queue is empty. Nothing to remove."),
+                )
+                return
+            item_id = pending[0].id
 
-            cleared = await deps.db.clear_queue(ctx.channel_id, ctx.thread_ts)
+        removed = await deps.db.remove_queue_item(item_id, ctx.channel_id, ctx.thread_ts)
 
+        if removed:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
-                text=f"Cleared {cleared} item(s) from queue",
+                text=f"Removed item #{item_id} from queue",
                 blocks=[
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":wastebasket: Cleared {cleared} pending item(s) from queue.",
+                            "text": f":wastebasket: Removed item #{item_id} from queue.",
                         },
                     },
                 ],
             )
             return
 
-        if subcommand == "remove":
-            if len(args) > 1:
-                await ctx.client.chat_postMessage(
-                    channel=ctx.channel_id,
-                    thread_ts=ctx.thread_ts,
-                    text="Invalid queue command",
-                    blocks=error_message("Usage: /qc remove [item_id]"),
-                )
-                return
-
-            if args:
-                try:
-                    item_id = int(args[0])
-                except ValueError:
-                    await ctx.client.chat_postMessage(
-                        channel=ctx.channel_id,
-                        thread_ts=ctx.thread_ts,
-                        text="Invalid item ID",
-                        blocks=error_message("Invalid item ID. Usage: /qc remove [item_id]"),
-                    )
-                    return
-            else:
-                pending = await deps.db.get_pending_queue_items(ctx.channel_id, ctx.thread_ts)
-                if not pending:
-                    await ctx.client.chat_postMessage(
-                        channel=ctx.channel_id,
-                        thread_ts=ctx.thread_ts,
-                        text="Queue is empty",
-                        blocks=error_message("Queue is empty. Nothing to remove."),
-                    )
-                    return
-                item_id = pending[0].id
-
-            removed = await deps.db.remove_queue_item(item_id, ctx.channel_id, ctx.thread_ts)
-
-            if removed:
-                await ctx.client.chat_postMessage(
-                    channel=ctx.channel_id,
-                    thread_ts=ctx.thread_ts,
-                    text=f"Removed item #{item_id} from queue",
-                    blocks=[
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f":wastebasket: Removed item #{item_id} from queue.",
-                            },
-                        },
-                    ],
-                )
-            else:
-                await ctx.client.chat_postMessage(
-                    channel=ctx.channel_id,
-                    thread_ts=ctx.thread_ts,
-                    text=f"Item #{item_id} not found or not pending",
-                    blocks=error_message(
-                        f"Item #{item_id} not found or is already running/completed."
-                    ),
-                )
-            return
-
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             thread_ts=ctx.thread_ts,
-            text="Invalid queue command",
-            blocks=error_message("Usage: /qc <view|clear|remove [item_id]>"),
+            text=f"Item #{item_id} not found or not pending",
+            blocks=error_message(f"Item #{item_id} not found or is already running/completed."),
         )
 
 

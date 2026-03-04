@@ -185,9 +185,7 @@ class AgentExecutor:
             model = self._resolve_model(agent, parent_model)
             permission_mode = self._resolve_permission_mode(agent, parent_permission_mode)
 
-            logger.info(
-                f"Executing agent '{agent.name}' (model={model}, mode={permission_mode})"
-            )
+            logger.info(f"Executing agent '{agent.name}' (model={model}, mode={permission_mode})")
 
             result = await self.subprocess_executor.execute(
                 prompt=full_prompt,
@@ -270,9 +268,7 @@ class AgentExecutor:
             return f"{agent.system_prompt}\n\n---\n\nTask:\n{task}"
         return task
 
-    def _resolve_model(
-        self, agent: AgentConfig, parent_model: Optional[str]
-    ) -> Optional[str]:
+    def _resolve_model(self, agent: AgentConfig, parent_model: Optional[str]) -> Optional[str]:
         """Resolve the model to use for execution.
 
         Parameters

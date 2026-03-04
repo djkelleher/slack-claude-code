@@ -74,7 +74,9 @@ def streaming_update(
         output_blocks = text_to_rich_text_blocks(current_output)
         blocks.extend(output_blocks)
     else:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_Waiting for response..._"}})
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": "_Waiting for response..._"}}
+        )
 
     # Add tool activity section if there are tools
     if tool_activities:

@@ -95,9 +95,7 @@ def create_tool_result(
 ) -> tuple[list[BaseToolActivity], str]:
     """Create standardized tool-result activities and detailed output text."""
     full_content = content or ""
-    content_preview = (
-        full_content[:500] + "..." if len(full_content) > 500 else full_content
-    )
+    content_preview = full_content[:500] + "..." if len(full_content) > 500 else full_content
     tool_activities: list[BaseToolActivity] = []
 
     if tool_use_id in pending_tools:
@@ -106,9 +104,7 @@ def create_tool_result(
         tool_activity.full_result = full_content
         tool_activity.is_error = is_error
         if tool_activity.started_at:
-            tool_activity.duration_ms = int(
-                (time.monotonic() - tool_activity.started_at) * 1000
-            )
+            tool_activity.duration_ms = int((time.monotonic() - tool_activity.started_at) * 1000)
         tool_activities.append(tool_activity)
     else:
         tool_activities.append(

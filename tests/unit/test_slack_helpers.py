@@ -233,7 +233,9 @@ async def test_post_text_snippet_with_tables_invalid_blocks_falls_back(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_post_text_snippet_with_tables_fallback_splits_when_too_many_blocks(monkeypatch) -> None:
+async def test_post_text_snippet_with_tables_fallback_splits_when_too_many_blocks(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(slack_helpers.config, "SLACK_MAX_BLOCKS_PER_MESSAGE", 2, raising=False)
     monkeypatch.setattr(
         slack_helpers,
@@ -341,7 +343,9 @@ async def test_post_text_snippet_format_text_chunks_by_block_limit(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_post_text_snippet_format_text_invalid_blocks_uses_mrkdwn_fallback(monkeypatch) -> None:
+async def test_post_text_snippet_format_text_invalid_blocks_uses_mrkdwn_fallback(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(slack_helpers.config, "SLACK_MAX_BLOCKS_PER_MESSAGE", 2, raising=False)
     monkeypatch.setattr(
         slack_helpers,

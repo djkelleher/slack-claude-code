@@ -8,7 +8,6 @@ from src.database.repository import DatabaseRepository
 
 from .base import HandlerDependencies
 from .basic import register_basic_commands
-from .notifications import register_notifications_command
 
 # Claude-specific handlers
 from .claude import (
@@ -21,6 +20,7 @@ from .claude import (
     register_queue_commands,
     register_worktree_commands,
 )
+from .notifications import register_notifications_command
 
 
 def register_commands(

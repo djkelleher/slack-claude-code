@@ -170,8 +170,7 @@ async def test_thread_message_roundtrip(
             thread_ts=parent_ts,
             after_ts=thread_user_ts,
             predicate=lambda msg: (
-                msg.get("user") == slack_bot_user_id
-                and msg.get("thread_ts") == parent_ts
+                msg.get("user") == slack_bot_user_id and msg.get("thread_ts") == parent_ts
             ),
         )
         bot_response_ts = bot_message["ts"]

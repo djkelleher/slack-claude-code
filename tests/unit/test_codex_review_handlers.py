@@ -38,9 +38,7 @@ def _deps(session: Session, codex_executor) -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_review_status_uses_thread_read_for_codex_session():
     app = _FakeApp()
-    session = Session(
-        model="gpt-5.3-codex", working_directory="/repo", codex_session_id="thread-1"
-    )
+    session = Session(model="gpt-5.3-codex", working_directory="/repo", codex_session_id="thread-1")
     codex_executor = SimpleNamespace(
         thread_read=AsyncMock(
             return_value={
@@ -48,9 +46,7 @@ async def test_review_status_uses_thread_read_for_codex_session():
                     "id": "thread-1",
                     "name": "review-thread",
                     "status": "running",
-                    "turns": [
-                        {"id": "turn-1", "status": "running", "createdAt": "now"}
-                    ],
+                    "turns": [{"id": "turn-1", "status": "running", "createdAt": "now"}],
                 }
             }
         ),
@@ -86,9 +82,7 @@ async def test_review_status_uses_thread_read_for_codex_session():
 @pytest.mark.asyncio
 async def test_review_start_includes_status_followup_hint():
     app = _FakeApp()
-    session = Session(
-        model="gpt-5.3-codex", working_directory="/repo", codex_session_id="thread-1"
-    )
+    session = Session(model="gpt-5.3-codex", working_directory="/repo", codex_session_id="thread-1")
     codex_executor = SimpleNamespace(
         thread_read=AsyncMock(),
         review_start=AsyncMock(

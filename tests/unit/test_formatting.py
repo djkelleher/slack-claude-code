@@ -188,7 +188,9 @@ class TestTextToRichTextBlocks:
         text = "1. First\n\n2. Second\n\n3. Third"
         blocks = text_to_rich_text_blocks(text)
         elems = blocks[0]["elements"]
-        ordered_lists = [e for e in elems if e.get("type") == "rich_text_list" and e.get("style") == "ordered"]
+        ordered_lists = [
+            e for e in elems if e.get("type") == "rich_text_list" and e.get("style") == "ordered"
+        ]
         assert len(ordered_lists) == 1
         assert len(ordered_lists[0]["elements"]) == 3
 
@@ -197,7 +199,9 @@ class TestTextToRichTextBlocks:
         text = "- Item A\n\n- Item B\n\n- Item C"
         blocks = text_to_rich_text_blocks(text)
         elems = blocks[0]["elements"]
-        bullet_lists = [e for e in elems if e.get("type") == "rich_text_list" and e.get("style") == "bullet"]
+        bullet_lists = [
+            e for e in elems if e.get("type") == "rich_text_list" and e.get("style") == "bullet"
+        ]
         assert len(bullet_lists) == 1
         assert len(bullet_lists[0]["elements"]) == 3
 
@@ -206,14 +210,10 @@ class TestTextToRichTextBlocks:
         blocks = text_to_rich_text_blocks(text)
         elems = blocks[0]["elements"]
         # Check numbered item text is not mangled by italic parsing
-        numbered_text = "".join(
-            e["text"] for e in elems[0]["elements"][0]["elements"]
-        )
+        numbered_text = "".join(e["text"] for e in elems[0]["elements"][0]["elements"])
         assert "_nth_weekday_of_month" in numbered_text
         # Check bullet sub-item text
-        bullet_text = "".join(
-            e["text"] for e in elems[1]["elements"][0]["elements"]
-        )
+        bullet_text = "".join(e["text"] for e in elems[1]["elements"][0]["elements"])
         assert "_get_us_market_holidays" in bullet_text
 
 

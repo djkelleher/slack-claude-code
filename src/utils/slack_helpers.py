@@ -2,9 +2,9 @@
 
 from typing import Any, Optional
 
-from src.config import config
 from slack_sdk.errors import SlackApiError
 
+from src.config import config
 from src.utils.formatters.base import (
     MAX_TEXT_LENGTH,
     split_text_into_blocks,

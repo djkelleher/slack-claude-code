@@ -83,9 +83,7 @@ class AgentRegistry:
             except Exception as e:
                 logger.warning(f"Failed to load agent from {file_path}: {e}")
 
-    def _parse_agent_file(
-        self, file_path: Path, source: AgentSource
-    ) -> Optional[AgentConfig]:
+    def _parse_agent_file(self, file_path: Path, source: AgentSource) -> Optional[AgentConfig]:
         """Parse a markdown agent file with YAML frontmatter.
 
         Parameters
@@ -227,7 +225,18 @@ class AgentRegistry:
         task_lower = task_description.lower()
 
         # Simple heuristic selection based on keywords
-        if any(kw in task_lower for kw in ["explore", "find", "search", "understand", "investigate", "where", "how does"]):
+        if any(
+            kw in task_lower
+            for kw in [
+                "explore",
+                "find",
+                "search",
+                "understand",
+                "investigate",
+                "where",
+                "how does",
+            ]
+        ):
             if "explore" in self._agents:
                 return self._agents["explore"]
 
@@ -235,7 +244,21 @@ class AgentRegistry:
             if "plan" in self._agents:
                 return self._agents["plan"]
 
-        if any(kw in task_lower for kw in ["git", "npm", "yarn", "pip", "bash", "shell", "run", "execute", "build", "test"]):
+        if any(
+            kw in task_lower
+            for kw in [
+                "git",
+                "npm",
+                "yarn",
+                "pip",
+                "bash",
+                "shell",
+                "run",
+                "execute",
+                "build",
+                "test",
+            ]
+        ):
             if "bash" in self._agents:
                 return self._agents["bash"]
 

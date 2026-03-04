@@ -72,9 +72,7 @@ class PendingManager(Generic[T]):
         """Cancel all pending items for a given session ID."""
         async with self._lock:
             ids = [
-                item_id
-                for item_id, item in self._pending.items()
-                if item.session_id == session_id
+                item_id for item_id, item in self._pending.items() if item.session_id == session_id
             ]
             for item_id in ids:
                 item = self._pending.get(item_id)

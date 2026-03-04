@@ -1,9 +1,18 @@
 """Unit tests for the hooks system."""
 
 import asyncio
+
 import pytest
 
-from src.hooks import HookRegistry, HookEvent, HookEventType, HookContext, HookResult, hook, create_context
+from src.hooks import (
+    HookContext,
+    HookEvent,
+    HookEventType,
+    HookRegistry,
+    HookResult,
+    create_context,
+    hook,
+)
 
 
 class TestHookRegistry:
@@ -212,7 +221,9 @@ class TestHookRegistry:
         HookRegistry.clear(HookEventType.RESULT)
 
         handlers = HookRegistry.list_handlers()
-        assert HookEventType.RESULT.value not in handlers or handlers[HookEventType.RESULT.value] == []
+        assert (
+            HookEventType.RESULT.value not in handlers or handlers[HookEventType.RESULT.value] == []
+        )
         assert "h2" in handlers.get(HookEventType.ERROR.value, [])
 
 

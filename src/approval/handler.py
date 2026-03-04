@@ -35,9 +35,7 @@ async def _post_permission_notification(
 
         # Build thread link
         if thread_ts:
-            thread_link = (
-                f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
-            )
+            thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
             message = f"⚠️ Assistant needs permission • <{thread_link}|Respond in thread>"
         else:
             message = "⚠️ Assistant needs permission"
@@ -54,9 +52,7 @@ async def _post_permission_notification(
         pass
     except Exception as e:
         # Log with type for debugging unexpected errors
-        logger.warning(
-            f"Failed to post permission notification: {type(e).__name__}: {e}"
-        )
+        logger.warning(f"Failed to post permission notification: {type(e).__name__}: {e}")
 
 
 @dataclass
@@ -174,9 +170,7 @@ class PermissionManager:
                 approval.message_ts = result.get("ts")
 
                 # Post channel notification (triggers sound + unread badge)
-                await _post_permission_notification(
-                    slack_client, channel_id, thread_ts, db
-                )
+                await _post_permission_notification(slack_client, channel_id, thread_ts, db)
 
             # Wait for response indefinitely (no timeout)
             approved = await approval.future
@@ -263,9 +257,7 @@ class PermissionManager:
         return await cls._pending.cancel_for_session(session_id)
 
     @classmethod
-    async def get_pending(
-        cls, session_id: Optional[str] = None
-    ) -> list[PendingApproval]:
+    async def get_pending(cls, session_id: Optional[str] = None) -> list[PendingApproval]:
         """Get pending approvals.
 
         Args:

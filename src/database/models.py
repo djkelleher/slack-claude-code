@@ -13,9 +13,7 @@ class Session:
     thread_ts: Optional[str] = None  # Thread timestamp for thread-based sessions
     working_directory: str = "~"
     claude_session_id: Optional[str] = None  # For Claude --resume flag
-    permission_mode: Optional[str] = (
-        None  # Per-session permission mode override (Claude)
-    )
+    permission_mode: Optional[str] = None  # Per-session permission mode override (Claude)
     model: Optional[str] = (
         None  # Model to use (e.g., "sonnet", "claude-opus-4-6[1m]", "gpt-5.3-codex")
     )
@@ -24,9 +22,7 @@ class Session:
     last_active: datetime = field(default_factory=datetime.now)
     # Codex-specific fields
     codex_session_id: Optional[str] = None  # For Codex resume
-    sandbox_mode: str = (
-        "workspace-write"  # read-only, workspace-write, danger-full-access
-    )
+    sandbox_mode: str = "workspace-write"  # read-only, workspace-write, danger-full-access
     approval_mode: str = "on-request"  # untrusted, on-request, never
 
     @classmethod
@@ -183,9 +179,7 @@ class QueueItem:
                 error_message=row[7],
                 position=row[8],
                 message_ts=row[9],
-                created_at=(
-                    datetime.fromisoformat(row[10]) if row[10] else datetime.now()
-                ),
+                created_at=(datetime.fromisoformat(row[10]) if row[10] else datetime.now()),
                 started_at=datetime.fromisoformat(row[11]) if row[11] else None,
                 completed_at=datetime.fromisoformat(row[12]) if row[12] else None,
             )

@@ -98,11 +98,7 @@ class PlanApprovalManager:
                 # Post the plan as an inline message (avoids binary file issues)
                 if plan_content:
                     try:
-                        filename = (
-                            os.path.basename(plan_file_path)
-                            if plan_file_path
-                            else "plan.md"
-                        )
+                        filename = os.path.basename(plan_file_path) if plan_file_path else "plan.md"
                         await post_text_snippet(
                             client=slack_client,
                             channel_id=channel_id,
@@ -197,9 +193,7 @@ class PlanApprovalManager:
         return await cls._pending.cancel_for_session(session_id)
 
     @classmethod
-    async def get_pending(
-        cls, session_id: Optional[str] = None
-    ) -> list[PendingPlanApproval]:
+    async def get_pending(cls, session_id: Optional[str] = None) -> list[PendingPlanApproval]:
         """Get pending plan approvals.
 
         Args:

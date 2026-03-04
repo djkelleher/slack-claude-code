@@ -1,7 +1,8 @@
 """Unit tests for handler base infrastructure."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.handlers.base import CommandContext, HandlerDependencies, slack_command
 

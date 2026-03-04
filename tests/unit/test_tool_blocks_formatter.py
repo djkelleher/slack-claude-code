@@ -53,7 +53,10 @@ def test_get_tool_icon_and_inline_formatting() -> None:
 
 def test_format_tool_status_variants() -> None:
     assert tool_blocks.format_tool_status(_tool(result=None, is_error=False)) == "..."
-    assert tool_blocks.format_tool_status(_tool(result="ok", is_error=False, duration_ms=12)) == "OK (12ms)"
+    assert (
+        tool_blocks.format_tool_status(_tool(result="ok", is_error=False, duration_ms=12))
+        == "OK (12ms)"
+    )
     assert tool_blocks.format_tool_status(_tool(result="bad", is_error=True)) == "ERROR"
 
 
@@ -102,13 +105,23 @@ def test_format_tool_detail_blocks_uses_full_result_and_error_label() -> None:
     blocks = tool_blocks.format_tool_detail_blocks(tool)
 
     assert "*Bash* OK (34ms)" in blocks[0]["text"]["text"]
-    assert any("*Input:*" in block["text"]["text"] for block in blocks if block["type"] == "section")
-    assert any("*Result:*" in block["text"]["text"] for block in blocks if block["type"] == "section")
-    assert any("full command output" in block["text"]["text"] for block in blocks if block["type"] == "section")
+    assert any(
+        "*Input:*" in block["text"]["text"] for block in blocks if block["type"] == "section"
+    )
+    assert any(
+        "*Result:*" in block["text"]["text"] for block in blocks if block["type"] == "section"
+    )
+    assert any(
+        "full command output" in block["text"]["text"]
+        for block in blocks
+        if block["type"] == "section"
+    )
 
     error_tool = _tool(name="Read", is_error=True, result="boom")
     error_blocks = tool_blocks.format_tool_detail_blocks(error_tool)
-    assert any("*Error:*" in block["text"]["text"] for block in error_blocks if block["type"] == "section")
+    assert any(
+        "*Error:*" in block["text"]["text"] for block in error_blocks if block["type"] == "section"
+    )
 
 
 def test_format_tool_detail_blocks_error_without_result_adds_divider_only() -> None:

@@ -3,8 +3,8 @@
 from src.codex.capabilities import (
     codex_mode_alias_for_approval,
     get_codex_hint_for_claude_command,
-    is_likely_plan_content,
     is_claude_only_slash_command,
+    is_likely_plan_content,
     normalize_codex_approval_mode,
     resolve_codex_compat_mode,
 )

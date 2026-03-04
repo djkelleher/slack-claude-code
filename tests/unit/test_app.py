@@ -69,9 +69,7 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(
-                        success=True, turn_id="turn-123", error=None
-                    )
+                    return_value=SimpleNamespace(success=True, turn_id="turn-123", error=None)
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -109,9 +107,7 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(
-                        success=False, turn_id=None, error="conflict"
-                    )
+                    return_value=SimpleNamespace(success=False, turn_id=None, error="conflict")
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -123,9 +119,7 @@ class TestCodexActiveTurnRouting:
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
 
-        with patch(
-            "src.app.ensure_queue_processor", new=AsyncMock()
-        ) as mock_ensure_queue:
+        with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure_queue:
             handled = await _route_codex_message_to_active_turn_or_queue(
                 client=client,
                 deps=deps,
@@ -154,9 +148,7 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(
-                        success=False, turn_id=None, error="busy"
-                    )
+                    return_value=SimpleNamespace(success=False, turn_id=None, error="busy")
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -185,7 +177,5 @@ class TestCodexActiveTurnRouting:
             output="Steer failed and queue fallback failed. steer_error=busy queue_error=db insert failed",
             error_message="db insert failed",
         )
-        deps.codex_executor.record_queue_fallback.assert_awaited_once_with(
-            success=False
-        )
+        deps.codex_executor.record_queue_fallback.assert_awaited_once_with(success=False)
         assert client.chat_postMessage.await_count >= 1
