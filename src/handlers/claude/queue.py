@@ -360,138 +360,148 @@ async def _process_queue(
 
     try:
         while True:
-            # Ensure we never overlap with a currently running Codex turn in this scope.
-            while deps.codex_executor and await deps.codex_executor.has_active_turn(scope):
-                log.debug(f"Queue waiting for active Codex turn to finish in scope {scope}")
-                await asyncio.sleep(0.5)
-
-            # Fetch after waiting so we do not act on stale pending snapshots.
-            pending = await deps.db.get_pending_queue_items(channel_id, thread_ts)
-            if not pending:
-                log.info(f"Queue empty for scope {scope}, stopping processor")
-                break
-
-            item = pending[0]
-            running_item = item
-            running_message_ts = None
-            claimed = await deps.db.update_queue_item_status(item.id, "running")
-            if not claimed:
-                log.info(f"Queue item #{item.id} no longer pending in scope {scope}, skipping")
-                running_item = None
-                await asyncio.sleep(0.1)
-                continue
-
-            log.info(f"Queue processing item #{item.id} in scope {scope}")
-
-            message_ts = None
-            streaming_state = None
             try:
-                response = await client.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    text=f"Processing queue item #{item.id}",
-                    blocks=queue_item_running(item),
-                )
-                message_ts = response["ts"]
-                running_message_ts = message_ts
-                streaming_state = StreamingMessageState(
-                    channel_id=channel_id,
-                    message_ts=message_ts,
-                    prompt=item.prompt,
-                    client=client,
-                    logger=log,
-                    track_tools=True,
-                    smart_concat=True,
-                )
-                streaming_state.start_heartbeat()
-                on_chunk = create_streaming_callback(streaming_state)
+                # Ensure we never overlap with a currently running Codex turn in this scope.
+                while deps.codex_executor and await deps.codex_executor.has_active_turn(scope):
+                    log.debug(f"Queue waiting for active Codex turn to finish in scope {scope}")
+                    await asyncio.sleep(0.5)
 
-                session = await deps.db.get_or_create_session(
-                    channel_id,
-                    thread_ts=thread_ts,
-                    default_cwd=config.DEFAULT_WORKING_DIR,
-                )
+                # Fetch after waiting so we do not act on stale pending snapshots.
+                pending = await deps.db.get_pending_queue_items(channel_id, thread_ts)
+                if not pending:
+                    log.info(f"Queue empty for scope {scope}, stopping processor")
+                    break
 
-                route = await execute_for_session(
-                    deps=deps,
-                    session=session,
-                    prompt=item.prompt,
-                    channel_id=channel_id,
-                    thread_ts=thread_ts,
-                    execution_id=f"queue_{item.id}",
-                    on_chunk=on_chunk,
-                    slack_client=client,
-                    logger=log,
-                )
-                result = route.result
+                item = pending[0]
+                running_item = item
+                running_message_ts = None
+                claimed = await deps.db.update_queue_item_status(item.id, "running")
+                if not claimed:
+                    log.info(f"Queue item #{item.id} no longer pending in scope {scope}, skipping")
+                    running_item = None
+                    await asyncio.sleep(0.1)
+                    continue
 
-                if result.success:
-                    await deps.db.update_queue_item_status(
-                        item.id, "completed", output=result.output
-                    )
-                else:
-                    await deps.db.update_queue_item_status(
-                        item.id,
-                        "failed",
-                        output=result.output,
-                        error_message=result.error,
-                    )
+                log.info(f"Queue processing item #{item.id} in scope {scope}")
 
+                message_ts = None
+                streaming_state = None
                 try:
-                    await client.chat_update(
+                    response = await client.chat_postMessage(
                         channel=channel_id,
-                        ts=message_ts,
-                        text=f"Completed queue item #{item.id}",
-                        blocks=queue_item_complete(item, result),
+                        thread_ts=thread_ts,
+                        text=f"Processing queue item #{item.id}",
+                        blocks=queue_item_running(item),
                     )
-                except Exception as notify_error:
-                    log.error(
-                        f"Failed to update completion message for queue item {item.id} in scope "
-                        f"{scope}: {notify_error}"
+                    message_ts = response["ts"]
+                    running_message_ts = message_ts
+                    streaming_state = StreamingMessageState(
+                        channel_id=channel_id,
+                        message_ts=message_ts,
+                        prompt=item.prompt,
+                        client=client,
+                        logger=log,
+                        track_tools=True,
+                        smart_concat=True,
                     )
-                    try:
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            text=f"Completed queue item #{item.id}",
-                            blocks=queue_item_complete(item, result),
+                    streaming_state.start_heartbeat()
+                    on_chunk = create_streaming_callback(streaming_state)
+
+                    session = await deps.db.get_or_create_session(
+                        channel_id,
+                        thread_ts=thread_ts,
+                        default_cwd=config.DEFAULT_WORKING_DIR,
+                    )
+
+                    route = await execute_for_session(
+                        deps=deps,
+                        session=session,
+                        prompt=item.prompt,
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        execution_id=f"queue_{item.id}",
+                        on_chunk=on_chunk,
+                        slack_client=client,
+                        logger=log,
+                    )
+                    result = route.result
+
+                    if result.success:
+                        await deps.db.update_queue_item_status(
+                            item.id, "completed", output=result.output
                         )
-                    except Exception as fallback_notify_error:
-                        log.error(
-                            f"Failed to post fallback completion message for queue item "
-                            f"{item.id} in scope {scope}: {fallback_notify_error}"
+                    else:
+                        await deps.db.update_queue_item_status(
+                            item.id,
+                            "failed",
+                            output=result.output,
+                            error_message=result.error,
                         )
 
-            except Exception as e:
-                log.error(f"Queue item {item.id} failed in scope {scope}: {e}")
-                await deps.db.update_queue_item_status(item.id, "failed", error_message=str(e))
-                try:
-                    if message_ts:
+                    try:
                         await client.chat_update(
                             channel=channel_id,
                             ts=message_ts,
-                            text=f"Queue item #{item.id} failed",
-                            blocks=error_message(f"Queue item failed: {e}"),
+                            text=f"Completed queue item #{item.id}",
+                            blocks=queue_item_complete(item, result),
                         )
-                    else:
-                        await client.chat_postMessage(
-                            channel=channel_id,
-                            thread_ts=thread_ts,
-                            text=f"Queue item #{item.id} failed",
-                            blocks=error_message(f"Queue item failed: {e}"),
+                    except Exception as notify_error:
+                        log.error(
+                            f"Failed to update completion message for queue item {item.id} in scope "
+                            f"{scope}: {notify_error}"
                         )
-                except Exception as notify_error:
-                    log.error(
-                        f"Failed to send failure notification for queue item {item.id} in "
-                        f"scope {scope}: {notify_error}"
-                    )
-            finally:
-                if streaming_state:
-                    await streaming_state.stop_heartbeat()
+                        try:
+                            await client.chat_postMessage(
+                                channel=channel_id,
+                                thread_ts=thread_ts,
+                                text=f"Completed queue item #{item.id}",
+                                blocks=queue_item_complete(item, result),
+                            )
+                        except Exception as fallback_notify_error:
+                            log.error(
+                                f"Failed to post fallback completion message for queue item "
+                                f"{item.id} in scope {scope}: {fallback_notify_error}"
+                            )
 
-            running_item = None
-            running_message_ts = None
-            await asyncio.sleep(0.5)
+                except Exception as e:
+                    log.error(f"Queue item {item.id} failed in scope {scope}: {e}")
+                    await deps.db.update_queue_item_status(item.id, "failed", error_message=str(e))
+                    try:
+                        if message_ts:
+                            await client.chat_update(
+                                channel=channel_id,
+                                ts=message_ts,
+                                text=f"Queue item #{item.id} failed",
+                                blocks=error_message(f"Queue item failed: {e}"),
+                            )
+                        else:
+                            await client.chat_postMessage(
+                                channel=channel_id,
+                                thread_ts=thread_ts,
+                                text=f"Queue item #{item.id} failed",
+                                blocks=error_message(f"Queue item failed: {e}"),
+                            )
+                    except Exception as notify_error:
+                        log.error(
+                            f"Failed to send failure notification for queue item {item.id} in "
+                            f"scope {scope}: {notify_error}"
+                        )
+                finally:
+                    if streaming_state:
+                        await streaming_state.stop_heartbeat()
+
+                running_item = None
+                running_message_ts = None
+                await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                raise
+            except Exception as loop_error:
+                # Keep processor alive for transient scope-level failures
+                # (DB/network hiccups) instead of exiting permanently.
+                log.error(f"Queue processor transient error in scope {scope}: {loop_error}")
+                running_item = None
+                running_message_ts = None
+                await asyncio.sleep(1.0)
     except asyncio.CancelledError:
         log.info(f"Queue processor cancelled for scope {scope}")
         if running_item is not None:

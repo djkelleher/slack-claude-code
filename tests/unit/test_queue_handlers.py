@@ -253,6 +253,27 @@ async def test_process_queue_waits_for_active_codex_turn():
 
 
 @pytest.mark.asyncio
+async def test_process_queue_recovers_from_transient_scope_error():
+    """Scope-level errors should be logged and retried without crashing worker."""
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_pending_queue_items=AsyncMock(side_effect=[Exception("db hiccup"), []]),
+            update_queue_item_status=AsyncMock(),
+        ),
+        codex_executor=None,
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
+    fake_logger = MagicMock()
+
+    with patch("src.handlers.claude.queue.asyncio.sleep", new=AsyncMock()):
+        await _process_queue("C123", deps, client, fake_logger)
+
+    assert deps.db.get_pending_queue_items.await_count == 2
+    deps.db.update_queue_item_status.assert_not_called()
+    client.chat_postMessage.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_ensure_queue_processor_startup_is_serialized():
     """Concurrent startup checks should create only one processor task per scope."""
     deps = SimpleNamespace()

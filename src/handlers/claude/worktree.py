@@ -180,12 +180,7 @@ def register_worktree_commands(app: AsyncApp, deps: HandlerDependencies) -> None
                 )
                 return
 
-            if (
-                subcommand == "list"
-                and not args
-                and flags.issubset({"--verbose"})
-                and not values
-            ):
+            if subcommand == "list" and not args and flags.issubset({"--verbose"}) and not values:
                 await _handle_list(ctx, session, git_service, verbose=("--verbose" in flags))
                 return
 
@@ -227,12 +222,7 @@ def register_worktree_commands(app: AsyncApp, deps: HandlerDependencies) -> None
                 )
                 return
 
-            if (
-                subcommand == "prune"
-                and not args
-                and flags.issubset({"--dry-run"})
-                and not values
-            ):
+            if subcommand == "prune" and not args and flags.issubset({"--dry-run"}) and not values:
                 await _handle_prune(ctx, session, git_service, dry_run=("--dry-run" in flags))
                 return
 
