@@ -130,12 +130,15 @@ async def test_process_queue_completes_item_and_updates_message():
     assert deps.db.update_queue_item_status.await_args_list[0].args == (7, "running")
     assert deps.db.update_queue_item_status.await_args_list[1].args == (7, "completed")
     assert deps.db.update_queue_item_status.await_args_list[1].kwargs["output"] == "done"
+    assert (
+        client.chat_postMessage.await_args.kwargs["text"] == "Processing queue item 1: run tests"
+    )
     client.chat_update.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_process_queue_completion_update_failure_keeps_completed_status():
-    """Completion Slack update failures should not flip successful item to failed."""
+    """Streaming finalization failures should not flip successful item to failed."""
     item = _queue_item(71, "run tests")
     session = SimpleNamespace(id=1)
     route_result = SimpleNamespace(
@@ -163,7 +166,7 @@ async def test_process_queue_completion_update_failure_keeps_completed_status():
 
     statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "completed"]
-    assert client.chat_postMessage.await_count == 2
+    assert client.chat_postMessage.await_count == 1
 
 
 @pytest.mark.asyncio

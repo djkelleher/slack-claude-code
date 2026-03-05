@@ -61,14 +61,14 @@ def queue_status(pending: list, running: Any) -> list[dict]:
     return blocks
 
 
-def queue_item_running(item: Any) -> list[dict]:
+def queue_item_running(item: Any, sequence_number: int) -> list[dict]:
     """Format running queue item status."""
     return [
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f":arrow_forward: *Processing Queue Item #{item.id}*\n> {escape_markdown(item.prompt[:200])}{'...' if len(item.prompt) > 200 else ''}",
+                "text": f":arrow_forward: *Processing queue item {sequence_number}:*\n> {escape_markdown(item.prompt[:200])}{'...' if len(item.prompt) > 200 else ''}",
             },
         },
     ]

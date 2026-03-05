@@ -20,7 +20,6 @@ from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.base import escape_markdown
 from src.utils.formatters.command import error_message
 from src.utils.formatters.queue import (
-    queue_item_complete,
     queue_item_running,
     queue_status,
 )
@@ -93,6 +92,19 @@ async def _cleanup_queue_start_lock(task_id: str) -> None:
         lock = _QUEUE_START_LOCKS.get(task_id)
         if lock and not lock.locked():
             _QUEUE_START_LOCKS.pop(task_id, None)
+
+
+def _prompt_preview(prompt: str, limit: int = 180) -> str:
+    """Return a compact, single-line prompt preview for status text."""
+    flattened = " ".join(prompt.split())
+    if len(flattened) <= limit:
+        return flattened
+    return f"{flattened[:limit]}..."
+
+
+def _queue_processing_log_line(sequence_number: int, prompt: str) -> str:
+    """Build queue processing log text for Slack + logger output."""
+    return f"Processing queue item {sequence_number}: {_prompt_preview(prompt)}"
 
 
 async def ensure_queue_processor(
@@ -398,6 +410,7 @@ async def _process_queue(
     running_item = None
     running_message_ts = None
     override_resume_ids: dict[str, dict[str, str]] = {}
+    processed_count = 0
 
     try:
         while True:
@@ -423,7 +436,9 @@ async def _process_queue(
                     await asyncio.sleep(0.1)
                     continue
 
-                log.info(f"Queue processing item #{item.id} in scope {scope}")
+                processed_count += 1
+                processing_log_line = _queue_processing_log_line(processed_count, item.prompt)
+                log.info(f"{processing_log_line} (scope={scope}, queue_item_id={item.id})")
 
                 message_ts = None
                 streaming_state = None
@@ -431,15 +446,15 @@ async def _process_queue(
                     response = await client.chat_postMessage(
                         channel=channel_id,
                         thread_ts=thread_ts,
-                        text=f"Processing queue item #{item.id}",
-                        blocks=queue_item_running(item),
+                        text=processing_log_line,
+                        blocks=queue_item_running(item, processed_count),
                     )
                     message_ts = response["ts"]
                     running_message_ts = message_ts
                     streaming_state = StreamingMessageState(
                         channel_id=channel_id,
                         message_ts=message_ts,
-                        prompt=item.prompt,
+                        prompt=processing_log_line,
                         client=client,
                         logger=log,
                         track_tools=True,
@@ -496,50 +511,26 @@ async def _process_queue(
                             output=result.output,
                             error_message=result.error,
                         )
-
-                    try:
-                        await client.chat_update(
-                            channel=channel_id,
-                            ts=message_ts,
-                            text=f"Completed queue item #{item.id}",
-                            blocks=queue_item_complete(item, result),
-                        )
-                    except Exception as notify_error:
-                        log.error(
-                            f"Failed to update completion message for queue item {item.id} in scope "
-                            f"{scope}: {notify_error}"
-                        )
-                        try:
-                            await client.chat_postMessage(
-                                channel=channel_id,
-                                thread_ts=thread_ts,
-                                text=f"Completed queue item #{item.id}",
-                                blocks=queue_item_complete(item, result),
-                            )
-                        except Exception as fallback_notify_error:
-                            log.error(
-                                f"Failed to post fallback completion message for queue item "
-                                f"{item.id} in scope {scope}: {fallback_notify_error}"
-                            )
+                    if streaming_state:
+                        final_output = result.output or result.error or "No output"
+                        if not streaming_state.accumulated_output.strip() and final_output:
+                            streaming_state.accumulated_output = final_output
+                        await streaming_state.finalize(is_error=not result.success)
 
                 except Exception as e:
                     log.error(f"Queue item {item.id} failed in scope {scope}: {e}")
                     await deps.db.update_queue_item_status(item.id, "failed", error_message=str(e))
+                    if streaming_state:
+                        if not streaming_state.accumulated_output.strip():
+                            streaming_state.accumulated_output = f"Queue item failed: {e}"
+                        await streaming_state.finalize(is_error=True)
                     try:
-                        if message_ts:
-                            await client.chat_update(
-                                channel=channel_id,
-                                ts=message_ts,
-                                text=f"Queue item #{item.id} failed",
-                                blocks=error_message(f"Queue item failed: {e}"),
-                            )
-                        else:
-                            await client.chat_postMessage(
-                                channel=channel_id,
-                                thread_ts=thread_ts,
-                                text=f"Queue item #{item.id} failed",
-                                blocks=error_message(f"Queue item failed: {e}"),
-                            )
+                        await client.chat_postMessage(
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            text=f"Queue item #{item.id} failed",
+                            blocks=error_message(f"Queue item failed: {e}"),
+                        )
                     except Exception as notify_error:
                         log.error(
                             f"Failed to send failure notification for queue item {item.id} in "

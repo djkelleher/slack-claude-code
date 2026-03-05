@@ -356,8 +356,14 @@ class StreamingMessageState:
                 except Exception as callback_error:
                     self.logger.error(f"Error callback failed: {callback_error}")
 
-    async def finalize(self) -> None:
-        """Send final update to mark streaming as complete."""
+    async def finalize(self, is_error: bool = False) -> None:
+        """Send final update to mark streaming as complete.
+
+        Parameters
+        ----------
+        is_error : bool
+            If True, render a failed status in the final update header.
+        """
         # Stop heartbeat task
         await self.stop_heartbeat()
 
@@ -377,6 +383,7 @@ class StreamingMessageState:
                     self.accumulated_output,
                     tool_activities=tool_list,
                     is_complete=True,
+                    is_error=is_error,
                 ),
             )
         except Exception as e:

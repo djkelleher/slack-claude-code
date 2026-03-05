@@ -27,6 +27,7 @@ def streaming_update(
     current_output: str,
     tool_activities: Optional[list["ToolActivity"]] = None,
     is_complete: bool = False,
+    is_error: bool = False,
     max_tools_display: int = 8,
 ) -> list[dict]:
     """Format a streaming update message with tool activity.
@@ -41,6 +42,8 @@ def streaming_update(
         List of tool activities to display.
     is_complete : bool
         Whether the response is complete.
+    is_error : bool
+        Whether the execution completed with an error.
     max_tools_display : int
         Maximum number of tools to show in the activity section.
 
@@ -49,9 +52,10 @@ def streaming_update(
     list[dict]
         Slack blocks for the streaming message.
     """
-    status = (
-        ":heavy_check_mark: Complete" if is_complete else ":arrows_counterclockwise: Streaming..."
-    )
+    if is_complete:
+        status = ":x: Failed" if is_error else ":heavy_check_mark: Complete"
+    else:
+        status = ":arrows_counterclockwise: Streaming..."
 
     # Truncate output if too long
     current_output = truncate_from_start(current_output)
