@@ -35,6 +35,11 @@ from src.handlers.claude.queue import ensure_queue_processor
 from src.handlers.command_router import execute_for_session
 from src.handlers.response_delivery import deliver_command_response
 from src.question.manager import QuestionManager
+from src.tasks.queue_plan import (
+    QueuePlanError,
+    contains_queue_plan_markers,
+    materialize_queue_plan_text,
+)
 from src.utils.execution_scope import build_session_scope
 from src.utils.file_downloader import (
     FileDownloadError,
@@ -154,15 +159,11 @@ async def post_channel_notification(
 
         # Build thread link if we have a thread_ts
         if thread_ts:
-            thread_link = (
-                f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
-            )
+            thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
             if notification_type == "completion":
                 message = f"✅ Assistant finished • <{thread_link}|View thread>"
             else:
-                message = (
-                    f"⚠️ Assistant needs permission • <{thread_link}|Respond in thread>"
-                )
+                message = f"⚠️ Assistant needs permission • <{thread_link}|Respond in thread>"
         else:
             if notification_type == "completion":
                 message = "✅ Assistant finished"
@@ -180,9 +181,7 @@ async def post_channel_notification(
 
     except Exception as e:
         # Don't fail the main operation if all notification attempts fail
-        logger.error(
-            f"Failed to post channel notification after {max_retries} attempts: {e}"
-        )
+        logger.error(f"Failed to post channel notification after {max_retries} attempts: {e}")
 
 
 async def _cleanup_streaming_state(
@@ -329,9 +328,7 @@ async def _route_codex_message_to_active_turn_or_queue(
         )
     except Exception as e:
         steer_error = str(e)
-        logger.error(
-            f"Failed to steer active Codex turn in scope {session_scope}: {steer_error}"
-        )
+        logger.error(f"Failed to steer active Codex turn in scope {session_scope}: {steer_error}")
 
     if steer_result and steer_result.success:
         await deps.db.update_command_status(
@@ -361,9 +358,7 @@ async def _route_codex_message_to_active_turn_or_queue(
         )
         return True
 
-    steer_error = steer_error or (
-        steer_result.error if steer_result else "unknown error"
-    )
+    steer_error = steer_error or (steer_result.error if steer_result else "unknown error")
     try:
         queued_item = await deps.db.add_to_queue(
             session_id=session.id,
@@ -398,9 +393,7 @@ async def _route_codex_message_to_active_turn_or_queue(
     await deps.db.update_command_status(
         cmd_history.id,
         "completed",
-        output=(
-            f"Steer failed ({steer_error}). " f"Auto-queued item #{queued_item.id}."
-        ),
+        output=(f"Steer failed ({steer_error}). " f"Auto-queued item #{queued_item.id}."),
     )
     await ensure_queue_processor(
         channel_id=channel_id,
@@ -421,6 +414,102 @@ async def _route_codex_message_to_active_turn_or_queue(
                     "text": (
                         ":inbox_tray: Active Codex run is busy and steering failed.\n"
                         f"Queued as item *#{queued_item.id}* in this session scope."
+                    ),
+                },
+            }
+        ],
+    )
+    return True
+
+
+async def _queue_structured_plan_message(
+    client,
+    deps,
+    session,
+    channel_id: str,
+    thread_ts: str | None,
+    prompt: str,
+    logger,
+) -> bool:
+    """Parse structured queue plan text and enqueue generated items when markers are present."""
+    if not contains_queue_plan_markers(prompt):
+        return False
+
+    try:
+        materialized_prompts = await materialize_queue_plan_text(
+            text=prompt,
+            working_directory=session.working_directory,
+        )
+    except QueuePlanError as e:
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"Invalid structured queue plan: {e}",
+            blocks=error_message(f"Invalid structured queue plan: {e}"),
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to parse structured queue plan: {e}")
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"Failed to process structured queue plan: {e}",
+            blocks=error_message(f"Failed to process structured queue plan: {e}"),
+        )
+        return True
+
+    try:
+        queue_entries = [
+            (item.prompt, item.working_directory_override) for item in materialized_prompts
+        ]
+        queued_items = await deps.db.add_many_to_queue(
+            session_id=session.id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            queue_entries=queue_entries,
+        )
+
+        running = await deps.db.get_running_queue_item(channel_id, thread_ts)
+        position_offset = 1 if running else 0
+        start_position = queued_items[0].position + position_offset
+        end_position = queued_items[-1].position + position_offset
+
+        await ensure_queue_processor(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            deps=deps,
+            client=client,
+            task_logger=logger,
+        )
+    except Exception as e:
+        logger.error(f"Failed to enqueue structured queue plan: {e}")
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"Failed to queue structured plan: {e}",
+            blocks=error_message(f"Failed to queue structured plan: {e}"),
+        )
+        return True
+
+    position_text = (
+        f"position #{start_position}"
+        if start_position == end_position
+        else f"positions #{start_position}-#{end_position}"
+    )
+    item_count = len(queued_items)
+
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=f"Queued {item_count} item(s) from structured plan.",
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f":inbox_tray: Queued *{item_count}* item(s) from structured plan "
+                        f"({position_text})."
                     ),
                 },
             }
@@ -501,9 +590,7 @@ async def _execute_codex_message(
 
         # Update command history after any question loops / plan execution.
         if result.success:
-            await deps.db.update_command_status(
-                cmd_history.id, "completed", result.output
-            )
+            await deps.db.update_command_status(cmd_history.id, "completed", result.output)
         else:
             await deps.db.update_command_status(
                 cmd_history.id, "failed", result.output, result.error
@@ -539,9 +626,7 @@ async def _execute_codex_message(
             streaming_state=streaming_state,
             session_id=str(session.id),
         )
-        await deps.db.update_command_status(
-            cmd_history.id, "cancelled", error_message="Cancelled"
-        )
+        await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
@@ -549,16 +634,12 @@ async def _execute_codex_message(
             blocks=error_message("Command was cancelled"),
         )
     except SlackApiError as e:
-        logger.error(
-            f"Slack API error executing Codex command: {e}\n{traceback.format_exc()}"
-        )
+        logger.error(f"Slack API error executing Codex command: {e}\n{traceback.format_exc()}")
         await _cleanup_streaming_state(
             streaming_state=streaming_state,
             session_id=str(session.id),
         )
-        await deps.db.update_command_status(
-            cmd_history.id, "failed", error_message=str(e)
-        )
+        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         try:
             await client.chat_postMessage(
                 channel=channel_id,
@@ -576,9 +657,7 @@ async def _execute_codex_message(
             streaming_state=streaming_state,
             session_id=str(session.id),
         )
-        await deps.db.update_command_status(
-            cmd_history.id, "failed", error_message=str(e)
-        )
+        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
@@ -721,9 +800,7 @@ async def main():
 
         normalized_prompt = prompt.strip().lower()
         if normalized_prompt == "/model" or normalized_prompt.startswith("/model "):
-            logger.info(
-                "Detected typed /model message; redirecting user to slash command handler"
-            )
+            logger.info("Detected typed /model message; redirecting user to slash command handler")
             await _handle_typed_model_command(
                 client=client,
                 channel_id=channel_id,
@@ -746,9 +823,7 @@ async def main():
                 f"Cancelled {cancelled_questions} pending question(s) for session {session.id} "
                 "due to new message"
             )
-        cancelled_plan_approvals = await PlanApprovalManager.cancel_for_session(
-            str(session.id)
-        )
+        cancelled_plan_approvals = await PlanApprovalManager.cancel_for_session(str(session.id))
         if cancelled_plan_approvals:
             logger.info(
                 f"Cancelled {cancelled_plan_approvals} pending plan approval(s) for session {session.id} "
@@ -757,9 +832,7 @@ async def main():
 
         # Validate working directory exists
         if not os.path.isdir(session.working_directory):
-            logger.error(
-                f"Working directory does not exist: {session.working_directory}"
-            )
+            logger.error(f"Working directory does not exist: {session.working_directory}")
             await client.chat_postMessage(
                 channel=channel_id,
                 thread_ts=thread_ts,
@@ -806,9 +879,7 @@ async def main():
 
                     # For images, show thumbnail in thread
                     if file_info.get("mimetype", "").startswith("image/"):
-                        thumb_url = file_info.get("thumb_360") or file_info.get(
-                            "thumb_160"
-                        )
+                        thumb_url = file_info.get("thumb_360") or file_info.get("thumb_160")
                         if thumb_url:
                             await client.chat_postMessage(
                                 channel=channel_id,
@@ -857,15 +928,25 @@ async def main():
 
         # Enhance prompt with uploaded file references
         if uploaded_files:
-            file_refs = "\n".join(
-                [f"- {f.filename} (at {f.local_path})" for f in uploaded_files]
-            )
+            file_refs = "\n".join([f"- {f.filename} (at {f.local_path})" for f in uploaded_files])
 
             if prompt:
                 prompt = f"{prompt}\n\nUploaded files:\n{file_refs}"
             else:
                 # No text, only files - provide default prompt
                 prompt = f"Please analyze these uploaded files:\n{file_refs}"
+
+        structured_message_queued = await _queue_structured_plan_message(
+            client=client,
+            deps=deps,
+            session=session,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            prompt=prompt,
+            logger=logger,
+        )
+        if structured_message_queued:
+            return
 
         # Determine which backend to use based on session model
         backend = get_backend_for_model(session.model)
@@ -956,14 +1037,12 @@ async def main():
                         if tool.name == "AskUserQuestion" and tool.result is None:
                             if tool.id not in state.tool_activities:
                                 # Create pending question when we first see the tool
-                                pending_question = (
-                                    await QuestionManager.create_pending_question(
-                                        session_id=str(session.id),
-                                        channel_id=channel_id,
-                                        thread_ts=thread_ts,
-                                        tool_use_id=tool.id,
-                                        tool_input=tool.input,
-                                    )
+                                pending_question = await QuestionManager.create_pending_question(
+                                    session_id=str(session.id),
+                                    channel_id=channel_id,
+                                    thread_ts=thread_ts,
+                                    tool_use_id=tool.id,
+                                    tool_input=tool.input,
                                 )
                                 logger.info(
                                     f"Detected AskUserQuestion tool, created pending question {pending_question.question_id}"
@@ -1019,22 +1098,14 @@ async def main():
 
             # Update session with Claude session ID for resume
             if result.session_id:
-                await deps.db.update_session_claude_id(
-                    channel_id, thread_ts, result.session_id
-                )
+                await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
             # Handle AskUserQuestion - loop to handle multiple questions
             question_count = 0
             max_questions = config.timeouts.execution.max_questions_per_conversation
-            while (
-                pending_question
-                and result.session_id
-                and question_count < max_questions
-            ):
+            while pending_question and result.session_id and question_count < max_questions:
                 question_count += 1
-                logger.info(
-                    "Claude asked a question, posting to Slack and waiting for response"
-                )
+                logger.info("Claude asked a question, posting to Slack and waiting for response")
 
                 # Update the main message to show Claude is waiting
                 try:
@@ -1072,12 +1143,8 @@ async def main():
 
                 if answers:
                     # User answered - format and send as follow-up to Claude
-                    answer_text = QuestionManager.format_answer_for_claude(
-                        pending_question
-                    )
-                    logger.info(
-                        f"User answered question, sending to Claude: {answer_text[:100]}"
-                    )
+                    answer_text = QuestionManager.format_answer_for_claude(pending_question)
+                    logger.info(f"User answered question, sending to Claude: {answer_text[:100]}")
 
                     # Reset pending_question before continuing - on_chunk may set a new one
                     pending_question = None
@@ -1140,8 +1207,7 @@ async def main():
                     # Question was cancelled - update message and break
                     logger.info("Question was cancelled")
                     result.output = (
-                        streaming_state.accumulated_output
-                        + "\n\n_Question was cancelled._"
+                        streaming_state.accumulated_output + "\n\n_Question was cancelled._"
                     )
                     result.success = False
                     break
@@ -1163,9 +1229,7 @@ async def main():
 
             # Update command history
             if result.success:
-                await deps.db.update_command_status(
-                    cmd_history.id, "completed", result.output
-                )
+                await deps.db.update_command_status(cmd_history.id, "completed", result.output)
             else:
                 await deps.db.update_command_status(
                     cmd_history.id, "failed", result.output, result.error
@@ -1186,9 +1250,7 @@ async def main():
                 plan_start_time = streaming_state.started_at
                 plan_override_path = None
                 plan_override_source = None
-                plan_override_regex = re.compile(
-                    r"(?im)^(?:Plan file|Created Plan):\s*(.+)$"
-                )
+                plan_override_regex = re.compile(r"(?im)^(?:Plan file|Created Plan):\s*(.+)$")
                 for source_label, source_text in (
                     ("Plan agent output", result.plan_subagent_result),
                     ("assistant output", result.output),
@@ -1271,22 +1333,16 @@ async def main():
                     )
                     fallback_dir = PLANS_DIR
                     os.makedirs(fallback_dir, exist_ok=True)
-                    fallback_name = (
-                        f"plan-session-{session.id}-fallback-{int(time.time())}.md"
-                    )
+                    fallback_name = f"plan-session-{session.id}-fallback-{int(time.time())}.md"
                     fallback_path = os.path.join(fallback_dir, fallback_name)
                     try:
                         with open(fallback_path, "w") as f:
                             f.write(result.plan_subagent_result)
                         plan_file_path = fallback_path
                         plan_content = result.plan_subagent_result
-                        logger.info(
-                            f"Saved Plan subagent output to fallback file {fallback_path}"
-                        )
+                        logger.info(f"Saved Plan subagent output to fallback file {fallback_path}")
                     except Exception as e:
-                        logger.warning(
-                            f"Failed to save Plan subagent output to file: {e}"
-                        )
+                        logger.warning(f"Failed to save Plan subagent output to file: {e}")
 
                 # If still no plan content, show error
                 if not plan_content:
@@ -1316,9 +1372,7 @@ async def main():
                             f"(mtime={mtime:.0f}, age={age:.1f}s)"
                         )
                     except OSError as e:
-                        logger.warning(
-                            f"Failed to stat selected plan file {plan_file_path}: {e}"
-                        )
+                        logger.warning(f"Failed to stat selected plan file {plan_file_path}: {e}")
 
                 # Request approval via Slack buttons and wait for response
                 approved = await PlanApprovalManager.request_approval(
@@ -1433,9 +1487,7 @@ async def main():
             logger.info("Command execution was cancelled")
             await _cleanup_streaming_state(
                 streaming_state=streaming_state,
-                pending_question_id=(
-                    pending_question.question_id if pending_question else None
-                ),
+                pending_question_id=(pending_question.question_id if pending_question else None),
             )
             await deps.db.update_command_status(
                 cmd_history.id, "cancelled", error_message="Cancelled"
@@ -1447,18 +1499,12 @@ async def main():
                 blocks=error_message("Command was cancelled"),
             )
         except SlackApiError as e:
-            logger.error(
-                f"Slack API error executing command: {e}\n{traceback.format_exc()}"
-            )
+            logger.error(f"Slack API error executing command: {e}\n{traceback.format_exc()}")
             await _cleanup_streaming_state(
                 streaming_state=streaming_state,
-                pending_question_id=(
-                    pending_question.question_id if pending_question else None
-                ),
+                pending_question_id=(pending_question.question_id if pending_question else None),
             )
-            await deps.db.update_command_status(
-                cmd_history.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             # Try to post a new error message instead of updating (in case update is failing)
             try:
                 await client.chat_postMessage(
@@ -1468,20 +1514,14 @@ async def main():
                     blocks=error_message(f"Slack API Error: {str(e)}"),
                 )
             except Exception as notify_error:
-                logger.error(
-                    f"Failed to post Slack API error notification: {notify_error}"
-                )
+                logger.error(f"Failed to post Slack API error notification: {notify_error}")
         except (OSError, IOError) as e:
             logger.error(f"I/O error executing command: {e}\n{traceback.format_exc()}")
             await _cleanup_streaming_state(
                 streaming_state=streaming_state,
-                pending_question_id=(
-                    pending_question.question_id if pending_question else None
-                ),
+                pending_question_id=(pending_question.question_id if pending_question else None),
             )
-            await deps.db.update_command_status(
-                cmd_history.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
@@ -1495,13 +1535,9 @@ async def main():
             )
             await _cleanup_streaming_state(
                 streaming_state=streaming_state,
-                pending_question_id=(
-                    pending_question.question_id if pending_question else None
-                ),
+                pending_question_id=(pending_question.question_id if pending_question else None),
             )
-            await deps.db.update_command_status(
-                cmd_history.id, "failed", error_message=str(e)
-            )
+            await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,

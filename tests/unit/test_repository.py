@@ -363,6 +363,20 @@ class TestQueueOperations:
         assert item.position == 1
 
     @pytest.mark.asyncio
+    async def test_add_to_queue_with_working_directory_override(self, db_repo):
+        """add_to_queue stores working_directory_override when provided."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        item = await db_repo.add_to_queue(
+            session.id,
+            "C123ABC",
+            None,
+            "run in worktree",
+            working_directory_override="/repo-worktrees/feature-x",
+        )
+
+        assert item.working_directory_override == "/repo-worktrees/feature-x"
+
+    @pytest.mark.asyncio
     async def test_add_to_queue_auto_position(self, db_repo):
         """add_to_queue auto-increments position."""
         session = await db_repo.get_or_create_session("C123ABC", None)
@@ -387,6 +401,40 @@ class TestQueueOperations:
 
         pending = await db_repo.get_pending_queue_items("C123ABC", None)
         assert [item.position for item in pending] == list(range(1, 21))
+
+    @pytest.mark.asyncio
+    async def test_add_many_to_queue_inserts_items_in_order(self, db_repo):
+        """add_many_to_queue inserts multiple items atomically with increasing positions."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        items = await db_repo.add_many_to_queue(
+            session_id=session.id,
+            channel_id="C123ABC",
+            thread_ts=None,
+            queue_entries=[
+                ("first", None),
+                ("second", "/repo-worktrees/feature-y"),
+                ("third", None),
+            ],
+        )
+
+        assert [item.prompt for item in items] == ["first", "second", "third"]
+        assert [item.position for item in items] == [1, 2, 3]
+        assert items[1].working_directory_override == "/repo-worktrees/feature-y"
+
+    @pytest.mark.asyncio
+    async def test_add_many_to_queue_respects_existing_positions(self, db_repo):
+        """add_many_to_queue appends after existing queue positions."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.add_to_queue(session.id, "C123ABC", None, "existing")
+
+        items = await db_repo.add_many_to_queue(
+            session_id=session.id,
+            channel_id="C123ABC",
+            thread_ts=None,
+            queue_entries=[("next-1", None), ("next-2", None)],
+        )
+
+        assert [item.position for item in items] == [2, 3]
 
     @pytest.mark.asyncio
     async def test_get_pending_queue_items(self, db_repo):

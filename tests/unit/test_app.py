@@ -10,6 +10,7 @@ import pytest
 from src.app import (
     _event_dedupe_key,
     _is_duplicate_event,
+    _queue_structured_plan_message,
     _strip_leading_slack_mention,
     _route_codex_message_to_active_turn_or_queue,
     configure_logging,
@@ -80,18 +81,9 @@ class TestEventHelpers:
         seen: dict[str, float] = {}
         event = {"channel": "C123", "ts": "111.222", "user": "U999"}
 
-        assert (
-            _is_duplicate_event(event, seen, now_monotonic=100.0, ttl_seconds=30.0)
-            is False
-        )
-        assert (
-            _is_duplicate_event(event, seen, now_monotonic=105.0, ttl_seconds=30.0)
-            is True
-        )
-        assert (
-            _is_duplicate_event(event, seen, now_monotonic=131.0, ttl_seconds=30.0)
-            is False
-        )
+        assert _is_duplicate_event(event, seen, now_monotonic=100.0, ttl_seconds=30.0) is False
+        assert _is_duplicate_event(event, seen, now_monotonic=105.0, ttl_seconds=30.0) is True
+        assert _is_duplicate_event(event, seen, now_monotonic=131.0, ttl_seconds=30.0) is False
 
 
 class TestCodexActiveTurnRouting:
@@ -105,9 +97,7 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(
-                        success=True, turn_id="turn-123", error=None
-                    )
+                    return_value=SimpleNamespace(success=True, turn_id="turn-123", error=None)
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -145,9 +135,7 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(
-                        success=False, turn_id=None, error="conflict"
-                    )
+                    return_value=SimpleNamespace(success=False, turn_id=None, error="conflict")
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -159,9 +147,7 @@ class TestCodexActiveTurnRouting:
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
 
-        with patch(
-            "src.app.ensure_queue_processor", new=AsyncMock()
-        ) as mock_ensure_queue:
+        with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure_queue:
             handled = await _route_codex_message_to_active_turn_or_queue(
                 client=client,
                 deps=deps,
@@ -190,9 +176,7 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(
-                        success=False, turn_id=None, error="busy"
-                    )
+                    return_value=SimpleNamespace(success=False, turn_id=None, error="busy")
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -221,7 +205,106 @@ class TestCodexActiveTurnRouting:
             output="Steer failed and queue fallback failed. steer_error=busy queue_error=db insert failed",
             error_message="db insert failed",
         )
-        deps.codex_executor.record_queue_fallback.assert_awaited_once_with(
-            success=False
-        )
+        deps.codex_executor.record_queue_fallback.assert_awaited_once_with(success=False)
         assert client.chat_postMessage.await_count >= 1
+
+
+class TestStructuredQueuePlanRouting:
+    """Tests for structured queue-plan message routing."""
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_no_queue_plan_markers(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        deps = SimpleNamespace(db=SimpleNamespace())
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        handled = await _queue_structured_plan_message(
+            client=client,
+            deps=deps,
+            session=session,
+            channel_id="C123",
+            thread_ts=None,
+            prompt="normal prompt text",
+            logger=MagicMock(),
+        )
+
+        assert handled is False
+        client.chat_postMessage.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_queues_structured_plan_message_items(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                add_many_to_queue=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(id=1, position=1),
+                        SimpleNamespace(id=2, position=2),
+                    ]
+                ),
+                get_running_queue_item=AsyncMock(return_value=None),
+            )
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.materialize_queue_plan_text",
+                new=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(prompt="first", working_directory_override=None),
+                        SimpleNamespace(
+                            prompt="second",
+                            working_directory_override="/repo-worktrees/feature-x",
+                        ),
+                    ]
+                ),
+            ):
+                with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+                    handled = await _queue_structured_plan_message(
+                        client=client,
+                        deps=deps,
+                        session=session,
+                        channel_id="C123",
+                        thread_ts="123.456",
+                        prompt="first\n***\nsecond",
+                        logger=MagicMock(),
+                    )
+
+        assert handled is True
+        deps.db.add_many_to_queue.assert_awaited_once_with(
+            session_id=1,
+            channel_id="C123",
+            thread_ts="123.456",
+            queue_entries=[("first", None), ("second", "/repo-worktrees/feature-x")],
+        )
+        mock_ensure.assert_awaited_once()
+        assert (
+            "Queued 2 item(s) from structured plan."
+            in client.chat_postMessage.await_args.kwargs["text"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_reports_invalid_structured_plan(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        deps = SimpleNamespace(db=SimpleNamespace())
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.materialize_queue_plan_text",
+                new=AsyncMock(side_effect=ValueError("bad marker")),
+            ):
+                handled = await _queue_structured_plan_message(
+                    client=client,
+                    deps=deps,
+                    session=session,
+                    channel_id="C123",
+                    thread_ts=None,
+                    prompt="***loop-0***",
+                    logger=MagicMock(),
+                )
+
+        assert handled is True
+        kwargs = client.chat_postMessage.await_args.kwargs
+        assert "Failed to process structured queue plan" in kwargs["text"]

@@ -88,6 +88,7 @@ async def execute_for_session(
     slack_client: Any = None,
     user_id: Optional[str] = None,
     logger: Any = None,
+    persist_session_ids: bool = True,
 ) -> CommandRouteResult:
     """Execute a prompt with the correct backend and persist resumed session IDs."""
     backend = resolve_backend_for_session(session)
@@ -108,6 +109,8 @@ async def execute_for_session(
 
         async def resolve_initial_resume_session_id() -> Optional[str]:
             """Fork inherited channel thread IDs when entering a new Slack thread scope."""
+            if not persist_session_ids:
+                return session.codex_session_id
             if thread_ts is None or session.codex_session_id is None:
                 return session.codex_session_id
 
@@ -142,8 +145,9 @@ async def execute_for_session(
                     )
                 return session.codex_session_id
 
-            await deps.db.update_session_codex_id(channel_id, thread_ts, forked_thread_id)
-            session.codex_session_id = forked_thread_id
+            if persist_session_ids:
+                await deps.db.update_session_codex_id(channel_id, thread_ts, forked_thread_id)
+                session.codex_session_id = forked_thread_id
             if logger:
                 logger.info(
                     f"Forked inherited Codex thread {channel_session.codex_session_id} "
@@ -245,7 +249,7 @@ async def execute_for_session(
                 channel_id=channel_id,
                 thread_ts=thread_ts,
             )
-            if result.session_id:
+            if result.session_id and persist_session_ids:
                 await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
             return result
 
@@ -316,6 +320,7 @@ async def execute_for_session(
     )
 
     if result.session_id:
-        await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
+        if persist_session_ids:
+            await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
 
     return CommandRouteResult(backend=backend, result=result)

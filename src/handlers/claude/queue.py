@@ -1,13 +1,21 @@
 """Queue command handlers: /q, /qc, /qv, /qclear, and /qr."""
 
 import asyncio
+from dataclasses import replace
+from pathlib import Path
 from typing import Optional
 
 from loguru import logger
 from slack_bolt.async_app import AsyncApp
 
 from src.config import config
+from src.git.service import GitService
 from src.tasks.manager import TaskManager
+from src.tasks.queue_plan import (
+    QueuePlanError,
+    contains_queue_plan_markers,
+    materialize_queue_plan_text,
+)
 from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.base import escape_markdown
 from src.utils.formatters.command import error_message
@@ -110,6 +118,7 @@ async def ensure_queue_processor(
 
 def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register queue command handlers."""
+    git_service = GitService()
 
     @app.command("/q")
     @slack_command(require_text=True, usage_hint="Usage: /q <prompt>")
@@ -121,33 +130,55 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             default_cwd=config.DEFAULT_WORKING_DIR,
         )
 
-        # Add to queue in this session scope.
-        await deps.db.add_to_queue(
+        queue_entries: list[tuple[str, Optional[str]]]
+        if contains_queue_plan_markers(ctx.text):
+            try:
+                materialized_prompts = await materialize_queue_plan_text(
+                    text=ctx.text,
+                    working_directory=session.working_directory,
+                    git_service=git_service,
+                )
+            except QueuePlanError as e:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text=f"Invalid structured queue plan: {e}",
+                    blocks=error_message(f"Invalid structured queue plan: {e}"),
+                )
+                return
+            queue_entries = [
+                (item.prompt, item.working_directory_override) for item in materialized_prompts
+            ]
+        else:
+            queue_entries = [(ctx.text, None)]
+
+        queued_items = await deps.db.add_many_to_queue(
             session_id=session.id,
             channel_id=ctx.channel_id,
             thread_ts=ctx.thread_ts,
-            prompt=ctx.text,
+            queue_entries=queue_entries,
         )
 
-        # Get current queue state for this scope.
-        pending = await deps.db.get_pending_queue_items(ctx.channel_id, ctx.thread_ts)
         running = await deps.db.get_running_queue_item(ctx.channel_id, ctx.thread_ts)
-
-        # Confirm to user.
-        position = len(pending)
-        if running:
-            position += 1  # Account for currently running item.
+        position_offset = 1 if running else 0
+        start_position = queued_items[0].position + position_offset
+        end_position = queued_items[-1].position + position_offset
+        item_count = len(queued_items)
+        if start_position == end_position:
+            position_text = f"position #{start_position}"
+        else:
+            position_text = f"positions #{start_position}-#{end_position}"
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             thread_ts=ctx.thread_ts,
-            text=f"Added to queue (position {position}): {ctx.text[:100]}...",
+            text=f"Added {item_count} item(s) to queue ({position_text}).",
             blocks=[
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f":inbox_tray: Added to queue (position #{position})\n"
+                        "text": f":inbox_tray: Added {item_count} item(s) to queue ({position_text})\n"
                         f"> {escape_markdown(ctx.text[:200])}"
                         f"{'...' if len(ctx.text) > 200 else ''}",
                     },
@@ -366,6 +397,7 @@ async def _process_queue(
     task_id = _queue_task_id(channel_id, thread_ts)
     running_item = None
     running_message_ts = None
+    override_resume_ids: dict[str, dict[str, str]] = {}
 
     try:
         while True:
@@ -421,10 +453,24 @@ async def _process_queue(
                         thread_ts=thread_ts,
                         default_cwd=config.DEFAULT_WORKING_DIR,
                     )
+                    effective_session = session
+                    persist_session_ids = True
+                    override_key: Optional[str] = None
+
+                    if item.working_directory_override:
+                        override_key = str(Path(item.working_directory_override).expanduser())
+                        resume_state = override_resume_ids.get(override_key, {})
+                        effective_session = replace(
+                            session,
+                            working_directory=item.working_directory_override,
+                            claude_session_id=resume_state.get("claude"),
+                            codex_session_id=resume_state.get("codex"),
+                        )
+                        persist_session_ids = False
 
                     route = await execute_for_session(
                         deps=deps,
-                        session=session,
+                        session=effective_session,
                         prompt=item.prompt,
                         channel_id=channel_id,
                         thread_ts=thread_ts,
@@ -432,8 +478,12 @@ async def _process_queue(
                         on_chunk=on_chunk,
                         slack_client=client,
                         logger=log,
+                        persist_session_ids=persist_session_ids,
                     )
                     result = route.result
+                    if override_key and result.session_id:
+                        backend_resume = override_resume_ids.setdefault(override_key, {})
+                        backend_resume[route.backend] = result.session_id
 
                     if result.success:
                         await deps.db.update_queue_item_status(

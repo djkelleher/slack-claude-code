@@ -349,6 +349,7 @@ class TestQueueItem:
             "C123",  # channel_id
             "123.456",  # thread_ts
             "analyze this code",  # prompt
+            "/repo-worktrees/feature-x",  # working_directory_override
             "running",  # status
             "partial output",  # output
             None,  # error_message
@@ -364,6 +365,7 @@ class TestQueueItem:
         assert item.id == 10
         assert item.thread_ts == "123.456"
         assert item.prompt == "analyze this code"
+        assert item.working_directory_override == "/repo-worktrees/feature-x"
         assert item.status == "running"
         assert item.position == 5
         assert item.started_at == datetime.fromisoformat("2024-01-15T10:31:00")

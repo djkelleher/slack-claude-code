@@ -155,6 +155,7 @@ class QueueItem:
     channel_id: str = ""
     thread_ts: Optional[str] = None
     prompt: str = ""
+    working_directory_override: Optional[str] = None
     status: str = "pending"  # pending, running, completed, failed, cancelled
     output: Optional[str] = None
     error_message: Optional[str] = None
@@ -166,7 +167,26 @@ class QueueItem:
 
     @classmethod
     def from_row(cls, row: tuple) -> "QueueItem":
-        # Handle schema evolution: queue_items.thread_ts was added after initial release.
+        # Handle schema evolution:
+        # - thread_ts added first
+        # - working_directory_override added later
+        if len(row) >= 14:
+            return cls(
+                id=row[0],
+                session_id=row[1],
+                channel_id=row[2],
+                thread_ts=row[3],
+                prompt=row[4],
+                working_directory_override=row[5],
+                status=row[6],
+                output=row[7],
+                error_message=row[8],
+                position=row[9],
+                message_ts=row[10],
+                created_at=(datetime.fromisoformat(row[11]) if row[11] else datetime.now()),
+                started_at=datetime.fromisoformat(row[12]) if row[12] else None,
+                completed_at=datetime.fromisoformat(row[13]) if row[13] else None,
+            )
         if len(row) >= 13:
             return cls(
                 id=row[0],
@@ -174,6 +194,7 @@ class QueueItem:
                 channel_id=row[2],
                 thread_ts=row[3],
                 prompt=row[4],
+                working_directory_override=None,
                 status=row[5],
                 output=row[6],
                 error_message=row[7],
@@ -189,6 +210,7 @@ class QueueItem:
             channel_id=row[2],
             thread_ts=None,
             prompt=row[3],
+            working_directory_override=None,
             status=row[4],
             output=row[5],
             error_message=row[6],

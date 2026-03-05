@@ -97,6 +97,77 @@ class TestCommandRouter:
         deps.db.update_session_claude_id.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_execute_for_session_claude_skips_id_persistence_when_disabled(self):
+        """When persist_session_ids=False, Claude session IDs should not be written to DB."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                get_or_create_session=AsyncMock(return_value=Session(codex_session_id=None)),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+        )
+        deps.executor.execute.return_value = SimpleNamespace(session_id="claude-new", success=True)
+
+        session = Session(
+            id=7, model="opus", working_directory="/tmp", claude_session_id="claude-old"
+        )
+
+        routed = await execute_for_session(
+            deps=deps,
+            session=session,
+            prompt="hello",
+            channel_id="C123",
+            thread_ts=None,
+            execution_id="exec-2a",
+            persist_session_ids=False,
+        )
+
+        assert routed.backend == "claude"
+        deps.db.update_session_claude_id.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_for_session_codex_skips_id_persistence_when_disabled(self):
+        """When persist_session_ids=False, Codex session IDs should not be written to DB."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                get_or_create_session=AsyncMock(return_value=Session(codex_session_id=None)),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+        )
+        deps.codex_executor.execute.return_value = SimpleNamespace(
+            session_id="codex-new",
+            success=True,
+            output="",
+        )
+
+        session = Session(
+            id=9,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+
+        routed = await execute_for_session(
+            deps=deps,
+            session=session,
+            prompt="hello",
+            channel_id="C123",
+            thread_ts="123.4",
+            execution_id="exec-2b",
+            persist_session_ids=False,
+        )
+
+        assert routed.backend == "codex"
+        deps.db.update_session_codex_id.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_execute_for_session_codex_without_executor(self):
         """Codex routing fails fast when no Codex executor is configured."""
         deps = SimpleNamespace(
