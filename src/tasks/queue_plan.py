@@ -180,7 +180,13 @@ def _parse_to_ast(text: str) -> list[_Node]:
             continue
 
         if marker_type == "branch_start":
-            stack.append(_Frame(kind="branch", start_line=line_number, branch_name=marker[1]))
+            branch_name = marker[1]
+            # Allow `***branch-x***` to act as a shorthand close marker
+            # when the matching branch block is currently open.
+            if current.kind == "branch" and current.branch_name == branch_name:
+                _close_frame(stack)
+            else:
+                stack.append(_Frame(kind="branch", start_line=line_number, branch_name=branch_name))
             continue
 
         if marker_type == "branch_end":

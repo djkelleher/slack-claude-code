@@ -186,6 +186,7 @@ Rules:
 - Markers must appear on their own line.
 - Blocks can be nested (`loop` inside `branch`, `branch` inside `loop`, etc.).
 - If a block reaches end-of-input, its `*-end` marker can be omitted.
+- For branches, repeating a matching marker also closes it (for example: open with `***branch-f1***`, close later with `***branch-f1***`).
 - Use `*-end` markers when you need to close a block before the end of the plan.
 - Branch blocks require your current session directory to be a git repo.
 - Missing branch worktrees are auto-created for that branch when needed.

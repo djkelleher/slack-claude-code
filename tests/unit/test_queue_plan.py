@@ -59,6 +59,43 @@ def test_parse_queue_plan_allows_nested_loop_and_branch() -> None:
     assert [item.branch_name for item in prompts] == [None, "feature/a", None, "feature/a"]
 
 
+def test_parse_queue_plan_allows_branch_marker_shorthand_close_inside_loop() -> None:
+    prompts = parse_queue_plan_text(
+        "***loop-2***\n"
+        "***branch-f1***\n"
+        "t1\n"
+        "***\n"
+        "t2\n"
+        "***branch-f1***\n"
+        "***branch-f2***\n"
+        "t3\n"
+        "***\n"
+        "t4\n"
+        "***branch-f2***\n"
+        "***loop-2-end***"
+    )
+    assert [item.prompt for item in prompts] == [
+        "t1",
+        "t2",
+        "t3",
+        "t4",
+        "t1",
+        "t2",
+        "t3",
+        "t4",
+    ]
+    assert [item.branch_name for item in prompts] == [
+        "f1",
+        "f1",
+        "f2",
+        "f2",
+        "f1",
+        "f1",
+        "f2",
+        "f2",
+    ]
+
+
 def test_parse_queue_plan_allows_unclosed_loop_block_at_eof() -> None:
     prompts = parse_queue_plan_text("***loop-2***\nrun")
     assert [item.prompt for item in prompts] == ["run", "run"]
