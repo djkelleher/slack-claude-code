@@ -59,9 +59,16 @@ def test_parse_queue_plan_allows_nested_loop_and_branch() -> None:
     assert [item.branch_name for item in prompts] == [None, "feature/a", None, "feature/a"]
 
 
-def test_parse_queue_plan_rejects_unclosed_block() -> None:
-    with pytest.raises(QueuePlanError, match="Unclosed block"):
-        parse_queue_plan_text("***loop-2***\nrun")
+def test_parse_queue_plan_allows_unclosed_loop_block_at_eof() -> None:
+    prompts = parse_queue_plan_text("***loop-2***\nrun")
+    assert [item.prompt for item in prompts] == ["run", "run"]
+    assert [item.branch_name for item in prompts] == [None, None]
+
+
+def test_parse_queue_plan_allows_unclosed_branch_block_at_eof() -> None:
+    prompts = parse_queue_plan_text("***branch-feature/a***\ninside")
+    assert [item.prompt for item in prompts] == ["inside"]
+    assert [item.branch_name for item in prompts] == ["feature/a"]
 
 
 def test_parse_queue_plan_rejects_mismatched_block_end() -> None:

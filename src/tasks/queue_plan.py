@@ -195,10 +195,7 @@ def _parse_to_ast(text: str) -> list[_Node]:
                     f"Line {line_number}: branch end `{branch_name}` does not match open "
                     f"branch `{current.branch_name}` from line {current.start_line}."
                 )
-            finished = stack.pop()
-            stack[-1].nodes.append(
-                _BranchNode(branch_name=finished.branch_name or "", children=finished.nodes)
-            )
+            _close_frame(stack)
             continue
 
         if marker_type == "loop_start":
@@ -217,24 +214,31 @@ def _parse_to_ast(text: str) -> list[_Node]:
                     f"Line {line_number}: loop end `{loop_count}` does not match open "
                     f"loop `{current.loop_count}` from line {current.start_line}."
                 )
-            finished = stack.pop()
-            stack[-1].nodes.append(
-                _LoopNode(count=finished.loop_count or 1, children=finished.nodes)
-            )
+            _close_frame(stack)
             continue
 
         raise QueuePlanError(f"Line {line_number}: unsupported queue-plan marker.")
 
     _flush_prompt(stack[-1])
-    if len(stack) != 1:
-        unclosed = stack[-1]
-        if unclosed.kind == "branch":
-            marker = f"***branch-{unclosed.branch_name}***"
-        else:
-            marker = f"***loop-{unclosed.loop_count}***"
-        raise QueuePlanError(f"Unclosed block `{marker}` started on line {unclosed.start_line}.")
+    # End markers are optional. Any still-open blocks are treated as running to EOF.
+    while len(stack) > 1:
+        _close_frame(stack)
 
     return stack[0].nodes
+
+
+def _close_frame(stack: list[_Frame]) -> None:
+    """Close the current non-root frame and append it to its parent."""
+    finished = stack.pop()
+    if finished.kind == "branch":
+        stack[-1].nodes.append(
+            _BranchNode(branch_name=finished.branch_name or "", children=finished.nodes)
+        )
+        return
+    if finished.kind == "loop":
+        stack[-1].nodes.append(_LoopNode(count=finished.loop_count or 1, children=finished.nodes))
+        return
+    raise QueuePlanError("Unsupported queue-plan frame type.")
 
 
 def _expand_nodes(
