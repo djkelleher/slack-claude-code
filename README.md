@@ -172,6 +172,48 @@ Queue scope follows session scope:
 - Channel messages use a channel-level queue
 - Thread messages use an isolated queue per thread
 
+#### Structured Queue DSL (Queues + Worktree + Loops)
+
+`/q` also supports a structured DSL so one command can enqueue many prompts.
+
+| Marker | Meaning |
+|--------|---------|
+| `***` | Prompt separator (split into multiple queue items) |
+| `***branch-<name>***` ... `***branch-<name>-end***` | Run enclosed prompts in worktree for branch `<name>` |
+| `***loop-<n>***` ... `***loop-<n>-end***` | Repeat enclosed prompts `n` times (`n >= 1`) |
+
+Rules:
+- Markers must appear on their own line.
+- Blocks can be nested (`loop` inside `branch`, `branch` inside `loop`, etc.).
+- Branch blocks require your current session directory to be a git repo.
+- Missing branch worktrees are auto-created for that branch when needed.
+- Expanded plans are capped at 500 queue items.
+
+Example:
+
+```text
+/q
+***loop-2***
+Run test suite and summarize failures
+***
+***branch-feature/auth***
+Implement auth middleware updates
+***
+Add/update auth tests and run them
+***branch-feature/auth-end***
+***loop-2-end***
+Write release notes summary
+```
+
+This expands to 7 queued items:
+1. `Run test suite and summarize failures`
+2. `Implement auth middleware updates` (in `feature/auth` worktree)
+3. `Add/update auth tests and run them` (in `feature/auth` worktree)
+4. `Run test suite and summarize failures`
+5. `Implement auth middleware updates` (in `feature/auth` worktree)
+6. `Add/update auth tests and run them` (in `feature/auth` worktree)
+7. `Write release notes summary`
+
 #### Jobs & Control
 Monitor and control long-running operations with real-time progress updates.
 
