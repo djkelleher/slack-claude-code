@@ -8,9 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.app import (
+    _application_data_dir,
     _event_dedupe_key,
     _extract_structured_queue_plan_from_uploaded_files,
     _is_duplicate_event,
+    _slack_uploads_dir,
     _queue_structured_plan_message,
     _route_codex_message_to_active_turn_or_queue,
     _strip_leading_slack_mention,
@@ -71,6 +73,15 @@ class TestConfigureLogging:
         assert file_sink_call.kwargs["rotation"] == "00:00"
 
         assert expected_log_path.parent.exists()
+
+    def test_slack_uploads_dir_lives_under_application_data_dir(self, tmp_path):
+        """Slack uploads should be stored under the app data directory."""
+        db_path = tmp_path / "data" / "slack_claude.db"
+        expected_data_dir = db_path.parent
+
+        with patch("src.app.config.DATABASE_PATH", str(db_path)):
+            assert _application_data_dir() == expected_data_dir
+            assert _slack_uploads_dir() == expected_data_dir / "slack_uploads"
 
 
 class TestEventHelpers:

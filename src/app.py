@@ -78,7 +78,7 @@ _TEXT_FILE_EXTENSIONS_FOR_QUEUE_PLAN = {
 
 def configure_logging() -> None:
     """Configure log sinks for stderr and data-directory log file."""
-    data_dir = Path(config.DATABASE_PATH).expanduser().resolve().parent
+    data_dir = _application_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     log_path = data_dir / "slack_claude.log"
 
@@ -94,6 +94,16 @@ def configure_logging() -> None:
         backtrace=False,
         diagnose=False,
     )
+
+
+def _application_data_dir() -> Path:
+    """Return the app's persistent data directory."""
+    return Path(config.DATABASE_PATH).expanduser().resolve().parent
+
+
+def _slack_uploads_dir() -> Path:
+    """Return the directory used for persisted Slack uploads."""
+    return _application_data_dir() / "slack_uploads"
 
 
 async def slack_api_with_retry(
@@ -921,9 +931,8 @@ async def main():
         if files:
             logger.info(f"Processing {len(files)} uploaded file(s)")
 
-            # Create .slack_uploads directory in session working directory
-            uploads_dir = os.path.join(session.working_directory, ".slack_uploads")
-            os.makedirs(uploads_dir, exist_ok=True)
+            uploads_dir = _slack_uploads_dir()
+            uploads_dir.mkdir(parents=True, exist_ok=True)
 
             for file_info in files:
                 try:
@@ -937,7 +946,7 @@ async def main():
                         client=client,
                         file_id=file_id,
                         slack_bot_token=config.SLACK_BOT_TOKEN,
-                        destination_dir=uploads_dir,
+                        destination_dir=str(uploads_dir),
                         max_size_bytes=config.MAX_FILE_SIZE_MB * 1024 * 1024,
                     )
 
