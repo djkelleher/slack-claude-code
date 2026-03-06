@@ -1,0 +1,29 @@
+"""Unit tests for streaming formatter blocks."""
+
+from src.utils.formatters.streaming import streaming_update
+
+
+def test_streaming_update_separates_status_and_prompt_for_complete() -> None:
+    """Completed updates should render status and prompt in separate lines."""
+    blocks = streaming_update(
+        prompt="Processing queue item 9: append the text fish to file /tmp/t.txt",
+        current_output="Done",
+        is_complete=True,
+    )
+
+    assert blocks[0]["type"] == "section"
+    assert blocks[0]["text"]["text"] == ":heavy_check_mark: Complete"
+    assert blocks[1]["type"] == "section"
+    assert blocks[1]["text"]["text"].startswith("> Processing queue item 9:")
+    assert "Complete Processing queue item" not in blocks[0]["text"]["text"]
+
+
+def test_streaming_update_separates_status_and_prompt_while_streaming() -> None:
+    """In-progress updates should keep status and prompt distinct."""
+    blocks = streaming_update(
+        prompt="Processing queue item 1: run unit tests",
+        current_output="partial output",
+    )
+
+    assert blocks[0]["text"]["text"] == ":arrows_counterclockwise: Streaming..."
+    assert blocks[1]["text"]["text"] == "> Processing queue item 1: run unit tests"

@@ -52,6 +52,8 @@ def streaming_update(
     list[dict]
         Slack blocks for the streaming message.
     """
+    prompt_preview = f"{escape_markdown(prompt[:100])}{'...' if len(prompt) > 100 else ''}"
+
     if is_complete:
         status = ":x: Failed" if is_error else ":heavy_check_mark: Complete"
     else:
@@ -62,13 +64,18 @@ def streaming_update(
 
     blocks = [
         {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"{status}\n> {escape_markdown(prompt[:100])}{'...' if len(prompt) > 100 else ''}",
-                }
-            ],
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": status,
+            },
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"> {prompt_preview}",
+            },
         },
         {"type": "divider"},
     ]
