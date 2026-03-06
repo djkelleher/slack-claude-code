@@ -13,6 +13,10 @@ _BRANCH_START_RE = re.compile(r"^\*\*\*branch-(.+)\*\*\*$")
 _BRANCH_END_RE = re.compile(r"^\*\*\*branch-(.+)-end\*\*\*$")
 _LOOP_START_RE = re.compile(r"^\*\*\*loop-(-?\d+)\*\*\*$")
 _LOOP_END_RE = re.compile(r"^\*\*\*loop-(-?\d+)-end\*\*\*$")
+_HASH_BRANCH_START_BODY_RE = re.compile(r"^branch-(.+)$")
+_HASH_BRANCH_END_BODY_RE = re.compile(r"^branch-(.+)-end$")
+_HASH_LOOP_START_BODY_RE = re.compile(r"^loop-(-?\d+)$")
+_HASH_LOOP_END_BODY_RE = re.compile(r"^loop-(-?\d+)-end$")
 
 
 class QueuePlanError(ValueError):
@@ -289,8 +293,12 @@ def _flush_prompt(frame: _Frame) -> None:
 
 
 def _parse_marker(line: str, strict: bool) -> tuple[str, str | int] | tuple[str] | None:
-    if line == "***":
+    if line in {"***", "###"}:
         return ("separator",)
+
+    hash_marker = _parse_hash_marker(line, strict=strict)
+    if hash_marker is not None:
+        return hash_marker
 
     loop_end = _LOOP_END_RE.match(line)
     if loop_end:
@@ -326,4 +334,53 @@ def _parse_marker(line: str, strict: bool) -> tuple[str, str | int] | tuple[str]
 
     if strict and _ANY_MARKER_RE.match(line):
         raise QueuePlanError(f"Unknown queue-plan marker: `{line}`")
+    return None
+
+
+def _parse_hash_marker(
+    line: str, strict: bool
+) -> tuple[str, str | int] | tuple[str] | None:
+    if not line.startswith("###"):
+        return None
+
+    body = line[3:]
+    if body.endswith("###"):
+        body = body[:-3]
+    body = body.strip()
+
+    loop_end = _HASH_LOOP_END_BODY_RE.match(body)
+    if loop_end:
+        count = int(loop_end.group(1))
+        if count < 1:
+            raise QueuePlanError(
+                f"Invalid loop count `{count}` in marker `{line}`. Loop counts must be >= 1."
+            )
+        return ("loop_end", count)
+
+    loop_start = _HASH_LOOP_START_BODY_RE.match(body)
+    if loop_start:
+        count = int(loop_start.group(1))
+        if count < 1:
+            raise QueuePlanError(
+                f"Invalid loop count `{count}` in marker `{line}`. Loop counts must be >= 1."
+            )
+        return ("loop_start", count)
+
+    branch_end = _HASH_BRANCH_END_BODY_RE.match(body)
+    if branch_end:
+        branch_name = branch_end.group(1).strip()
+        if not branch_name:
+            raise QueuePlanError("Branch end marker must include a branch name.")
+        return ("branch_end", branch_name)
+
+    branch_start = _HASH_BRANCH_START_BODY_RE.match(body)
+    if branch_start:
+        branch_name = branch_start.group(1).strip()
+        if not branch_name:
+            raise QueuePlanError("Branch marker must include a branch name.")
+        return ("branch_start", branch_name)
+
+    if strict and body.startswith(("loop-", "branch-")):
+        raise QueuePlanError(f"Unknown queue-plan marker: `{line}`")
+
     return None

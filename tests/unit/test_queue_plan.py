@@ -17,6 +17,7 @@ from src.tasks.queue_plan import (
 def test_contains_queue_plan_markers_detects_known_markers() -> None:
     assert contains_queue_plan_markers("first\n***\nsecond") is True
     assert contains_queue_plan_markers("***loop-2***\nrun\n***loop-2-end***") is True
+    assert contains_queue_plan_markers("###loop-2\nrun\n###loop-2-end") is True
     assert (
         contains_queue_plan_markers("***branch-feature/x***\nrun\n***branch-feature/x-end***")
         is True
@@ -44,6 +45,19 @@ def test_parse_queue_plan_branch_section_scopes_prompts() -> None:
 def test_parse_queue_plan_loop_expands_prompts() -> None:
     prompts = parse_queue_plan_text("***loop-3***\nrun once\n***loop-3-end***")
     assert [item.prompt for item in prompts] == ["run once", "run once", "run once"]
+
+
+def test_parse_queue_plan_hash_loop_markers_expand_prompts() -> None:
+    prompts = parse_queue_plan_text("###loop-2\nrun once\n###loop-2-end")
+    assert [item.prompt for item in prompts] == ["run once", "run once"]
+
+
+def test_parse_queue_plan_hash_wrapped_branch_markers_scope_prompts() -> None:
+    prompts = parse_queue_plan_text(
+        "###branch-feature/auth###\ninside worktree\n###\nagain\n###branch-feature/auth-end###"
+    )
+    assert [item.prompt for item in prompts] == ["inside worktree", "again"]
+    assert [item.branch_name for item in prompts] == ["feature/auth", "feature/auth"]
 
 
 def test_parse_queue_plan_allows_nested_loop_and_branch() -> None:
@@ -121,6 +135,11 @@ def test_parse_queue_plan_rejects_non_positive_loop_count() -> None:
 def test_parse_queue_plan_rejects_unknown_marker() -> None:
     with pytest.raises(QueuePlanError, match="Unknown queue-plan marker"):
         parse_queue_plan_text("first\n***\n***not-a-marker***\nsecond")
+
+
+def test_parse_queue_plan_rejects_unknown_hash_marker() -> None:
+    with pytest.raises(QueuePlanError, match="Unknown queue-plan marker"):
+        parse_queue_plan_text("###loop-two")
 
 
 def test_parse_queue_plan_enforces_expansion_cap() -> None:
