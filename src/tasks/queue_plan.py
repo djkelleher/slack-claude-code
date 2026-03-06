@@ -196,9 +196,10 @@ def _parse_to_ast(text: str) -> list[_Node]:
         if marker_type == "branch_end":
             branch_name = marker[1]
             if current.kind != "branch":
+                detail = _unexpected_block_close_detail(current)
                 raise QueuePlanError(
-                    f"Line {line_number}: found `***branch-{branch_name}-end***` "
-                    "without matching open branch block."
+                    f"Line {line_number}: found branch end marker for `{branch_name}` "
+                    f"without matching open branch block. {detail}"
                 )
             if current.branch_name != branch_name:
                 raise QueuePlanError(
@@ -215,9 +216,10 @@ def _parse_to_ast(text: str) -> list[_Node]:
         if marker_type == "loop_end":
             loop_count = marker[1]
             if current.kind != "loop":
+                detail = _unexpected_block_close_detail(current)
                 raise QueuePlanError(
-                    f"Line {line_number}: found `***loop-{loop_count}-end***` "
-                    "without matching open loop block."
+                    f"Line {line_number}: found loop end marker for `{loop_count}` "
+                    f"without matching open loop block. {detail}"
                 )
             if current.loop_count != loop_count:
                 raise QueuePlanError(
@@ -249,6 +251,26 @@ def _close_frame(stack: list[_Frame]) -> None:
         stack[-1].nodes.append(_LoopNode(count=finished.loop_count or 1, children=finished.nodes))
         return
     raise QueuePlanError("Unsupported queue-plan frame type.")
+
+
+def _unexpected_block_close_detail(current: _Frame) -> str:
+    """Describe what block is currently open and how to close it."""
+    if current.kind == "root":
+        return "No block is currently open."
+    if current.kind == "branch":
+        branch_name = current.branch_name or ""
+        return (
+            f"You are currently inside branch `{branch_name}` opened on line "
+            f"{current.start_line}. Close it first with `***branch-{branch_name}***` "
+            f"or `***branch-{branch_name}-end***`."
+        )
+    if current.kind == "loop":
+        loop_count = current.loop_count or 1
+        return (
+            f"You are currently inside loop `{loop_count}` opened on line "
+            f"{current.start_line}. Close it first with `***loop-{loop_count}-end***`."
+        )
+    return "A different block is currently open."
 
 
 def _expand_nodes(

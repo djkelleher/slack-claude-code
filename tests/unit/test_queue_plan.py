@@ -127,6 +127,16 @@ def test_parse_queue_plan_rejects_mismatched_block_end() -> None:
         parse_queue_plan_text("***branch-feature/a***\nrun\n***branch-feature/b-end***")
 
 
+def test_parse_queue_plan_reports_open_branch_when_loop_end_hits_branch_scope() -> None:
+    with pytest.raises(QueuePlanError, match="currently inside branch `f2`"):
+        parse_queue_plan_text(
+            "***loop-2***\n"
+            "***branch-f2***\n"
+            "run\n"
+            "***loop-2-end***"
+        )
+
+
 def test_parse_queue_plan_rejects_non_positive_loop_count() -> None:
     with pytest.raises(QueuePlanError, match="must be >= 1"):
         parse_queue_plan_text("***loop-0***\nrun\n***loop-0-end***")
