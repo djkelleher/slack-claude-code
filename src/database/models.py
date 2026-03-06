@@ -328,3 +328,31 @@ class NotificationSettings:
     def default(cls, channel_id: str) -> "NotificationSettings":
         """Return default settings for a channel (all notifications enabled)."""
         return cls(channel_id=channel_id)
+
+
+@dataclass
+class QueueControl:
+    """Per-scope queue execution state."""
+
+    id: Optional[int] = None
+    channel_id: str = ""
+    thread_ts: Optional[str] = None
+    state: str = "running"
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "QueueControl":
+        return cls(
+            id=row[0],
+            channel_id=row[1],
+            thread_ts=row[2],
+            state=row[3] or "running",
+            created_at=datetime.fromisoformat(row[4]) if row[4] else datetime.now(),
+            updated_at=datetime.fromisoformat(row[5]) if row[5] else datetime.now(),
+        )
+
+    @classmethod
+    def default(cls, channel_id: str, thread_ts: Optional[str]) -> "QueueControl":
+        """Return the default running state for a queue scope."""
+        return cls(channel_id=channel_id, thread_ts=thread_ts, state="running")

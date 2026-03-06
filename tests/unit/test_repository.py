@@ -604,6 +604,27 @@ class TestQueueOperations:
         assert len(thread_pending) == 1
         assert thread_pending[0].prompt == "thread item"
 
+    @pytest.mark.asyncio
+    async def test_get_queue_control_returns_running_default(self, db_repo):
+        """Queue control should default to running when unset."""
+        control = await db_repo.get_queue_control("C123ABC", None)
+
+        assert control.channel_id == "C123ABC"
+        assert control.thread_ts is None
+        assert control.state == "running"
+
+    @pytest.mark.asyncio
+    async def test_update_queue_control_state_persists_by_scope(self, db_repo):
+        """Queue control updates should persist and remain thread-scoped."""
+        await db_repo.update_queue_control_state("C123ABC", None, "paused")
+        await db_repo.update_queue_control_state("C123ABC", "123.456", "stopped")
+
+        channel_control = await db_repo.get_queue_control("C123ABC", None)
+        thread_control = await db_repo.get_queue_control("C123ABC", "123.456")
+
+        assert channel_control.state == "paused"
+        assert thread_control.state == "stopped"
+
 
 class TestParallelJobOperations:
     """Tests for parallel job operations."""

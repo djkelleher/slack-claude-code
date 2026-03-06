@@ -11,6 +11,7 @@ from .models import (
     GitCheckpoint,
     NotificationSettings,
     ParallelJob,
+    QueueControl,
     QueueItem,
     Session,
     UploadedFile,
@@ -783,9 +784,7 @@ class DatabaseRepository:
                     working_directory_override,
                     parallel_group_id,
                     parallel_limit,
-                ) in enumerate(
-                    normalized_entries, start=1
-                ):
+                ) in enumerate(normalized_entries, start=1):
                     cursor = await db.execute(
                         """INSERT INTO queue_items
                            (session_id, channel_id, thread_ts, prompt, working_directory_override,
@@ -985,6 +984,59 @@ class DatabaseRepository:
             )
             rows = await cursor.fetchall()
             return [QueueItem.from_row(row) for row in rows]
+
+    async def get_queue_control(self, channel_id: str, thread_ts: Optional[str]) -> QueueControl:
+        """Get queue execution control state for a scope."""
+        normalized_thread_ts = self._normalize_thread_ts(thread_ts)
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """SELECT id, channel_id, thread_ts, state, created_at, updated_at
+                   FROM queue_controls
+                   WHERE """
+                + self._QUEUE_SCOPE_WHERE
+                + """
+                   ORDER BY updated_at DESC, id DESC
+                   LIMIT 1""",
+                self._queue_scope_params(channel_id, normalized_thread_ts),
+            )
+            row = await cursor.fetchone()
+            if row:
+                return QueueControl.from_row(row)
+            return QueueControl.default(channel_id, normalized_thread_ts)
+
+    async def update_queue_control_state(
+        self, channel_id: str, thread_ts: Optional[str], state: str
+    ) -> QueueControl:
+        """Create or update queue execution control state for a scope."""
+        normalized_thread_ts = self._normalize_thread_ts(thread_ts)
+        async with self._transact() as db:
+            cursor = await db.execute(
+                """SELECT id FROM queue_controls
+                   WHERE """
+                + self._QUEUE_SCOPE_WHERE
+                + """
+                   ORDER BY updated_at DESC, id DESC
+                   LIMIT 1""",
+                self._queue_scope_params(channel_id, normalized_thread_ts),
+            )
+            row = await cursor.fetchone()
+
+            if row:
+                await db.execute(
+                    """UPDATE queue_controls
+                       SET state = ?, updated_at = CURRENT_TIMESTAMP
+                       WHERE """
+                    + self._QUEUE_SCOPE_WHERE,
+                    (state, *self._queue_scope_params(channel_id, normalized_thread_ts)),
+                )
+            else:
+                await db.execute(
+                    """INSERT INTO queue_controls (channel_id, thread_ts, state)
+                       VALUES (?, ?, ?)""",
+                    (channel_id, normalized_thread_ts, state),
+                )
+
+        return await self.get_queue_control(channel_id, normalized_thread_ts)
 
     # Uploaded file operations
     async def add_uploaded_file(

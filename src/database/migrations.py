@@ -110,6 +110,16 @@ CREATE TABLE IF NOT EXISTS notification_settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Queue execution controls per channel/thread scope
+CREATE TABLE IF NOT EXISTS queue_controls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
+    state TEXT DEFAULT 'running',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread ON sessions(channel_id, thread_ts);
@@ -127,6 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_uploaded_files_session ON uploaded_files(session_
 CREATE INDEX IF NOT EXISTS idx_git_checkpoints_channel ON git_checkpoints(channel_id);
 CREATE INDEX IF NOT EXISTS idx_git_checkpoints_session ON git_checkpoints(session_id);
 CREATE INDEX IF NOT EXISTS idx_notification_settings_channel ON notification_settings(channel_id);
+CREATE INDEX IF NOT EXISTS idx_queue_controls_scope ON queue_controls(channel_id, thread_ts);
 """
 
 
@@ -142,6 +153,17 @@ async def init_database(db_path: str) -> None:
 
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run any necessary migrations for schema updates."""
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS queue_controls (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               channel_id TEXT NOT NULL,
+               thread_ts TEXT DEFAULT NULL,
+               state TEXT DEFAULT 'running',
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+
     # Check if model column exists in sessions table
     cursor = await db.execute("PRAGMA table_info(sessions)")
     columns = await cursor.fetchall()
@@ -213,6 +235,12 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         "UPDATE queue_items SET parallel_group_id = NULL "
         "WHERE TRIM(COALESCE(parallel_group_id, '')) = ''"
     )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_queue_controls_scope ON queue_controls(channel_id, thread_ts)"
+    )
+    await db.execute(
+        "UPDATE queue_controls SET thread_ts = NULL WHERE TRIM(COALESCE(thread_ts, '')) = ''"
+    )
     await db.commit()
 
 
@@ -222,6 +250,7 @@ async def reset_database(db_path: str) -> None:
         await db.executescript(
             """
             DROP TABLE IF EXISTS notification_settings;
+            DROP TABLE IF EXISTS queue_controls;
             DROP TABLE IF EXISTS git_checkpoints;
             DROP TABLE IF EXISTS uploaded_files;
             DROP TABLE IF EXISTS queue_items;

@@ -41,6 +41,11 @@ def _queue_item(item_id: int, prompt: str, working_directory_override: str | Non
     )
 
 
+def _queue_control(state: str = "running"):
+    """Build a queue-control-like namespace for tests."""
+    return SimpleNamespace(state=state)
+
+
 @pytest.mark.asyncio
 async def test_process_queue_marks_failed_when_initial_notification_fails():
     """Queue item should fail instead of staying running if initial Slack post fails."""
@@ -50,6 +55,7 @@ async def test_process_queue_marks_failed_when_initial_notification_fails():
             get_pending_queue_items=AsyncMock(side_effect=[[item], []]),
             update_queue_item_status=AsyncMock(),
             get_or_create_session=AsyncMock(),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
@@ -82,6 +88,7 @@ async def test_process_queue_skips_item_if_it_is_removed_before_claim():
             get_pending_queue_items=AsyncMock(side_effect=[[item], []]),
             update_queue_item_status=AsyncMock(return_value=False),
             get_or_create_session=AsyncMock(),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
@@ -113,6 +120,7 @@ async def test_process_queue_completes_item_and_updates_message():
             get_pending_queue_items=AsyncMock(side_effect=[[item], []]),
             update_queue_item_status=AsyncMock(),
             get_or_create_session=AsyncMock(return_value=session),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
@@ -132,7 +140,13 @@ async def test_process_queue_completes_item_and_updates_message():
     assert deps.db.update_queue_item_status.await_args_list[0].args == (7, "running")
     assert deps.db.update_queue_item_status.await_args_list[1].args == (7, "completed")
     assert deps.db.update_queue_item_status.await_args_list[1].kwargs["output"] == "done"
-    assert client.chat_postMessage.await_args.kwargs["text"] == "Processing queue item 1: run tests"
+    assert (
+        client.chat_postMessage.await_args_list[0].kwargs["text"]
+        == "Processing queue item 1: run tests"
+    )
+    assert client.chat_postMessage.await_args_list[-1].kwargs["text"] == (
+        "Queue finished: processed 1 item(s) (1 completed)."
+    )
     client.chat_update.assert_awaited_once()
 
 
@@ -149,6 +163,7 @@ async def test_process_queue_completion_update_failure_keeps_completed_status():
             get_pending_queue_items=AsyncMock(side_effect=[[item], []]),
             update_queue_item_status=AsyncMock(),
             get_or_create_session=AsyncMock(return_value=session),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
@@ -166,7 +181,7 @@ async def test_process_queue_completion_update_failure_keeps_completed_status():
 
     statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "completed"]
-    assert client.chat_postMessage.await_count == 1
+    assert client.chat_postMessage.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -179,6 +194,7 @@ async def test_process_queue_failure_notification_error_does_not_crash_worker():
             get_pending_queue_items=AsyncMock(side_effect=[[item], []]),
             update_queue_item_status=AsyncMock(),
             get_or_create_session=AsyncMock(return_value=session),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
@@ -212,6 +228,7 @@ async def test_process_queue_streams_updates_during_execution():
             get_pending_queue_items=AsyncMock(side_effect=[[item], []]),
             update_queue_item_status=AsyncMock(),
             get_or_create_session=AsyncMock(return_value=session),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
@@ -249,6 +266,7 @@ async def test_process_queue_waits_for_active_codex_turn():
             get_pending_queue_items=AsyncMock(side_effect=[[item], []]),
             update_queue_item_status=AsyncMock(),
             get_or_create_session=AsyncMock(return_value=session),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=codex_executor,
     )
@@ -274,6 +292,7 @@ async def test_process_queue_recovers_from_transient_scope_error():
         db=SimpleNamespace(
             get_pending_queue_items=AsyncMock(side_effect=[Exception("db hiccup"), []]),
             update_queue_item_status=AsyncMock(),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
@@ -336,6 +355,7 @@ async def test_process_queue_cleans_scope_start_lock_on_exit():
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_pending_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
@@ -359,6 +379,7 @@ async def test_process_queue_cancelled_marks_running_item_cancelled():
             get_pending_queue_items=AsyncMock(side_effect=[[item]]),
             update_queue_item_status=AsyncMock(),
             get_or_create_session=AsyncMock(return_value=session),
+            get_queue_control=AsyncMock(side_effect=[_queue_control(), _queue_control("stopped")]),
         ),
         codex_executor=None,
     )
@@ -377,6 +398,47 @@ async def test_process_queue_cancelled_marks_running_item_cancelled():
     assert deps.db.update_queue_item_status.await_count == 2
     assert deps.db.update_queue_item_status.await_args_list[0].args == (9, "running")
     assert deps.db.update_queue_item_status.await_args_list[1].args == (9, "cancelled")
+
+
+@pytest.mark.asyncio
+async def test_process_queue_pause_stops_before_next_item():
+    """Paused queues should finish active work and leave later items pending."""
+    item1 = _queue_item(21, "first task")
+    item2 = _queue_item(22, "second task")
+    session = SimpleNamespace(id=1)
+    route_result = SimpleNamespace(result=SimpleNamespace(success=True, output="done", error=None))
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_pending_queue_items=AsyncMock(side_effect=[[item1], [item2], [item2]]),
+            update_queue_item_status=AsyncMock(),
+            get_or_create_session=AsyncMock(return_value=session),
+            get_queue_control=AsyncMock(
+                side_effect=[
+                    _queue_control(),
+                    _queue_control("paused"),
+                    _queue_control("paused"),
+                ]
+            ),
+        ),
+        codex_executor=None,
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.456"}),
+        chat_update=AsyncMock(),
+    )
+
+    with patch(
+        "src.handlers.claude.queue.execute_for_session",
+        new=AsyncMock(return_value=route_result),
+    ):
+        with patch("src.handlers.claude.queue.asyncio.sleep", new=AsyncMock()):
+            await _process_queue("C123", deps, client, MagicMock())
+
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
+    assert statuses == ["running", "completed"]
+    assert client.chat_postMessage.await_args_list[-1].kwargs["text"] == (
+        "Queue paused: processed 1 item(s) (1 completed). 1 item(s) remain queued."
+    )
 
 
 @pytest.mark.asyncio
@@ -402,6 +464,7 @@ async def test_qv_posts_queue_status():
         db=SimpleNamespace(
             get_pending_queue_items=AsyncMock(return_value=[]),
             get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         )
     )
     register_queue_commands(app, deps)
@@ -434,6 +497,7 @@ async def test_qc_view_subcommand_posts_queue_status():
         db=SimpleNamespace(
             get_pending_queue_items=AsyncMock(return_value=[]),
             get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         )
     )
     register_queue_commands(app, deps)
@@ -456,6 +520,106 @@ async def test_qc_view_subcommand_posts_queue_status():
     deps.db.get_running_queue_items.assert_awaited_once_with("C123", None)
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Queue status"
+
+
+@pytest.mark.asyncio
+async def test_qc_pause_updates_control_state():
+    """`/qc pause` should persist paused queue state."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_running_queue_items=AsyncMock(return_value=[SimpleNamespace(id=1)]),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/qc"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "pause",
+            "command": "/qc",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
+    assert client.chat_postMessage.await_args.kwargs["text"].startswith("Queue pause requested")
+
+
+@pytest.mark.asyncio
+async def test_qc_stop_cancels_running_processor():
+    """`/qc stop` should persist stopped state and cancel the worker."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_control_state=AsyncMock(return_value=_queue_control("stopped")),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/qc"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with patch(
+        "src.handlers.claude.queue.TaskManager.cancel", new=AsyncMock(return_value=True)
+    ) as mock_cancel:
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "stop",
+                "command": "/qc",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
+
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "stopped")
+    mock_cancel.assert_awaited_once_with(_queue_task_id("C123", None))
+    assert client.chat_postMessage.await_args.kwargs["text"] == "Queue stopped immediately."
+
+
+@pytest.mark.asyncio
+async def test_qc_resume_restarts_pending_queue():
+    """`/qc resume` should flip the queue back to running and restart processing."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
+            get_pending_queue_items=AsyncMock(
+                return_value=[SimpleNamespace(id=11), SimpleNamespace(id=12)]
+            ),
+            get_running_queue_items=AsyncMock(return_value=[]),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/qc"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "resume",
+                "command": "/qc",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
+
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "running")
+    mock_ensure.assert_awaited_once()
+    assert client.chat_postMessage.await_args.kwargs["text"] == (
+        "Queue resumed. 2 pending item(s) ready to run."
+    )
 
 
 @pytest.mark.asyncio
@@ -565,6 +729,7 @@ async def test_q_parses_structured_plan_and_queues_all_items():
                 ]
             ),
             get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         )
     )
     register_queue_commands(app, deps)
@@ -627,6 +792,39 @@ async def test_q_parses_structured_plan_and_queues_all_items():
 
 
 @pytest.mark.asyncio
+async def test_q_add_does_not_restart_when_queue_is_paused():
+    """`/q` should enqueue without auto-starting when the queue is paused."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control("paused")),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/q"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "queued later",
+                "command": "/q",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
+
+    mock_ensure.assert_not_awaited()
+    assert "Queue is paused" in client.chat_postMessage.await_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
 async def test_process_queue_uses_worktree_override_and_non_persistent_session_ids():
     """Worktree-scoped queue items should run with cwd override and in-memory resume IDs."""
     item1 = _queue_item(201, "task one", "/repo-worktrees/feature-x")
@@ -637,6 +835,7 @@ async def test_process_queue_uses_worktree_override_and_non_persistent_session_i
             get_pending_queue_items=AsyncMock(side_effect=[[item1], [item2], []]),
             update_queue_item_status=AsyncMock(),
             get_or_create_session=AsyncMock(return_value=session),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
@@ -712,6 +911,7 @@ async def test_process_queue_parallel_group_honors_width_and_uses_isolated_scope
             update_queue_item_status=AsyncMock(return_value=True),
             get_or_create_session=AsyncMock(return_value=session),
             get_command_history=AsyncMock(return_value=([], 0)),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
         codex_executor=None,
     )
