@@ -47,6 +47,7 @@ class TestModelDisplayName:
         assert model_display_name("claude-opus-4-6[1m]") == "Opus (1M context)"
         assert model_display_name("haiku") == "Haiku"
         assert model_display_name("gpt-5.3-codex") == "GPT-5.3 Codex"
+        assert model_display_name("gpt-5.4") == "GPT-5.4"
         assert model_display_name("gpt-5.3-codex-xhigh") == "GPT-5.3 Codex (Extra-High)"
 
     def test_unknown_model_display_name(self):
@@ -85,6 +86,7 @@ class TestCurrentModelNormalization:
     def test_normalize_current_model_lowercases_values(self):
         """Persisted values should normalize to lower-case IDs."""
         assert normalize_current_model("GPT-5.3-CODEX-HIGH") == "gpt-5.3-codex-high"
+        assert normalize_current_model("GPT-5.4") == "gpt-5.4"
 
 
 class TestBackendLabelForModel:
@@ -107,6 +109,7 @@ class TestModelOptionsCatalog:
         assert any(option["name"] == "default" for option in claude_options)
         assert any(option["name"] == "sonnet" for option in claude_options)
         assert any(option["name"] == "gpt-5.3-codex" for option in codex_options)
+        assert any(option["name"] == "gpt-5.4" for option in codex_options)
         assert any(option["name"] == "gpt-5.3-codex-xhigh" for option in codex_options)
 
     def test_get_all_model_options_combines_backends(self):
@@ -114,7 +117,13 @@ class TestModelOptionsCatalog:
         all_options = get_all_model_options()
         names = {option["name"] for option in all_options}
         assert "default" in names
+        assert "gpt-5.4-medium" in names
         assert "gpt-5.2-codex-high" in names
+
+    def test_normalizes_new_codex_frontier_model(self):
+        """New Codex model IDs should normalize directly."""
+        assert normalize_model_name("gpt-5.4") == "gpt-5.4"
+        assert normalize_model_name("gpt-5.4-high") == "gpt-5.4-high"
 
 
 class TestResolveModelSelectionAction:

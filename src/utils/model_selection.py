@@ -49,6 +49,7 @@ _CLAUDE_MODEL_ALIASES: dict[str, str | None] = {
 _CODEX_MODEL_ALIASES: dict[str, str] = {
     "codex": "gpt-5.3-codex",
     "gpt-5.3-codex": "gpt-5.3-codex",
+    "gpt-5.4": "gpt-5.4",
     "gpt-5.3-codex-spark": "gpt-5.3-codex-spark",
     "gpt-5.2-codex": "gpt-5.2-codex",
     "gpt-5.1-codex-max": "gpt-5.1-codex-max",
@@ -96,6 +97,12 @@ _CODEX_BASE_MODEL_OPTIONS: tuple[dict[str, str | None], ...] = (
         "name": "gpt-5.3-codex",
         "value": "gpt-5.3-codex",
         "display": "GPT-5.3 Codex",
+        "desc": "Latest frontier agentic coding model",
+    },
+    {
+        "name": "gpt-5.4",
+        "value": "gpt-5.4",
+        "display": "GPT-5.4",
         "desc": "Latest frontier agentic coding model",
     },
     {
