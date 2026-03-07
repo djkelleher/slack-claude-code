@@ -385,6 +385,88 @@ class TestCommandRouter:
         assert "turn2:item_1" in tool_ids
 
     @pytest.mark.asyncio
+    async def test_codex_plan_mode_can_swap_streaming_callback_after_approval(self):
+        """Approval hook should be able to move post-approval streaming to a new target."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock()),
+        )
+
+        initial_on_chunk = AsyncMock()
+        replacement_on_chunk = AsyncMock()
+        call_index = 0
+
+        async def _fake_codex_execute(**kwargs):
+            nonlocal call_index
+            call_index += 1
+            on_chunk = kwargs["on_chunk"]
+            await on_chunk(
+                SimpleNamespace(
+                    type="assistant",
+                    content="",
+                    tool_activities=[SimpleNamespace(id="item_1")],
+                )
+            )
+            if call_index == 1:
+                return SimpleNamespace(
+                    session_id="codex-new",
+                    success=True,
+                    output=(
+                        "# Implementation Plan\n"
+                        "1. Add a new streaming message after plan approval.\n"
+                        "2. Route post-approval tool activity to that message.\n"
+                        "3. Verify with a regression test.\n\n"
+                        "## Test Plan\n"
+                        "- Run command router unit tests.\n"
+                    ),
+                )
+            return SimpleNamespace(
+                session_id="codex-new",
+                success=True,
+                output="Implementation complete.",
+            )
+
+        deps.codex_executor.execute = AsyncMock(side_effect=_fake_codex_execute)
+
+        session = Session(
+            id=15,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            permission_mode="plan",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+
+        on_plan_approved = AsyncMock(return_value=replacement_on_chunk)
+
+        with patch(
+            "src.handlers.command_router.PlanApprovalManager.request_approval",
+            new=AsyncMock(return_value=True),
+        ):
+            await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="Ship this",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-6b",
+                on_chunk=initial_on_chunk,
+                slack_client=SimpleNamespace(),
+                user_id="U123",
+                on_plan_approved=on_plan_approved,
+            )
+
+        on_plan_approved.assert_awaited_once()
+        assert initial_on_chunk.await_count == 1
+        assert replacement_on_chunk.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_execute_for_session_codex_thread_forks_inherited_channel_thread(self):
         """Thread-scoped Codex sessions should fork inherited channel thread IDs."""
         deps = SimpleNamespace(

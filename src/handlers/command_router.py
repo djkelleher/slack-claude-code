@@ -90,6 +90,7 @@ async def execute_for_session(
     logger: Any = None,
     persist_session_ids: bool = True,
     session_scope_override: Optional[str] = None,
+    on_plan_approved: Any = None,
 ) -> CommandRouteResult:
     """Execute a prompt with the correct backend and persist resumed session IDs."""
     backend = resolve_backend_for_session(session)
@@ -291,6 +292,10 @@ async def execute_for_session(
                 tool_id_namespace = f"turn{codex_turn_index}:"
                 await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
                 session.permission_mode = config.DEFAULT_BYPASS_MODE
+                if on_plan_approved:
+                    replacement_on_chunk = await on_plan_approved()
+                    if replacement_on_chunk is not None:
+                        on_chunk = replacement_on_chunk
 
                 result = await run_codex_turn(
                     "Plan approved. Please proceed with the implementation.",

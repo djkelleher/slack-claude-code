@@ -309,12 +309,38 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             prompt=cmd.command,
             client=client,
             logger=logger,
+            track_tools=True,
             smart_concat=True,
         )
         streaming_state.start_heartbeat()
         on_chunk = create_streaming_callback(streaming_state)
 
         try:
+            async def on_plan_approved():
+                nonlocal message_ts, streaming_state
+                await streaming_state.finalize()
+
+                exec_response = await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text="Plan approved - executing...",
+                    blocks=processing_message(
+                        ":white_check_mark: *Plan approved!* Executing implementation..."
+                    ),
+                )
+                message_ts = exec_response["ts"]
+                streaming_state = StreamingMessageState(
+                    channel_id=channel_id,
+                    message_ts=message_ts,
+                    prompt="[Plan Execution]",
+                    client=client,
+                    logger=logger,
+                    track_tools=True,
+                    smart_concat=True,
+                )
+                streaming_state.start_heartbeat()
+                return create_streaming_callback(streaming_state)
+
             route = await execute_for_session(
                 deps=deps,
                 session=session,
@@ -326,6 +352,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 slack_client=client,
                 user_id=body.get("user", {}).get("id"),
                 logger=logger,
+                on_plan_approved=on_plan_approved,
             )
             result = route.result
 

@@ -277,6 +277,32 @@ async def _execute_queue_item(
         streaming_state.start_heartbeat()
         on_chunk = create_streaming_callback(streaming_state)
 
+        async def on_plan_approved():
+            nonlocal message_ts, streaming_state
+            if streaming_state is not None:
+                await streaming_state.finalize()
+
+            exec_response = await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f"{processing_log_line} (implementing approved plan)",
+                blocks=processing_message(
+                    ":white_check_mark: *Plan approved!* Executing implementation..."
+                ),
+            )
+            message_ts = exec_response["ts"]
+            streaming_state = StreamingMessageState(
+                channel_id=channel_id,
+                message_ts=message_ts,
+                prompt=processing_log_line,
+                client=client,
+                logger=log,
+                track_tools=True,
+                smart_concat=True,
+            )
+            streaming_state.start_heartbeat()
+            return create_streaming_callback(streaming_state)
+
         effective_session = base_session
         effective_prompt = item.prompt
         persist_session_ids = True
@@ -334,6 +360,7 @@ async def _execute_queue_item(
             logger=log,
             persist_session_ids=persist_session_ids,
             session_scope_override=session_scope_override,
+            on_plan_approved=on_plan_approved,
         )
         result = route.result
         if override_key and result.session_id:
