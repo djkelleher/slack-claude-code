@@ -81,6 +81,7 @@ class TestStreamingMessageState:
         assert state.accumulated_output == ""
         assert state.smart_concat is False
         assert state.track_tools is False
+        assert state.truncate_output is True
         assert state.tool_activities == {}
 
     def test_get_tool_list_empty(self):

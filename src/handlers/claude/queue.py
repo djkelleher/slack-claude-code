@@ -274,6 +274,7 @@ async def _execute_queue_item(
             logger=log,
             track_tools=True,
             smart_concat=True,
+            truncate_output=False,
         )
         streaming_state.start_heartbeat()
         on_chunk = create_streaming_callback(streaming_state)
@@ -300,6 +301,7 @@ async def _execute_queue_item(
                 logger=log,
                 track_tools=True,
                 smart_concat=True,
+                truncate_output=False,
             )
             streaming_state.start_heartbeat()
             return create_streaming_callback(streaming_state)

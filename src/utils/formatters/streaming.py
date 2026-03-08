@@ -29,6 +29,7 @@ def streaming_update(
     is_complete: bool = False,
     is_error: bool = False,
     max_tools_display: int = 8,
+    truncate_output: bool = True,
 ) -> list[dict]:
     """Format a streaming update message with tool activity.
 
@@ -46,6 +47,8 @@ def streaming_update(
         Whether the execution completed with an error.
     max_tools_display : int
         Maximum number of tools to show in the activity section.
+    truncate_output : bool
+        Whether to trim earlier output before splitting into Slack blocks.
 
     Returns
     -------
@@ -59,8 +62,8 @@ def streaming_update(
     else:
         status = ":arrows_counterclockwise: Streaming..."
 
-    # Truncate output if too long
-    current_output = truncate_from_start(current_output)
+    if truncate_output:
+        current_output = truncate_from_start(current_output)
 
     blocks = [
         {

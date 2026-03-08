@@ -58,6 +58,7 @@ class StreamingMessageState:
     _is_idle: bool = field(default=False)
     db_session_id: Optional[int] = None
     on_error: Optional[Callable[[str], Awaitable[None]]] = None
+    truncate_output: bool = True
     _consecutive_failures: int = field(default=0)
     _error_callback_triggered: bool = field(default=False)
     started_at: float = field(default_factory=time.time)
@@ -332,6 +333,7 @@ class StreamingMessageState:
                     self.prompt,
                     output,
                     tool_activities=tool_list,
+                    truncate_output=self.truncate_output,
                 ),
             )
             # Reset failure counter on success
@@ -384,6 +386,7 @@ class StreamingMessageState:
                     tool_activities=tool_list,
                     is_complete=True,
                     is_error=is_error,
+                    truncate_output=self.truncate_output,
                 ),
             )
         except Exception as e:

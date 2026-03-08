@@ -1,5 +1,6 @@
 """Unit tests for streaming formatter blocks."""
 
+from src.config import config
 from src.utils.formatters.streaming import streaming_update
 
 
@@ -27,3 +28,27 @@ def test_streaming_update_separates_status_and_prompt_while_streaming() -> None:
 
     assert blocks[0]["text"]["text"] == ":arrows_counterclockwise: Streaming..."
     assert blocks[1]["text"]["text"] == "> Processing queue item 1: run unit tests"
+
+
+def test_streaming_update_can_preserve_full_output() -> None:
+    """Formatter should keep earlier output when truncation is disabled."""
+    long_output = ("A" * config.SLACK_BLOCK_TEXT_LIMIT) + "\n" + ("B" * 200)
+
+    blocks = streaming_update(
+        prompt="Processing queue item 2: dump output",
+        current_output=long_output,
+        truncate_output=False,
+    )
+
+    rich_text_contents = [
+        element["text"]
+        for block in blocks
+        if block["type"] == "rich_text"
+        for element_group in block["elements"]
+        for element in element_group.get("elements", [])
+        if element.get("type") == "text"
+    ]
+    rendered_output = "".join(rich_text_contents)
+
+    assert rendered_output.replace("\n", " ") == long_output.replace("\n", " ")
+    assert "_... (earlier output truncated)_" not in rendered_output
