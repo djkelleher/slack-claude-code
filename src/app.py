@@ -39,6 +39,7 @@ from src.tasks.queue_plan import (
     QueuePlanError,
     contains_queue_plan_markers,
     materialize_queue_plan_text,
+    parse_queue_plan_submission,
 )
 from src.utils.execution_scope import build_session_scope
 from src.utils.file_downloader import (
@@ -516,8 +517,9 @@ async def _queue_structured_plan_message(
         return False
 
     try:
+        submission_options, plan_text = parse_queue_plan_submission(prompt)
         materialized_prompts = await materialize_queue_plan_text(
-            text=prompt,
+            text=plan_text,
             working_directory=session.working_directory,
         )
     except QueuePlanError as e:
@@ -553,6 +555,7 @@ async def _queue_structured_plan_message(
             channel_id=channel_id,
             thread_ts=thread_ts,
             queue_entries=queue_entries,
+            replace_pending=submission_options.replace_pending,
         )
 
         running = await deps.db.get_running_queue_items(channel_id, thread_ts)
@@ -587,15 +590,19 @@ async def _queue_structured_plan_message(
     await client.chat_postMessage(
         channel=channel_id,
         thread_ts=thread_ts,
-        text=f"Queued {item_count} item(s) from structured plan.",
+        text=(
+            f"{'Queued' if submission_options.replace_pending else 'Added'} {item_count} item(s) "
+            "from structured plan."
+        ),
         blocks=[
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        f":inbox_tray: Queued *{item_count}* item(s) from structured plan "
-                        f"({position_text})."
+                        f":inbox_tray: "
+                        f"{'Queued' if submission_options.replace_pending else 'Added'} "
+                        f"*{item_count}* item(s) from structured plan ({position_text})."
                     ),
                 },
             }

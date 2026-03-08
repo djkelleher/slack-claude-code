@@ -16,6 +16,7 @@ from src.tasks.queue_plan import (
     QueuePlanError,
     contains_queue_plan_markers,
     materialize_queue_plan_text,
+    parse_queue_plan_submission,
 )
 from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.base import escape_markdown
@@ -541,10 +542,13 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
 
         queue_entries: list[tuple[str, Optional[str], Optional[str], Optional[int]]]
+        replace_pending = False
         if contains_queue_plan_markers(ctx.text):
             try:
+                submission_options, plan_text = parse_queue_plan_submission(ctx.text)
+                replace_pending = submission_options.replace_pending
                 materialized_prompts = await materialize_queue_plan_text(
-                    text=ctx.text,
+                    text=plan_text,
                     working_directory=session.working_directory,
                     git_service=git_service,
                 )
@@ -573,6 +577,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             channel_id=ctx.channel_id,
             thread_ts=ctx.thread_ts,
             queue_entries=queue_entries,
+            replace_pending=replace_pending,
         )
 
         running_items = await deps.db.get_running_queue_items(ctx.channel_id, ctx.thread_ts)
@@ -586,7 +591,8 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             position_text = f"positions #{start_position}-#{end_position}"
         queue_state = await _get_queue_state(deps, ctx.channel_id, ctx.thread_ts)
         paused_notice = _queue_state_notice(queue_state)
-        confirmation_text = f"Added {item_count} item(s) to queue ({position_text})."
+        action_verb = "Queued" if replace_pending else "Added"
+        confirmation_text = f"{action_verb} {item_count} item(s) to queue ({position_text})."
         if paused_notice:
             confirmation_text = f"{confirmation_text} {paused_notice}"
 
@@ -599,7 +605,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f":inbox_tray: Added {item_count} item(s) to queue ({position_text})\n"
+                        "text": f":inbox_tray: {action_verb} {item_count} item(s) to queue ({position_text})\n"
                         f"> {escape_markdown(ctx.text[:200])}"
                         f"{'...' if len(ctx.text) > 200 else ''}",
                     },

@@ -736,6 +736,7 @@ class DatabaseRepository:
         channel_id: str,
         thread_ts: Optional[str],
         queue_entries: list[tuple[str, Optional[str], Optional[str], Optional[int]]],
+        replace_pending: bool = False,
     ) -> list[QueueItem]:
         """Add multiple commands to the FIFO queue atomically.
 
@@ -750,6 +751,8 @@ class DatabaseRepository:
         queue_entries : list[tuple[str, Optional[str], Optional[str], Optional[int]]]
             Sequence of (prompt, working_directory_override, parallel_group_id,
             parallel_limit) entries in queue order.
+        replace_pending : bool
+            When True, replace pending items in the current scope before inserting.
         """
         if not queue_entries:
             return []
@@ -770,12 +773,28 @@ class DatabaseRepository:
             try:
                 await db.execute("BEGIN IMMEDIATE")
 
-                cursor = await db.execute(
-                    """SELECT COALESCE(MAX(position), 0)
-                       FROM queue_items WHERE """
-                    + self._QUEUE_SCOPE_WHERE,
-                    self._queue_scope_params(channel_id, normalized_thread_ts),
-                )
+                scope_params = self._queue_scope_params(channel_id, normalized_thread_ts)
+                if replace_pending:
+                    await db.execute(
+                        "DELETE FROM queue_items WHERE "
+                        + self._QUEUE_SCOPE_WHERE
+                        + " AND status = 'pending'",
+                        scope_params,
+                    )
+                    cursor = await db.execute(
+                        """SELECT COALESCE(MAX(position), 0)
+                           FROM queue_items WHERE """
+                        + self._QUEUE_SCOPE_WHERE
+                        + " AND status = 'running'",
+                        scope_params,
+                    )
+                else:
+                    cursor = await db.execute(
+                        """SELECT COALESCE(MAX(position), 0)
+                           FROM queue_items WHERE """
+                        + self._QUEUE_SCOPE_WHERE,
+                        scope_params,
+                    )
                 base_position = (await cursor.fetchone())[0]
 
                 created_item_ids: list[int] = []

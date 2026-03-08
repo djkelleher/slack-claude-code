@@ -454,6 +454,26 @@ class TestQueueOperations:
         assert [item.position for item in items] == [2, 3]
 
     @pytest.mark.asyncio
+    async def test_add_many_to_queue_can_replace_pending_scope_items(self, db_repo):
+        """replace_pending clears pending scope items before inserting a new queue."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        first = await db_repo.add_to_queue(session.id, "C123ABC", None, "existing-running")
+        await db_repo.update_queue_item_status(first.id, "running")
+        await db_repo.add_to_queue(session.id, "C123ABC", None, "stale-pending")
+
+        items = await db_repo.add_many_to_queue(
+            session_id=session.id,
+            channel_id="C123ABC",
+            thread_ts=None,
+            queue_entries=[("fresh-1", None, None, None), ("fresh-2", None, None, None)],
+            replace_pending=True,
+        )
+
+        pending = await db_repo.get_pending_queue_items("C123ABC", None)
+        assert [item.prompt for item in pending] == ["fresh-1", "fresh-2"]
+        assert [item.position for item in items] == [2, 3]
+
+    @pytest.mark.asyncio
     async def test_get_pending_queue_items(self, db_repo):
         """get_pending_queue_items returns pending items in order."""
         session = await db_repo.get_or_create_session("C123ABC", None)

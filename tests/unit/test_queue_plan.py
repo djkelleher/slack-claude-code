@@ -10,6 +10,7 @@ from src.tasks.queue_plan import (
     contains_queue_plan_markers,
     materialize_queue_plan_prompts,
     materialize_queue_plan_text,
+    parse_queue_plan_submission,
     parse_queue_plan_text,
 )
 
@@ -154,6 +155,23 @@ def test_parse_queue_plan_rejects_unknown_marker() -> None:
 def test_parse_queue_plan_enforces_expansion_cap() -> None:
     with pytest.raises(QueuePlanError, match="more than 3 items"):
         parse_queue_plan_text("***loop-4\nrun\n***loop-4-end", max_expanded_items=3)
+
+
+def test_parse_queue_plan_submission_defaults_to_replace_pending() -> None:
+    options, body = parse_queue_plan_submission("first task\n***\nsecond task")
+    assert options.replace_pending is True
+    assert body == "first task\n***\nsecond task"
+
+
+def test_parse_queue_plan_submission_supports_append_directive() -> None:
+    options, body = parse_queue_plan_submission("***queue-append\nfirst task\n***\nsecond task")
+    assert options.replace_pending is False
+    assert body == "first task\n***\nsecond task"
+
+
+def test_parse_queue_plan_submission_rejects_conflicting_directives() -> None:
+    with pytest.raises(QueuePlanError, match="directives conflict"):
+        parse_queue_plan_submission("***queue-append\n***queue-new\nfirst task")
 
 
 @pytest.mark.asyncio

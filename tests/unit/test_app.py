@@ -364,11 +364,57 @@ class TestStructuredQueuePlanRouting:
                 ("first", None, None, None),
                 ("second", "/repo-worktrees/feature-x", None, None),
             ],
+            replace_pending=True,
         )
         mock_ensure.assert_awaited_once()
         assert (
             "Queued 2 item(s) from structured plan."
             in client.chat_postMessage.await_args.kwargs["text"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_appended_structured_plan_message_keeps_pending_queue_when_directed(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=3)]),
+                get_running_queue_items=AsyncMock(return_value=[]),
+            )
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.materialize_queue_plan_text",
+                new=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(
+                            prompt="next",
+                            working_directory_override=None,
+                            parallel_group_id=None,
+                            parallel_limit=None,
+                        )
+                    ]
+                ),
+            ):
+                with patch("src.app.ensure_queue_processor", new=AsyncMock()):
+                    handled = await _queue_structured_plan_message(
+                        client=client,
+                        deps=deps,
+                        session=session,
+                        channel_id="C123",
+                        thread_ts="123.456",
+                        prompt="***queue-append\nnext",
+                        logger=MagicMock(),
+                    )
+
+        assert handled is True
+        deps.db.add_many_to_queue.assert_awaited_once_with(
+            session_id=1,
+            channel_id="C123",
+            thread_ts="123.456",
+            queue_entries=[("next", None, None, None)],
+            replace_pending=False,
         )
 
     @pytest.mark.asyncio

@@ -786,9 +786,63 @@ async def test_q_parses_structured_plan_and_queues_all_items():
             ("second", "/repo-worktrees/feature", None, None),
             ("third", None, None, None),
         ],
+        replace_pending=True,
     )
-    assert "Added 3 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
+    assert "Queued 3 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
     mock_ensure.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_q_add_structured_plan_can_append_with_explicit_directive():
+    """Structured `/q` submissions can opt into append semantics."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=4, position=4)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/q"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
+        with patch(
+            "src.handlers.claude.queue.materialize_queue_plan_text",
+            new=AsyncMock(
+                return_value=[
+                    SimpleNamespace(
+                        prompt="next",
+                        working_directory_override=None,
+                        parallel_group_id=None,
+                        parallel_limit=None,
+                    )
+                ]
+            ),
+        ):
+            with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
+                await handler(
+                    ack=AsyncMock(),
+                    command={
+                        "channel_id": "C123",
+                        "user_id": "U123",
+                        "text": "***queue-append\nnext",
+                        "command": "/q",
+                    },
+                    client=client,
+                    logger=MagicMock(),
+                )
+
+    deps.db.add_many_to_queue.assert_awaited_once_with(
+        session_id=1,
+        channel_id="C123",
+        thread_ts=None,
+        queue_entries=[("next", None, None, None)],
+        replace_pending=False,
+    )
+    assert "Added 1 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
 
 
 @pytest.mark.asyncio

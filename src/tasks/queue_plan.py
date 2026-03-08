@@ -15,6 +15,7 @@ _LOOP_START_RE = re.compile(r"^\*\*\*loop-(-?\d+)$")
 _LOOP_END_RE = re.compile(r"^\*\*\*loop-(-?\d+)-end$")
 _PARALLEL_START_RE = re.compile(r"^\*\*\*parallel(?:-(-?\d+))?$")
 _PARALLEL_END_RE = re.compile(r"^\*\*\*parallel-end$")
+_QUEUE_SUBMISSION_DIRECTIVE_RE = re.compile(r"^\*\*\*queue-(append|new|replace)$")
 
 
 class QueuePlanError(ValueError):
@@ -39,6 +40,13 @@ class MaterializedQueuePlanPrompt:
     working_directory_override: Optional[str] = None
     parallel_group_id: Optional[str] = None
     parallel_limit: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class QueuePlanSubmissionOptions:
+    """Submission-time queue behavior for a structured queue plan."""
+
+    replace_pending: bool = True
 
 
 @dataclass
@@ -117,6 +125,43 @@ def parse_queue_plan_text(
     if not expanded:
         raise QueuePlanError("No prompts found in structured queue plan.")
     return expanded
+
+
+def parse_queue_plan_submission(text: str) -> tuple[QueuePlanSubmissionOptions, str]:
+    """Extract top-level queue submission directives from queue-plan text.
+
+    Supported directives must appear before the first non-empty, non-directive line:
+    - ``***queue-new`` or ``***queue-replace``: replace pending items in scope
+    - ``***queue-append``: append to the current pending queue
+    """
+    replace_pending = True
+    seen_directive: str | None = None
+    body_start_index = 0
+    lines = text.splitlines()
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            body_start_index = index + 1
+            continue
+
+        directive_match = _QUEUE_SUBMISSION_DIRECTIVE_RE.match(stripped)
+        if directive_match:
+            directive = directive_match.group(1)
+            if seen_directive is not None and seen_directive != directive:
+                raise QueuePlanError(
+                    "Queue submission directives conflict. Use only one of "
+                    "`***queue-append`, `***queue-new`, or `***queue-replace`."
+                )
+            seen_directive = directive
+            replace_pending = directive != "append"
+            body_start_index = index + 1
+            continue
+
+        break
+
+    remaining_text = "\n".join(lines[body_start_index:])
+    return QueuePlanSubmissionOptions(replace_pending=replace_pending), remaining_text
 
 
 async def materialize_queue_plan_text(
