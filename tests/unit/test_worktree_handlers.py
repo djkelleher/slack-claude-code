@@ -247,6 +247,24 @@ async def test_handle_switch_supports_path_target():
 
 
 @pytest.mark.asyncio
+async def test_handle_switch_supports_relative_path_target_from_session_cwd():
+    ctx = _ctx()
+    session = Session(working_directory="/repo/services/api", codex_session_id=None)
+    deps = _deps_for_session(session)
+    git_service = SimpleNamespace(
+        list_worktrees=AsyncMock(
+            return_value=[Worktree(path="/repo/services/feature-x", branch="feature-x")]
+        )
+    )
+
+    await _handle_switch(ctx, deps, session, git_service, "../feature-x")
+
+    deps.db.update_session_cwd.assert_awaited_once_with(
+        "C123", "123.456", "/repo/services/feature-x"
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_switch_reports_missing_worktree():
     ctx = _ctx()
     session = Session(working_directory="/repo")

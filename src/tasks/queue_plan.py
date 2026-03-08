@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from src.git.service import GitError, GitService
@@ -208,6 +209,11 @@ async def materialize_queue_plan_prompts(
     except GitError as e:
         raise QueuePlanError(f"Failed to list worktrees: {e}") from e
 
+    current_worktree_path = _find_containing_worktree_path(working_directory, worktrees)
+    if current_worktree_path is None:
+        current_worktree_path = str(Path(working_directory).resolve())
+    current_subdirectory = _relative_subdirectory(working_directory, current_worktree_path)
+
     worktree_paths_by_branch: dict[str, str] = {
         worktree.branch: worktree.path for worktree in worktrees if worktree.branch
     }
@@ -230,7 +236,11 @@ async def materialize_queue_plan_prompts(
         MaterializedQueuePlanPrompt(
             prompt=item.prompt,
             working_directory_override=(
-                worktree_paths_by_branch[item.branch_name] if item.branch_name else None
+                _join_worktree_subdirectory(
+                    worktree_paths_by_branch[item.branch_name], current_subdirectory
+                )
+                if item.branch_name
+                else None
             ),
             parallel_group_id=item.parallel_group_id,
             parallel_limit=item.parallel_limit,
@@ -518,3 +528,35 @@ def _parse_parallel_marker_value(
             f"Invalid parallel width `{limit}` in marker `{line}`. Width must be >= 1."
         )
     return "parallel_start", limit
+
+
+def _find_containing_worktree_path(working_directory: str, worktrees: list) -> Optional[str]:
+    """Return the worktree root containing the current working directory."""
+    cwd_path = Path(working_directory).resolve()
+    containing_paths = []
+    for worktree in worktrees:
+        worktree_path = Path(worktree.path).resolve()
+        try:
+            cwd_path.relative_to(worktree_path)
+        except ValueError:
+            continue
+        containing_paths.append(worktree_path)
+
+    if not containing_paths:
+        return None
+    return str(max(containing_paths, key=lambda path: len(path.parts)))
+
+
+def _relative_subdirectory(working_directory: str, worktree_path: str) -> Path:
+    """Return cwd relative to its containing worktree root."""
+    cwd_path = Path(working_directory).resolve()
+    worktree_root = Path(worktree_path).resolve()
+    return cwd_path.relative_to(worktree_root)
+
+
+def _join_worktree_subdirectory(worktree_path: str, subdirectory: Path) -> str:
+    """Append a relative session subdirectory to a target worktree root."""
+    target_root = Path(worktree_path).resolve()
+    if subdirectory == Path("."):
+        return str(target_root)
+    return str(target_root / subdirectory)

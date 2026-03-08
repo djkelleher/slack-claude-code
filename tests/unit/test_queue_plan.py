@@ -217,6 +217,29 @@ async def test_materialize_queue_plan_resolves_existing_worktree() -> None:
 
 
 @pytest.mark.asyncio
+async def test_materialize_queue_plan_preserves_session_subdirectory_in_worktree() -> None:
+    git_service = SimpleNamespace(
+        validate_git_repo=AsyncMock(return_value=True),
+        list_worktrees=AsyncMock(
+            return_value=[
+                SimpleNamespace(branch="main", path="/repo"),
+                SimpleNamespace(branch="feature/auth", path="/repo-worktrees/feature/auth"),
+            ]
+        ),
+        add_worktree=AsyncMock(),
+    )
+
+    materialized = await materialize_queue_plan_text(
+        text="***branch-feature/auth\nrun\n***branch-feature/auth-end",
+        working_directory="/repo/services/api",
+        git_service=git_service,
+    )
+
+    assert materialized[0].working_directory_override == "/repo-worktrees/feature/auth/services/api"
+    git_service.add_worktree.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_materialize_queue_plan_creates_missing_worktree() -> None:
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
@@ -269,6 +292,24 @@ async def test_materialize_queue_plan_prompts_applies_branch_path_mapping() -> N
         "/repo-worktrees/feature/a",
         None,
     ]
+
+
+@pytest.mark.asyncio
+async def test_materialize_queue_plan_preserves_subdirectory_for_new_worktree() -> None:
+    prompts = parse_queue_plan_text("***branch-feature/a\nfirst\n***branch-feature/a-end")
+    git_service = SimpleNamespace(
+        validate_git_repo=AsyncMock(return_value=True),
+        list_worktrees=AsyncMock(return_value=[SimpleNamespace(branch="main", path="/repo")]),
+        add_worktree=AsyncMock(return_value="/repo-worktrees/feature/a"),
+    )
+
+    materialized = await materialize_queue_plan_prompts(
+        expanded=prompts,
+        working_directory="/repo/services/api",
+        git_service=git_service,
+    )
+
+    assert materialized[0].working_directory_override == "/repo-worktrees/feature/a/services/api"
 
 
 @pytest.mark.asyncio

@@ -29,13 +29,23 @@ def find_current_worktree(session_cwd: str, worktrees: list[Worktree]) -> Option
     return None
 
 
-def find_worktree_by_target(target: str, worktrees: list[Worktree]) -> Optional[Worktree]:
-    """Find a worktree by branch first, then by absolute path."""
+def find_worktree_by_target(
+    target: str,
+    worktrees: list[Worktree],
+    current_directory: Optional[str] = None,
+) -> Optional[Worktree]:
+    """Find a worktree by branch first, then by path.
+
+    Relative path targets are resolved from the current session directory.
+    """
     for worktree in worktrees:
         if worktree.branch == target:
             return worktree
 
-    target_path = Path(target).expanduser().resolve()
+    target_path = Path(target).expanduser()
+    if not target_path.is_absolute() and current_directory:
+        target_path = Path(current_directory).expanduser() / target_path
+    target_path = target_path.resolve()
     for worktree in worktrees:
         if Path(worktree.path).resolve() == target_path:
             return worktree

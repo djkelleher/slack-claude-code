@@ -373,7 +373,7 @@ async def _handle_switch(
 ) -> None:
     """Switch session to an existing worktree by branch name or path."""
     worktrees = await git_service.list_worktrees(session.working_directory)
-    match = find_worktree_by_target(target, worktrees)
+    match = find_worktree_by_target(target, worktrees, current_directory=session.working_directory)
 
     if match is None:
         available = ", ".join(f"`{worktree.branch}`" for worktree in worktrees)
@@ -425,7 +425,9 @@ async def _handle_merge(
     """Merge a source worktree branch into current or selected target worktree branch."""
     worktrees = await git_service.list_worktrees(session.working_directory)
 
-    source_wt = find_worktree_by_target(source_target, worktrees)
+    source_wt = find_worktree_by_target(
+        source_target, worktrees, current_directory=session.working_directory
+    )
     if source_wt is None:
         available = ", ".join(f"`{worktree.branch}`" for worktree in worktrees)
         await ctx.client.chat_postMessage(
@@ -443,7 +445,9 @@ async def _handle_merge(
 
     target_wt = current_wt
     if into_target:
-        into_match = find_worktree_by_target(into_target, worktrees)
+        into_match = find_worktree_by_target(
+            into_target, worktrees, current_directory=session.working_directory
+        )
         if into_match is None:
             raise GitError(f"Target worktree `{into_target}` not found")
         target_wt = into_match
@@ -532,7 +536,7 @@ async def _handle_remove(
     """Remove a non-main, non-current worktree by branch name or path."""
     worktrees = await git_service.list_worktrees(session.working_directory)
 
-    match = find_worktree_by_target(target, worktrees)
+    match = find_worktree_by_target(target, worktrees, current_directory=session.working_directory)
     if match is None:
         raise GitError(f"No worktree found for `{target}`")
 

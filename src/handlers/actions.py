@@ -741,14 +741,16 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ack()
 
         async def resolver(approval_id, user_id):
-            return await PermissionManager.resolve(approval_id, approved=True)
+            return await PermissionManager.resolve(
+                approval_id, approved=True, resolved_by=user_id
+            )
 
         def block_builder(resolved, user_id):
             return build_approval_result_blocks(
                 approval_id=action["value"],
                 tool_name=resolved.tool_name,
                 approved=True,
-                user_id=user_id,
+                resolved_by=user_id,
             )
 
         await _handle_approval_action(
@@ -761,14 +763,16 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ack()
 
         async def resolver(approval_id, user_id):
-            return await PermissionManager.resolve(approval_id, approved=False)
+            return await PermissionManager.resolve(
+                approval_id, approved=False, resolved_by=user_id
+            )
 
         def block_builder(resolved, user_id):
             return build_approval_result_blocks(
                 approval_id=action["value"],
                 tool_name=resolved.tool_name,
                 approved=False,
-                user_id=user_id,
+                resolved_by=user_id,
             )
 
         await _handle_approval_action(
