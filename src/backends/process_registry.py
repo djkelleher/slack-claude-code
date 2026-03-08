@@ -1,6 +1,7 @@
 """Shared process tracking helpers for backend executors."""
 
 import asyncio
+import uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -32,7 +33,7 @@ class ProcessRegistry:
         channel_id: Optional[str],
     ) -> str:
         """Build a stable track id for an execution and optional channel."""
-        track_id = execution_id or session_id or "default"
+        track_id = execution_id or session_id or f"anon-{uuid.uuid4().hex}"
         if channel_id:
             track_id = f"{channel_id}_{track_id}"
         return track_id

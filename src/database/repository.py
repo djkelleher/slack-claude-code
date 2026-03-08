@@ -22,14 +22,12 @@ DB_TIMEOUT = 30.0
 
 
 class DatabaseRepository:
-    _SESSION_SCOPE_WHERE = """channel_id = ? AND (
+    _SCOPED_THREAD_WHERE = """channel_id = ? AND (
                        (thread_ts = ? AND ? IS NOT NULL) OR
                        (thread_ts IS NULL AND ? IS NULL)
                    )"""
-    _QUEUE_SCOPE_WHERE = """channel_id = ? AND (
-                       (thread_ts = ? AND ? IS NOT NULL) OR
-                       (thread_ts IS NULL AND ? IS NULL)
-                   )"""
+    _SESSION_SCOPE_WHERE = _SCOPED_THREAD_WHERE
+    _QUEUE_SCOPE_WHERE = _SCOPED_THREAD_WHERE
     _QUEUE_ITEM_SELECT = """id, session_id, channel_id, thread_ts, prompt,
                        working_directory_override, parallel_group_id, parallel_limit,
                        status, output, error_message, position, message_ts,
@@ -49,10 +47,8 @@ class DatabaseRepository:
         return normalized or None
 
     @staticmethod
-    def _session_scope_params(
-        channel_id: str, thread_ts: Optional[str]
-    ) -> tuple[Optional[str], ...]:
-        """Return standard SQL parameters for channel/thread scoped session queries."""
+    def _scope_params(channel_id: str, thread_ts: Optional[str]) -> tuple[Optional[str], ...]:
+        """Return standard SQL parameters for channel/thread scoped queries."""
         normalized_thread_ts = DatabaseRepository._normalize_thread_ts(thread_ts)
         return (
             channel_id,
@@ -62,15 +58,16 @@ class DatabaseRepository:
         )
 
     @staticmethod
+    def _session_scope_params(
+        channel_id: str, thread_ts: Optional[str]
+    ) -> tuple[Optional[str], ...]:
+        """Return standard SQL parameters for channel/thread scoped session queries."""
+        return DatabaseRepository._scope_params(channel_id, thread_ts)
+
+    @staticmethod
     def _queue_scope_params(channel_id: str, thread_ts: Optional[str]) -> tuple[Optional[str], ...]:
         """Return standard SQL parameters for channel/thread scoped queue queries."""
-        normalized_thread_ts = DatabaseRepository._normalize_thread_ts(thread_ts)
-        return (
-            channel_id,
-            normalized_thread_ts,
-            normalized_thread_ts,
-            normalized_thread_ts,
-        )
+        return DatabaseRepository._scope_params(channel_id, thread_ts)
 
     def _get_connection(self) -> aiosqlite.Connection:
         return aiosqlite.connect(self.db_path, timeout=self.timeout)

@@ -150,38 +150,33 @@ class PermissionManager:
             )
         )
 
-        try:
-            # Post approval message to Slack
-            if slack_client:
-                blocks = build_approval_blocks(
-                    approval_id=approval_id,
-                    tool_name=tool_name,
-                    tool_input=tool_input,
-                    session_id=session_id,
-                )
+        # Post approval message to Slack
+        if slack_client:
+            blocks = build_approval_blocks(
+                approval_id=approval_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                session_id=session_id,
+            )
 
-                result = await slack_client.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    blocks=blocks,
-                    text=f"Permission requested: {tool_name}",
-                )
+            result = await slack_client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                blocks=blocks,
+                text=f"Permission requested: {tool_name}",
+            )
 
-                approval.message_ts = result.get("ts")
+            approval.message_ts = result.get("ts")
 
-                # Post channel notification (triggers sound + unread badge)
-                await _post_permission_notification(slack_client, channel_id, thread_ts, db)
+            # Post channel notification (triggers sound + unread badge)
+            await _post_permission_notification(slack_client, channel_id, thread_ts, db)
 
-            # Wait for response indefinitely (no timeout)
-            approved = await approval.future
-            return approved
-
-        except asyncio.CancelledError:
+        # Wait for response indefinitely (no timeout)
+        approved = await cls._pending.wait_for_result(approval_id)
+        if approved is None:
             logger.info(f"Approval {approval_id} was cancelled")
             return False
-
-        finally:
-            await cls._pending.pop(approval_id)
+        return bool(approved)
 
     @classmethod
     async def resolve(

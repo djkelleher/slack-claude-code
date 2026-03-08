@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from loguru import logger
@@ -67,6 +68,17 @@ class StreamingMessageState:
         """Get list of tracked tool activities."""
         return list(self.tool_activities.values())
 
+    def _plan_filename(self, execution_id: Optional[str] = None) -> str:
+        """Build a session- or execution-scoped plan filename."""
+        base = f"plan-session-{self.db_session_id}" if self.db_session_id else "plan"
+        if execution_id:
+            return f"{base}-{execution_id}.md"
+        return f"{base}.md"
+
+    def _plan_path(self, execution_id: Optional[str] = None) -> str:
+        """Build a plan file path inside the configured plans directory."""
+        return str(Path(PLANS_DIR) / self._plan_filename(execution_id))
+
     def get_session_plan_filename(self) -> str:
         """Generate session-specific plan filename.
 
@@ -75,9 +87,7 @@ class StreamingMessageState:
         str
             Filename like 'plan-session-123.md' for the current session.
         """
-        if self.db_session_id:
-            return f"plan-session-{self.db_session_id}.md"
-        return "plan.md"
+        return self._plan_filename()
 
     def get_execution_plan_filename(self, execution_id: Optional[str] = None) -> str:
         """Generate execution-specific plan filename.
@@ -92,10 +102,7 @@ class StreamingMessageState:
         str
             Filename like 'plan-session-123-<execution_id>.md' when available.
         """
-        base = f"plan-session-{self.db_session_id}" if self.db_session_id else "plan"
-        if execution_id:
-            return f"{base}-{execution_id}.md"
-        return f"{base}.md"
+        return self._plan_filename(execution_id)
 
     def get_session_plan_path(self) -> str:
         """Get the expected session-specific plan file path.
@@ -105,8 +112,7 @@ class StreamingMessageState:
         str
             Full path to the session-specific plan file.
         """
-        plans_dir = PLANS_DIR
-        return os.path.join(plans_dir, self.get_session_plan_filename())
+        return self._plan_path()
 
     def get_execution_plan_path(self, execution_id: Optional[str] = None) -> str:
         """Get the execution-specific plan file path.
@@ -121,8 +127,7 @@ class StreamingMessageState:
         str
             Full path to the execution-specific plan file.
         """
-        plans_dir = PLANS_DIR
-        return os.path.join(plans_dir, self.get_execution_plan_filename(execution_id))
+        return self._plan_path(execution_id)
 
     def get_recent_plan_write_path(self, min_mtime: float) -> Optional[str]:
         """Get most recent plan file written during this session.

@@ -61,6 +61,7 @@ class TaskManager:
     _lock: Optional[asyncio.Lock] = None
     _init_lock: threading.Lock = threading.Lock()
     _cleanup_task: Optional[asyncio.Task] = None
+    _loop: Optional[asyncio.AbstractEventLoop] = None
 
     @classmethod
     def _get_lock(cls) -> asyncio.Lock:
@@ -69,9 +70,15 @@ class TaskManager:
         Uses double-checked locking pattern with threading lock to ensure
         thread-safe initialization of the asyncio lock.
         """
-        if cls._lock is None:
+        current_loop = asyncio.get_running_loop()
+        if cls._lock is None or cls._loop is not current_loop:
             with cls._init_lock:
-                if cls._lock is None:
+                if cls._lock is None or cls._loop is not current_loop:
+                    if cls._loop is not None and cls._tasks:
+                        logger.warning("Clearing tracked tasks after event loop change")
+                        cls._tasks = {}
+                    cls._cleanup_task = None
+                    cls._loop = current_loop
                     cls._lock = asyncio.Lock()
         return cls._lock
 
@@ -273,6 +280,7 @@ class TaskManager:
         interval : int
             Seconds between cleanup runs.
         """
+        cls._get_lock()
         if cls._cleanup_task is not None and not cls._cleanup_task.done():
             logger.warning("Cleanup loop already running")
             return
@@ -291,6 +299,7 @@ class TaskManager:
     @classmethod
     async def stop_cleanup_loop(cls) -> None:
         """Stop the background cleanup loop."""
+        cls._get_lock()
         if cls._cleanup_task is not None and not cls._cleanup_task.done():
             cls._cleanup_task.cancel()
             try:

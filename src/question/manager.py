@@ -287,11 +287,9 @@ class QuestionManager:
         if not pending:
             logger.warning(f"Question {question_id} not found")
             return None
-        try:
-            pending.future.set_result(pending.answers)
-        except asyncio.InvalidStateError:
+        resolved = await cls._pending.resolve(question_id, pending.answers)
+        if not resolved:
             logger.warning(f"Question {question_id} already resolved")
-            await cls._pending.pop(question_id)
             return None
 
         logger.info(f"Question {question_id} resolved with answers: {pending.answers}")
@@ -312,21 +310,11 @@ class QuestionManager:
         Returns:
             Dict of answers (question_index -> selected labels), or None if cancelled
         """
-        pending = await cls._pending.get(question_id)
-        if not pending:
-            return None
-
-        try:
-            # Wait indefinitely for user response (no timeout)
-            answers = await pending.future
-            return answers
-
-        except asyncio.CancelledError:
+        answers = await cls._pending.wait_for_result(question_id)
+        if answers is None:
             logger.info(f"Question {question_id} was cancelled")
             return None
-
-        finally:
-            await cls._pending.pop(question_id)
+        return answers
 
     @classmethod
     async def get_pending(cls, question_id: str) -> Optional[PendingQuestion]:

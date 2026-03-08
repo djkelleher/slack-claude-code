@@ -92,50 +92,45 @@ class PlanApprovalManager:
 
         await cls._pending.add(approval_id, approval)
 
-        try:
-            # Post approval message to Slack
-            if slack_client:
-                # Post the plan as an inline message (avoids binary file issues)
-                if plan_content:
-                    try:
-                        filename = os.path.basename(plan_file_path) if plan_file_path else "plan.md"
-                        await post_text_snippet(
-                            client=slack_client,
-                            channel_id=channel_id,
-                            content=sanitize_snippet_content(plan_content),
-                            title=f"Implementation Plan: {filename}",
-                            thread_ts=thread_ts,
-                            format_as_text=True,
-                            render_tables=True,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to post plan snippet: {e}")
+        # Post approval message to Slack
+        if slack_client:
+            # Post the plan as an inline message (avoids binary file issues)
+            if plan_content:
+                try:
+                    filename = os.path.basename(plan_file_path) if plan_file_path else "plan.md"
+                    await post_text_snippet(
+                        client=slack_client,
+                        channel_id=channel_id,
+                        content=sanitize_snippet_content(plan_content),
+                        title=f"Implementation Plan: {filename}",
+                        thread_ts=thread_ts,
+                        format_as_text=True,
+                        render_tables=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to post plan snippet: {e}")
 
-                # Then post the approval buttons
-                blocks = build_plan_approval_blocks(
-                    approval_id=approval_id,
-                    session_id=session_id,
-                )
+            # Then post the approval buttons
+            blocks = build_plan_approval_blocks(
+                approval_id=approval_id,
+                session_id=session_id,
+            )
 
-                result = await slack_client.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    blocks=blocks,
-                    text="Plan ready for review",
-                )
+            result = await slack_client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                blocks=blocks,
+                text="Plan ready for review",
+            )
 
-                approval.message_ts = result.get("ts")
+            approval.message_ts = result.get("ts")
 
-            # Wait for response indefinitely
-            approved = await approval.future
-            return approved
-
-        except asyncio.CancelledError:
+        # Wait for response indefinitely
+        approved = await cls._pending.wait_for_result(approval_id)
+        if approved is None:
             logger.info(f"Plan approval {approval_id} was cancelled")
             return False
-
-        finally:
-            await cls._pending.pop(approval_id)
+        return bool(approved)
 
     @classmethod
     async def resolve(

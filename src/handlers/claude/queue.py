@@ -33,7 +33,8 @@ from ..command_router import execute_for_session
 # Default timeout for queue processors (1 hour)
 QUEUE_PROCESSOR_TIMEOUT = 3600
 _QUEUE_START_LOCKS: dict[str, asyncio.Lock] = {}
-_QUEUE_START_LOCKS_GUARD = asyncio.Lock()
+_QUEUE_START_LOCKS_GUARD: Optional[asyncio.Lock] = None
+_QUEUE_START_LOCKS_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _PARALLEL_HISTORY_COMMAND_LIMIT = 10
 _PARALLEL_HISTORY_OUTPUT_LIMIT = 1000
 _PARALLEL_HISTORY_TOTAL_LIMIT = 12000
@@ -92,6 +93,16 @@ async def _is_queue_processor_running(channel_id: str, thread_ts: Optional[str])
 
 async def _get_queue_start_lock(task_id: str) -> asyncio.Lock:
     """Return a per-scope lock used to serialize queue processor startup."""
+    global _QUEUE_START_LOCKS_GUARD, _QUEUE_START_LOCKS_LOOP
+    current_loop = asyncio.get_running_loop()
+    if _QUEUE_START_LOCKS_LOOP is not current_loop:
+        _QUEUE_START_LOCKS.clear()
+        _QUEUE_START_LOCKS_LOOP = current_loop
+        _QUEUE_START_LOCKS_GUARD = asyncio.Lock()
+
+    if _QUEUE_START_LOCKS_GUARD is None:
+        _QUEUE_START_LOCKS_GUARD = asyncio.Lock()
+
     async with _QUEUE_START_LOCKS_GUARD:
         if task_id not in _QUEUE_START_LOCKS:
             _QUEUE_START_LOCKS[task_id] = asyncio.Lock()
@@ -100,6 +111,9 @@ async def _get_queue_start_lock(task_id: str) -> asyncio.Lock:
 
 async def _cleanup_queue_start_lock(task_id: str) -> None:
     """Remove idle startup lock for a scope to avoid unbounded lock-map growth."""
+    if _QUEUE_START_LOCKS_GUARD is None:
+        _QUEUE_START_LOCKS.pop(task_id, None)
+        return
     async with _QUEUE_START_LOCKS_GUARD:
         lock = _QUEUE_START_LOCKS.get(task_id)
         if lock and not lock.locked():
