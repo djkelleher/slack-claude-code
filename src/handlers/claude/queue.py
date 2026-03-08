@@ -1,4 +1,4 @@
-"""Queue command handlers: /q, /qc, /qv, /qclear, and /qr."""
+"""Queue command handlers: /q, /qc, /qv, /qclear, /qdelete, and /qr."""
 
 import asyncio
 from dataclasses import dataclass, replace
@@ -667,6 +667,30 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             ],
         )
 
+    async def _delete_entire_queue(ctx: CommandContext) -> None:
+        await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "stopped")
+        await TaskManager.cancel(_queue_task_id(ctx.channel_id, ctx.thread_ts))
+        deleted = await deps.db.delete_queue(ctx.channel_id, ctx.thread_ts)
+        await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "running")
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text=f"Deleted queue with {deleted} item(s)",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f":wastebasket: Deleted the entire queue for this scope "
+                            f"({deleted} item(s))."
+                        ),
+                    },
+                },
+            ],
+        )
+
     async def _remove_pending_queue_item(ctx: CommandContext, item_id: Optional[int]) -> None:
         if item_id is None:
             pending = await deps.db.get_pending_queue_items(ctx.channel_id, ctx.thread_ts)
@@ -709,7 +733,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     @app.command("/qc")
     @slack_command(
         require_text=True,
-        usage_hint="Usage: /qc <view|clear|remove [item_id]|pause|stop|resume>",
+        usage_hint="Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume>",
     )
     async def handle_queue_command(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /qc queue control subcommands."""
@@ -741,6 +765,19 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 return
 
             await _clear_pending_queue(ctx)
+            return
+
+        if subcommand == "delete":
+            if args:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue command",
+                    blocks=error_message("Usage: /qc delete"),
+                )
+                return
+
+            await _delete_entire_queue(ctx)
             return
 
         if subcommand == "remove":
@@ -868,7 +905,9 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             channel=ctx.channel_id,
             thread_ts=ctx.thread_ts,
             text="Invalid queue command",
-            blocks=error_message("Usage: /qc <view|clear|remove [item_id]|pause|stop|resume>"),
+            blocks=error_message(
+                "Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume>"
+            ),
         )
 
     @app.command("/qv")
@@ -900,6 +939,21 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         await _clear_pending_queue(ctx)
+
+    @app.command("/qdelete")
+    @slack_command()
+    async def handle_queue_delete(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle /qdelete command - delete all queue items in the current scope."""
+        if ctx.text:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Invalid queue command",
+                blocks=error_message("Usage: /qdelete"),
+            )
+            return
+
+        await _delete_entire_queue(ctx)
 
     @app.command("/qr")
     @slack_command()

@@ -976,6 +976,16 @@ class DatabaseRepository:
             await db.commit()
             return cursor.rowcount
 
+    async def delete_queue(self, channel_id: str, thread_ts: Optional[str]) -> int:
+        """Delete all queue items for a session scope, regardless of status."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "DELETE FROM queue_items WHERE " + self._QUEUE_SCOPE_WHERE,
+                self._queue_scope_params(channel_id, thread_ts),
+            )
+            await db.commit()
+            return cursor.rowcount
+
     async def get_running_queue_item(
         self, channel_id: str, thread_ts: Optional[str]
     ) -> Optional[QueueItem]:

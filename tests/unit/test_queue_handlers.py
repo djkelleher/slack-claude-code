@@ -443,7 +443,7 @@ async def test_process_queue_pause_stops_before_next_item():
 
 @pytest.mark.asyncio
 async def test_register_queue_commands_exposes_current_queue_commands():
-    """Queue command registration should expose /q, /qc, /qv, /qclear, and /qr."""
+    """Queue command registration should expose the current queue command set."""
     app = _FakeApp()
     deps = SimpleNamespace(db=SimpleNamespace())
 
@@ -453,6 +453,7 @@ async def test_register_queue_commands_exposes_current_queue_commands():
     assert "/qc" in app.handlers
     assert "/qv" in app.handlers
     assert "/qclear" in app.handlers
+    assert "/qdelete" in app.handlers
     assert "/qr" in app.handlers
 
 
@@ -712,6 +713,80 @@ async def test_qclear_clears_pending_items():
     deps.db.clear_queue.assert_awaited_once_with("C123", None)
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Cleared 3 item(s) from queue"
+
+
+@pytest.mark.asyncio
+async def test_qdelete_deletes_entire_queue_scope():
+    """`/qdelete` should remove all queue items and reset queue state."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_control_state=AsyncMock(),
+            delete_queue=AsyncMock(return_value=4),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/qdelete"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with patch(
+        "src.handlers.claude.queue.TaskManager.cancel", new=AsyncMock(return_value=True)
+    ) as mock_cancel:
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "",
+                "command": "/qdelete",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
+
+    deps.db.update_queue_control_state.assert_any_await("C123", None, "stopped")
+    deps.db.update_queue_control_state.assert_any_await("C123", None, "running")
+    deps.db.delete_queue.assert_awaited_once_with("C123", None)
+    mock_cancel.assert_awaited_once_with(_queue_task_id("C123", None))
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Deleted queue with 4 item(s)"
+
+
+@pytest.mark.asyncio
+async def test_qc_delete_deletes_entire_queue_scope():
+    """`/qc delete` should remove all queue items and reset queue state."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_control_state=AsyncMock(),
+            delete_queue=AsyncMock(return_value=2),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/qc"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with patch(
+        "src.handlers.claude.queue.TaskManager.cancel", new=AsyncMock(return_value=False)
+    ) as mock_cancel:
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "delete",
+                "command": "/qc",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
+
+    deps.db.update_queue_control_state.assert_any_await("C123", None, "stopped")
+    deps.db.update_queue_control_state.assert_any_await("C123", None, "running")
+    deps.db.delete_queue.assert_awaited_once_with("C123", None)
+    mock_cancel.assert_awaited_once_with(_queue_task_id("C123", None))
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Deleted queue with 2 item(s)"
 
 
 @pytest.mark.asyncio

@@ -556,6 +556,23 @@ class TestQueueOperations:
         assert len(pending) == 0
 
     @pytest.mark.asyncio
+    async def test_delete_queue_removes_all_items_in_scope(self, db_repo):
+        """delete_queue removes pending, running, and completed items in scope."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        pending = await db_repo.add_to_queue(session.id, "C123ABC", None, "pending")
+        running = await db_repo.add_to_queue(session.id, "C123ABC", None, "running")
+        completed = await db_repo.add_to_queue(session.id, "C123ABC", None, "completed")
+        await db_repo.update_queue_item_status(running.id, "running")
+        await db_repo.update_queue_item_status(completed.id, "completed", output="done")
+
+        count = await db_repo.delete_queue("C123ABC", None)
+
+        assert count == 3
+        assert await db_repo.get_queue_item(pending.id) is None
+        assert await db_repo.get_queue_item(running.id) is None
+        assert await db_repo.get_queue_item(completed.id) is None
+
+    @pytest.mark.asyncio
     async def test_get_running_queue_item(self, db_repo):
         """get_running_queue_item returns currently running item."""
         session = await db_repo.get_or_create_session("C123ABC", None)
