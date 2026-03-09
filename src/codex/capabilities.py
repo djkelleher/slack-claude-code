@@ -26,27 +26,15 @@ SUPPORTED_COMPAT_MODE_ALIASES: tuple[str, ...] = (
 CLAUDE_ONLY_SLASH_COMMANDS: tuple[str, ...] = (
     "/compact",
     "/cost",
-    "/claude-help",
-    "/doctor",
-    "/claude-config",
     "/context",
     "/init",
-    "/memory",
-    "/stats",
-    "/todos",
 )
 
 _CLAUDE_TO_CODEX_HINTS: dict[str, str] = {
     "/compact": "Use `/clear` to reset the conversation in Slack mode.",
     "/cost": "Use `/usage` and per-response footer cost metadata.",
-    "/claude-help": "Use `/usage`, `/mode`, and `/model`.",
-    "/doctor": "Use local CLI diagnostics outside Slack.",
-    "/claude-config": "Use `/usage`, `/mode approval ...`, and `/mode sandbox ...`.",
     "/context": "Use Slack thread history and `/usage`.",
     "/init": "Codex does not provide `/init` in this Slack integration.",
-    "/memory": "Codex does not use CLAUDE.md memory files.",
-    "/stats": "Use `/usage` for Codex session status in Slack integration.",
-    "/todos": "Use normal prompts to manage TODO tracking.",
 }
 
 _COMPAT_TO_APPROVAL: dict[str, str] = {

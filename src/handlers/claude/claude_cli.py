@@ -547,24 +547,6 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             ],
         )
 
-    @app.command("/claude-help")
-    @slack_command()
-    async def handle_claude_help(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /claude-help command - show Claude Code help."""
-        await _send_claude_command(ctx, "/help", deps)
-
-    @app.command("/doctor")
-    @slack_command()
-    async def handle_doctor(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /doctor command - run Claude Code diagnostics."""
-        await _send_claude_command(ctx, "/doctor", deps)
-
-    @app.command("/claude-config")
-    @slack_command()
-    async def handle_claude_config(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /claude-config command - show Claude Code config."""
-        await _send_claude_command(ctx, "/config", deps)
-
     @app.command("/context")
     @slack_command()
     async def handle_context(ctx: CommandContext, deps: HandlerDependencies = deps):
@@ -768,12 +750,6 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     async def handle_init(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /init command - initialize project with CLAUDE.md."""
         await _send_claude_command(ctx, "/init", deps)
-
-    @app.command("/memory")
-    @slack_command()
-    async def handle_memory(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /memory command - edit CLAUDE.md memory files."""
-        await _send_claude_command(ctx, "/memory", deps)
 
     @app.command("/review")
     @slack_command()
@@ -983,41 +959,6 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 }
             ],
         )
-
-    @app.command("/stats")
-    @slack_command()
-    async def handle_stats(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /stats command - show usage stats and history."""
-        # Note: /stats only works in Claude CLI interactive mode, not with -p flag.
-        # In print mode, slash commands get interpreted as skill invocations.
-        # For now, show a message explaining this limitation.
-        # Cost per request is shown in each response footer.
-        await ctx.client.chat_postMessage(
-            channel=ctx.channel_id,
-            thread_ts=ctx.thread_ts,
-            text="Stats are not available in Slack mode.",
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": (
-                            ":bar_chart: *Usage Stats*\n\n"
-                            "The `/stats` command is not available in Slack mode. "
-                            "Claude CLI's `/stats` only works in interactive terminal mode.\n\n"
-                            "*Tip:* Cost and duration are shown in each response footer. "
-                            "Use `/cost` to see session cost details."
-                        ),
-                    },
-                }
-            ],
-        )
-
-    @app.command("/todos")
-    @slack_command()
-    async def handle_todos(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /todos command - list current TODO items."""
-        await _send_claude_command(ctx, "/todos", deps)
 
     @app.command("/mcp")
     @slack_command()

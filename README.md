@@ -52,7 +52,7 @@ Go to https://api.slack.com/apps → "Create New App" → "From scratch"
 If you want worktree workflows, register `/worktree` (and optionally `/wt` as an alias) in Slack.
 
 #### Configuration
-Customize Claude's behavior for your workflow.
+Customize behavior for your workflow.
 
 | Command | Description | Example |
 |---------|-------------|---------|
@@ -116,14 +116,8 @@ These map to terminal Claude Code slash commands. In Codex sessions, unsupported
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/claude-help` | Show Claude Code help | `/claude-help` |
-| `/doctor` | Run Claude Code diagnostics | `/doctor` |
-| `/claude-config` | Show Claude Code config | `/claude-config` |
 | `/context` | Show Claude context usage | `/context` |
 | `/init` | Initialize project memory files | `/init` |
-| `/memory` | Manage `CLAUDE.md` memory | `/memory` |
-| `/todos` | Show Claude TODO list | `/todos` |
-| `/stats` | Show stats availability note (terminal-only feature) | `/stats` |
 
 #### Navigation
 Control the working directory and additional directories for Claude's file operations.
