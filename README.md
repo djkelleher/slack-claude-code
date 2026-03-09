@@ -163,15 +163,29 @@ Queue commands for sequential execution while preserving Claude's session contex
 | `/q` | Add command to queue | `/q analyze the API endpoints` |
 | `/qc view` | View queue status (legacy control command) | `/qc view` |
 | `/qc clear` | Clear pending queue (legacy control command) | `/qc clear` |
+| `/qc delete` | Delete the entire queue scope, including running/history items (legacy control command) | `/qc delete` |
 | `/qc remove [id]` | Remove next or specific pending item (legacy control command) | `/qc remove` |
+| `/qc pause` | Pause queue after current running item(s) finish (legacy control command) | `/qc pause` |
+| `/qc stop` | Stop queue immediately and cancel the active queue processor (legacy control command) | `/qc stop` |
+| `/qc resume` | Resume a paused/stopped queue | `/qc resume` |
 | `/qv` | View queue status | `/qv` |
 | `/qclear` | Clear pending queue | `/qclear` |
+| `/qdelete` | Delete the entire queue scope, including running/history items | `/qdelete` |
 | `/qr` | Remove the next pending item | `/qr` |
 | `/qr <id>` | Remove a specific pending item | `/qr 5` |
 
 Queue scope follows session scope:
 - Channel messages use a channel-level queue
 - Thread messages use an isolated queue per thread
+
+Queue control behavior:
+- `/qc pause` lets any currently running queue item finish, then leaves the remaining items pending.
+- `/qc stop` cancels the active queue processor immediately and marks the queue as stopped.
+- `/qc resume` flips the scope back to running and restarts processing if pending items remain.
+- `/qclear` and `/qc clear` remove only pending items.
+- `/qdelete` and `/qc delete` remove the entire queue scope, including running/completed/cancelled records, then reset the scope to `running`.
+- Adding new items with `/q` does not auto-start processing while a scope is paused or stopped; resume it explicitly with `/qc resume`.
+- `/qv` and `/qc view` show queue state and include a notice when the scope is paused or stopped.
 
 #### Structured Queue DSL (Queues + Worktree + Loops)
 
