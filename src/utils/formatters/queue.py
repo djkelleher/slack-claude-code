@@ -119,3 +119,54 @@ def queue_item_complete(item: Any, result: Any) -> list[dict]:
             "text": {"type": "mrkdwn", "text": output},
         },
     ]
+
+
+def queue_scope_overview(scopes: list[dict[str, Any]]) -> list[dict]:
+    """Format a channel-wide queue scope overview."""
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": ":inbox_tray: Queue Scopes",
+                "emoji": True,
+            },
+        },
+        {"type": "divider"},
+    ]
+
+    if not scopes:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "_No queue activity found in this channel_"},
+            }
+        )
+        return blocks
+
+    for scope in scopes[:15]:
+        summary_parts = [
+            f"*State:* `{scope['state']}`",
+            f"*Running:* {scope['running_count']}",
+            f"*Pending:* {scope['pending_count']}",
+        ]
+        text = f"*{escape_markdown(scope['label'])}*\n" + " | ".join(summary_parts)
+        preview = scope.get("preview")
+        if preview:
+            text += f"\n> {escape_markdown(preview[:120])}{'...' if len(preview) > 120 else ''}"
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": text},
+            }
+        )
+
+    if len(scopes) > 15:
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": f"_... and {len(scopes) - 15} more_"}],
+            }
+        )
+
+    return blocks

@@ -1011,6 +1011,28 @@ class DatabaseRepository:
             rows = await cursor.fetchall()
             return [QueueItem.from_row(row) for row in rows]
 
+    async def list_queue_scopes_for_channel(self, channel_id: str) -> list[Optional[str]]:
+        """List queue scopes with activity or non-default control state for a channel."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """
+                SELECT DISTINCT thread_ts
+                FROM (
+                    SELECT thread_ts
+                    FROM queue_items
+                    WHERE channel_id = ?
+                    UNION
+                    SELECT thread_ts
+                    FROM queue_controls
+                    WHERE channel_id = ? AND state != 'running'
+                )
+                ORDER BY CASE WHEN thread_ts IS NULL THEN 0 ELSE 1 END, thread_ts ASC
+                """,
+                (channel_id, channel_id),
+            )
+            rows = await cursor.fetchall()
+            return [self._normalize_thread_ts(row[0]) for row in rows]
+
     async def get_queue_control(self, channel_id: str, thread_ts: Optional[str]) -> QueueControl:
         """Get queue execution control state for a scope."""
         normalized_thread_ts = self._normalize_thread_ts(thread_ts)

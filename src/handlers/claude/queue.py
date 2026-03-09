@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass, replace
 from pathlib import Path
+import re
 from typing import Optional
 
 from loguru import logger
@@ -23,6 +24,7 @@ from src.utils.formatters.base import escape_markdown
 from src.utils.formatters.command import error_message
 from src.utils.formatters.queue import (
     queue_item_running,
+    queue_scope_overview,
     queue_status,
 )
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
@@ -38,6 +40,7 @@ _QUEUE_START_LOCKS_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _PARALLEL_HISTORY_COMMAND_LIMIT = 10
 _PARALLEL_HISTORY_OUTPUT_LIMIT = 1000
 _PARALLEL_HISTORY_TOTAL_LIMIT = 12000
+_THREAD_TS_PATTERN = re.compile(r"^\d+\.\d+$")
 
 
 @dataclass(frozen=True)
@@ -179,6 +182,23 @@ def _queue_state_notice(state: str) -> str:
     if state == "stopped":
         return "Queue is stopped. Use `/qc resume` to continue."
     return ""
+
+
+def _queue_scope_label(thread_ts: Optional[str]) -> str:
+    """Return a human-friendly queue scope label."""
+    if thread_ts:
+        return f"Thread {thread_ts}"
+    return "Channel queue"
+
+
+def _parse_scope_selector(selector: str) -> Optional[str]:
+    """Parse an optional queue scope selector."""
+    normalized = selector.strip()
+    if normalized.lower() == "channel":
+        return None
+    if _THREAD_TS_PATTERN.match(normalized):
+        return normalized
+    raise ValueError("Scope must be `channel` or a Slack thread timestamp like `1234567890.123456`.")
 
 
 async def _get_queue_state(
@@ -644,10 +664,10 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 ctx.channel_id, ctx.thread_ts, deps, ctx.client, ctx.logger
             )
 
-    async def _post_queue_status(ctx: CommandContext) -> None:
-        pending = await deps.db.get_pending_queue_items(ctx.channel_id, ctx.thread_ts)
-        running = await deps.db.get_running_queue_items(ctx.channel_id, ctx.thread_ts)
-        queue_state = await _get_queue_state(deps, ctx.channel_id, ctx.thread_ts)
+    async def _post_queue_status(ctx: CommandContext, target_thread_ts: Optional[str]) -> None:
+        pending = await deps.db.get_pending_queue_items(ctx.channel_id, target_thread_ts)
+        running = await deps.db.get_running_queue_items(ctx.channel_id, target_thread_ts)
+        queue_state = await _get_queue_state(deps, ctx.channel_id, target_thread_ts)
         blocks = queue_status(pending, running)
         if queue_state != "running":
             blocks.insert(
@@ -657,7 +677,69 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     "elements": [{"type": "mrkdwn", "text": _queue_state_notice(queue_state)}],
                 },
             )
+        blocks.insert(
+            2,
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"*Scope:* {_queue_scope_label(target_thread_ts)}"}
+                ],
+            },
+        )
 
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text="Queue status",
+            blocks=blocks,
+        )
+
+    async def _post_channel_queue_overview(ctx: CommandContext) -> None:
+        scope_thread_ids = await deps.db.list_queue_scopes_for_channel(ctx.channel_id)
+        if None not in scope_thread_ids:
+            scope_thread_ids = [None, *scope_thread_ids]
+
+        scopes: list[dict[str, object]] = []
+        for thread_ts in scope_thread_ids:
+            pending = await deps.db.get_pending_queue_items(ctx.channel_id, thread_ts)
+            running = await deps.db.get_running_queue_items(ctx.channel_id, thread_ts)
+            queue_state = await _get_queue_state(deps, ctx.channel_id, thread_ts)
+            if not pending and not running and queue_state == "running" and thread_ts is not None:
+                continue
+
+            preview = None
+            if running:
+                preview = running[0].prompt
+            elif pending:
+                preview = pending[0].prompt
+
+            scopes.append(
+                {
+                    "label": _queue_scope_label(thread_ts),
+                    "state": queue_state,
+                    "running_count": len(running),
+                    "pending_count": len(pending),
+                    "preview": preview,
+                }
+            )
+
+        blocks = queue_scope_overview(scopes)
+        blocks.append({"type": "divider"})
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            "Slash commands may not include thread context. "
+                            "Use `/qc view <thread_ts>` or `/qc stop <thread_ts>` "
+                            "to target a thread queue explicitly."
+                        ),
+                    }
+                ],
+            }
+        )
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             thread_ts=ctx.thread_ts,
@@ -758,42 +840,87 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         args = parts[1:]
 
         if subcommand == "view":
-            if args:
+            if len(args) > 1:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text="Invalid queue command",
-                    blocks=error_message("Usage: /qc view"),
+                    blocks=error_message("Usage: /qc view [channel|thread_ts]"),
+                )
+                return
+            if not args and ctx.thread_ts is None:
+                await _post_channel_queue_overview(ctx)
+                return
+            try:
+                target_thread_ts = (
+                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
+                )
+            except ValueError as e:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue scope",
+                    blocks=error_message(str(e)),
                 )
                 return
 
-            await _post_queue_status(ctx)
+            await _post_queue_status(ctx, target_thread_ts)
             return
 
         if subcommand == "clear":
-            if args:
+            if len(args) > 1:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text="Invalid queue command",
-                    blocks=error_message("Usage: /qc clear"),
+                    blocks=error_message("Usage: /qc clear [channel|thread_ts]"),
+                )
+                return
+            try:
+                target_thread_ts = (
+                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
+                )
+            except ValueError as e:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue scope",
+                    blocks=error_message(str(e)),
                 )
                 return
 
+            original_thread_ts = ctx.thread_ts
+            ctx.thread_ts = target_thread_ts
             await _clear_pending_queue(ctx)
+            ctx.thread_ts = original_thread_ts
             return
 
         if subcommand == "delete":
-            if args:
+            if len(args) > 1:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text="Invalid queue command",
-                    blocks=error_message("Usage: /qc delete"),
+                    blocks=error_message("Usage: /qc delete [channel|thread_ts]"),
+                )
+                return
+            try:
+                target_thread_ts = (
+                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
+                )
+            except ValueError as e:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue scope",
+                    blocks=error_message(str(e)),
                 )
                 return
 
+            original_thread_ts = ctx.thread_ts
+            ctx.thread_ts = target_thread_ts
             await _delete_entire_queue(ctx)
+            ctx.thread_ts = original_thread_ts
             return
 
         if subcommand == "remove":
@@ -824,21 +951,34 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         if subcommand == "pause":
-            if args:
+            if len(args) > 1:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text="Invalid queue command",
-                    blocks=error_message("Usage: /qc pause"),
+                    blocks=error_message("Usage: /qc pause [channel|thread_ts]"),
+                )
+                return
+            try:
+                target_thread_ts = (
+                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
+                )
+            except ValueError as e:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue scope",
+                    blocks=error_message(str(e)),
                 )
                 return
 
-            running_items = await deps.db.get_running_queue_items(ctx.channel_id, ctx.thread_ts)
-            await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "paused")
+            running_items = await deps.db.get_running_queue_items(ctx.channel_id, target_thread_ts)
+            await deps.db.update_queue_control_state(ctx.channel_id, target_thread_ts, "paused")
+            scope_label = _queue_scope_label(target_thread_ts)
             text = (
-                "Queue pause requested. Current item(s) will finish before stopping."
+                f"{scope_label}: pause requested. Current item(s) will finish before stopping."
                 if running_items
-                else "Queue paused."
+                else f"{scope_label}: paused."
             )
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
@@ -854,18 +994,33 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         if subcommand == "stop":
-            if args:
+            if len(args) > 1:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text="Invalid queue command",
-                    blocks=error_message("Usage: /qc stop"),
+                    blocks=error_message("Usage: /qc stop [channel|thread_ts]"),
+                )
+                return
+            try:
+                target_thread_ts = (
+                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
+                )
+            except ValueError as e:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue scope",
+                    blocks=error_message(str(e)),
                 )
                 return
 
-            await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "stopped")
-            cancelled = await TaskManager.cancel(_queue_task_id(ctx.channel_id, ctx.thread_ts))
-            text = "Queue stopped immediately." if cancelled else "Queue stopped."
+            await deps.db.update_queue_control_state(ctx.channel_id, target_thread_ts, "stopped")
+            cancelled = await TaskManager.cancel(_queue_task_id(ctx.channel_id, target_thread_ts))
+            scope_label = _queue_scope_label(target_thread_ts)
+            text = (
+                f"{scope_label}: stopped immediately." if cancelled else f"{scope_label}: stopped."
+            )
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
@@ -880,30 +1035,43 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         if subcommand == "resume":
-            if args:
+            if len(args) > 1:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text="Invalid queue command",
-                    blocks=error_message("Usage: /qc resume"),
+                    blocks=error_message("Usage: /qc resume [channel|thread_ts]"),
+                )
+                return
+            try:
+                target_thread_ts = (
+                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
+                )
+            except ValueError as e:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue scope",
+                    blocks=error_message(str(e)),
                 )
                 return
 
-            await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "running")
-            pending = await deps.db.get_pending_queue_items(ctx.channel_id, ctx.thread_ts)
-            running_items = await deps.db.get_running_queue_items(ctx.channel_id, ctx.thread_ts)
+            await deps.db.update_queue_control_state(ctx.channel_id, target_thread_ts, "running")
+            pending = await deps.db.get_pending_queue_items(ctx.channel_id, target_thread_ts)
+            running_items = await deps.db.get_running_queue_items(ctx.channel_id, target_thread_ts)
+            scope_label = _queue_scope_label(target_thread_ts)
             if pending and not running_items:
                 await ensure_queue_processor(
-                    ctx.channel_id, ctx.thread_ts, deps, ctx.client, ctx.logger
+                    ctx.channel_id, target_thread_ts, deps, ctx.client, ctx.logger
                 )
-                text = f"Queue resumed. {len(pending)} pending item(s) ready to run."
+                text = f"{scope_label}: resumed. {len(pending)} pending item(s) ready to run."
             elif running_items:
                 text = (
-                    "Queue resumed. Existing running item(s) will continue and pending work "
-                    "will follow."
+                    f"{scope_label}: resumed. Existing running item(s) will continue and pending "
+                    "work will follow."
                 )
             else:
-                text = "Queue resumed. No pending items remain."
+                text = f"{scope_label}: resumed. No pending items remain."
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
@@ -939,7 +1107,11 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             )
             return
 
-        await _post_queue_status(ctx)
+        if ctx.thread_ts is None:
+            await _post_channel_queue_overview(ctx)
+            return
+
+        await _post_queue_status(ctx, ctx.thread_ts)
 
     @app.command("/qclear")
     @slack_command()
