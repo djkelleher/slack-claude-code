@@ -13,6 +13,7 @@ from src.git.service import GitError, GitService
 from src.handlers.worktree_ops import (
     find_current_worktree,
     find_worktree_by_target,
+    recover_session_repo_from_worktree_path,
     switch_session_to_worktree,
     worktree_is_clean,
 )
@@ -139,6 +140,15 @@ def register_worktree_commands(app: AsyncApp, deps: HandlerDependencies) -> None
         )
 
         try:
+            if not await git_service.validate_git_repo(session.working_directory):
+                await recover_session_repo_from_worktree_path(
+                    deps,
+                    session,
+                    ctx.channel_id,
+                    ctx.thread_ts,
+                    git_service,
+                )
+
             if not await git_service.validate_git_repo(session.working_directory):
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,

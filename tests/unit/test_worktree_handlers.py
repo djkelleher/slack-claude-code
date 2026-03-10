@@ -117,6 +117,41 @@ async def test_command_reports_not_git_repo():
 
 
 @pytest.mark.asyncio
+async def test_command_recovers_stale_worktree_session_to_main_repo():
+    session = Session(working_directory="/repo-worktrees/feature-x", codex_session_id="codex-1")
+    deps = _deps_for_session(session)
+    git_service = SimpleNamespace(
+        validate_git_repo=AsyncMock(side_effect=[False, True, True]),
+        list_worktrees=AsyncMock(return_value=[Worktree(path="/repo", branch="main", is_main=True)]),
+    )
+    app = _FakeApp()
+
+    with patch("src.handlers.claude.worktree.GitService", return_value=git_service):
+        register_worktree_commands(app, deps)
+
+    handler = app.handlers["/worktree"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "list",
+            "command": "/worktree",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    deps.db.update_session_cwd.assert_awaited_once_with("C123", None, "/repo")
+    deps.db.clear_session_claude_id.assert_awaited_once_with("C123", None)
+    deps.db.clear_session_codex_id.assert_awaited_once_with("C123", None)
+    git_service.list_worktrees.assert_awaited_once_with("/repo")
+    assert client.chat_postMessage.await_args.kwargs["text"] == "Git worktrees"
+
+
+@pytest.mark.asyncio
 async def test_command_rejects_extra_args_for_add():
     session = Session(working_directory="/repo")
     deps = _deps_for_session(session)

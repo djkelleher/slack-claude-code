@@ -52,6 +52,41 @@ def find_worktree_by_target(
     return None
 
 
+def infer_main_repo_from_worktree_path(path_str: str) -> Optional[str]:
+    """Infer a main repo path from a conventional `*-worktrees/...` path."""
+    path = Path(path_str).expanduser().resolve()
+    for candidate in (path, *path.parents):
+        name = candidate.name
+        if name.endswith("-worktrees") and name != "-worktrees":
+            return str(candidate.parent / name[: -len("-worktrees")])
+    return None
+
+
+async def recover_session_repo_from_worktree_path(
+    deps: HandlerDependencies,
+    session: Session,
+    channel_id: str,
+    thread_ts: Optional[str],
+    git_service: GitService,
+) -> bool:
+    """Recover a session cwd from a stale worktree path when possible."""
+    fallback_path = infer_main_repo_from_worktree_path(session.working_directory)
+    if fallback_path is None:
+        return False
+    if not await git_service.validate_git_repo(fallback_path):
+        return False
+
+    await switch_session_to_worktree(
+        deps,
+        session,
+        channel_id,
+        thread_ts,
+        fallback_path,
+    )
+    session.working_directory = fallback_path
+    return True
+
+
 async def switch_session_to_worktree(
     deps: HandlerDependencies,
     session: Session,
@@ -76,6 +111,8 @@ async def switch_session_to_worktree(
         await deps.db.clear_session_claude_id(channel_id, thread_ts)
         if session.codex_session_id:
             await deps.db.clear_session_codex_id(channel_id, thread_ts)
+
+    session.working_directory = str(new_path)
 
     return changed
 
