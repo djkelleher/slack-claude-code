@@ -656,7 +656,7 @@ async def _execute_codex_message(
         client=client,
         logger=logger,
         track_tools=True,
-        smart_concat=True,
+        smart_concat=False,
         db_session_id=session.id,
         on_error=on_streaming_error,
     )
@@ -688,7 +688,7 @@ async def _execute_codex_message(
                 client=client,
                 logger=logger,
                 track_tools=True,
-                smart_concat=True,
+                smart_concat=False,
                 db_session_id=session.id,
                 on_error=on_streaming_error,
             )

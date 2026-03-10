@@ -266,6 +266,43 @@ class TestStreamingAppendAndUpdate:
         assert "world!" in state.accumulated_output
 
     @pytest.mark.asyncio
+    async def test_append_preserves_raw_codex_deltas_when_smart_concat_disabled(self):
+        """Raw delta streams should not get synthetic spaces inserted mid-word."""
+        client = AsyncMock()
+        state = StreamingMessageState(
+            channel_id="C123",
+            message_ts="123.456",
+            prompt="test",
+            client=client,
+            logger=MagicMock(),
+            smart_concat=False,
+        )
+
+        await state.append_and_update("existing sl")
+        await state.append_and_update("ippage/f")
+        await state.append_and_update("ill calibration")
+
+        assert state.accumulated_output == "existing slippage/fill calibration"
+
+    @pytest.mark.asyncio
+    async def test_append_can_insert_spacing_when_smart_concat_enabled(self):
+        """Claude-style smart concat may add spacing between coarse chunks."""
+        client = AsyncMock()
+        state = StreamingMessageState(
+            channel_id="C123",
+            message_ts="123.456",
+            prompt="test",
+            client=client,
+            logger=MagicMock(),
+            smart_concat=True,
+        )
+
+        await state.append_and_update("Found it.")
+        await state.append_and_update("Now checking.")
+
+        assert state.accumulated_output == "Found it. Now checking."
+
+    @pytest.mark.asyncio
     async def test_append_tracks_tools(self):
         """append_and_update tracks tool activities when enabled."""
         client = AsyncMock()

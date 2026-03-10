@@ -300,6 +300,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             blocks=processing_message(cmd.command),
         )
         message_ts = response["ts"]
+        smart_concat = session.get_backend() == "claude"
 
         # Setup streaming state
         execution_id = str(uuid.uuid4())
@@ -310,7 +311,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             client=client,
             logger=logger,
             track_tools=True,
-            smart_concat=True,
+            smart_concat=smart_concat,
         )
         streaming_state.start_heartbeat()
         on_chunk = create_streaming_callback(streaming_state)
@@ -336,7 +337,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     client=client,
                     logger=logger,
                     track_tools=True,
-                    smart_concat=True,
+                    smart_concat=smart_concat,
                 )
                 streaming_state.start_heartbeat()
                 return create_streaming_callback(streaming_state)

@@ -289,7 +289,7 @@ class StreamingMessageState:
 
         # Limit accumulated output to prevent memory exhaustion
         if len(self.accumulated_output) < config.timeouts.streaming.max_accumulated_size:
-            if content and self.accumulated_output:
+            if self.smart_concat and content and self.accumulated_output:
                 # Ensure proper spacing between chunks
                 last_char = self.accumulated_output[-1]
                 first_char = content[0] if content else ""

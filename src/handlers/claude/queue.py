@@ -288,6 +288,9 @@ async def _execute_queue_item(
         if parallel_config
         else _queue_processing_log_line(int(sequence_label), item.prompt)
     )
+    smart_concat = True
+    if isinstance(base_session, Session):
+        smart_concat = base_session.get_backend() == "claude"
     log.info(f"{processing_log_line} (scope={scope}, queue_item_id={item.id})")
 
     message_ts = None
@@ -307,7 +310,7 @@ async def _execute_queue_item(
             client=client,
             logger=log,
             track_tools=True,
-            smart_concat=True,
+            smart_concat=smart_concat,
             truncate_output=False,
         )
         streaming_state.start_heartbeat()
@@ -334,7 +337,7 @@ async def _execute_queue_item(
                 client=client,
                 logger=log,
                 track_tools=True,
-                smart_concat=True,
+                smart_concat=smart_concat,
                 truncate_output=False,
             )
             streaming_state.start_heartbeat()
