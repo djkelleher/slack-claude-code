@@ -70,7 +70,10 @@ class StreamingMessageState:
 
     def _plan_filename(self, execution_id: Optional[str] = None) -> str:
         """Build a session- or execution-scoped plan filename."""
-        base = f"plan-session-{self.db_session_id}" if self.db_session_id else "plan"
+        if self.db_session_id:
+            base = f"plan-session-{self.db_session_id}"
+        else:
+            base = f"plan-{int(self.started_at * 1000)}"
         if execution_id:
             return f"{base}-{execution_id}.md"
         return f"{base}.md"
@@ -85,7 +88,8 @@ class StreamingMessageState:
         Returns
         -------
         str
-            Filename like 'plan-session-123.md' for the current session.
+            Filename like 'plan-session-123.md' for the current session, or a
+            timestamped fallback when no database session ID exists.
         """
         return self._plan_filename()
 

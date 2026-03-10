@@ -133,7 +133,7 @@ class TestStreamingMessageState:
         assert state.get_session_plan_filename() == "plan-session-42.md"
 
     def test_get_session_plan_filename_without_id(self):
-        """get_session_plan_filename returns default when no session ID."""
+        """get_session_plan_filename returns timestamped fallback when no session ID."""
         state = StreamingMessageState(
             channel_id="C123",
             message_ts="123.456",
@@ -141,8 +141,9 @@ class TestStreamingMessageState:
             client=MagicMock(),
             logger=MagicMock(),
         )
+        state.started_at = 1700000000.123
 
-        assert state.get_session_plan_filename() == "plan.md"
+        assert state.get_session_plan_filename() == "plan-1700000000123.md"
 
     def test_get_session_plan_path(self):
         """get_session_plan_path returns correct path."""

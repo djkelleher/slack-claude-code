@@ -1228,15 +1228,17 @@ async def main():
             # Ensure the plans directory exists (Claude's designated file will be here)
             plans_dir = PLANS_DIR
             os.makedirs(plans_dir, exist_ok=True)
+            plan_file_path = streaming_state.get_execution_plan_path(execution_id)
             execution_prompt = (
                 f"{prompt}\n\n"
-                f"[Plan mode: After writing your plan to the designated plan file, "
+                f"[Plan mode: Write your plan to this exact file path: {plan_file_path}\n"
+                f"After writing your plan to that exact file path, "
                 f"include a single line in your response exactly:\n"
                 f"Created Plan: <full path to plan file>]"
             )
             logger.info(
                 f"Plan mode: session {session.id} execution {execution_id}, "
-                "using Claude's designated plan file"
+                f"using plan file path {plan_file_path}"
             )
 
         try:
