@@ -633,6 +633,152 @@ class TestCommandRouter:
         assert routed.result.output == "Implementation complete."
 
     @pytest.mark.asyncio
+    async def test_codex_question_resume_can_swap_streaming_callback(self):
+        """Question answers should allow Codex streaming to move to a new Slack message."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock()),
+        )
+
+        initial_on_chunk = AsyncMock()
+        replacement_on_chunk = AsyncMock()
+
+        async def _fake_codex_execute(**kwargs):
+            await kwargs["on_chunk"](
+                SimpleNamespace(type="assistant", content="First turn.", tool_activities=[])
+            )
+            payload = await kwargs["on_user_input_request"](
+                "item_1",
+                {
+                    "questions": [
+                        {
+                            "id": "q_1",
+                            "question": "Proceed?",
+                            "header": "Confirm",
+                            "options": [{"label": "Yes", "description": "Continue"}],
+                        }
+                    ]
+                },
+            )
+            assert payload == {"answers": {"q_1": {"answers": ["Yes"]}}}
+            await kwargs["on_chunk"](
+                SimpleNamespace(type="assistant", content="After answer.", tool_activities=[])
+            )
+            return SimpleNamespace(session_id="codex-new", success=True, output="After answer.")
+
+        deps.codex_executor.execute = AsyncMock(side_effect=_fake_codex_execute)
+        session = Session(
+            id=18,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+        pending_question = SimpleNamespace(question_id="pq2", tool_use_id="item_1")
+        on_interaction_resumed = AsyncMock(return_value=replacement_on_chunk)
+
+        with patch(
+            "src.handlers.command_router.QuestionManager.create_pending_question",
+            new=AsyncMock(return_value=pending_question),
+        ):
+            with patch(
+                "src.handlers.command_router.QuestionManager.post_question_to_slack",
+                new=AsyncMock(),
+            ):
+                with patch(
+                    "src.handlers.command_router.QuestionManager.wait_for_answer",
+                    new=AsyncMock(return_value={0: ["Yes"]}),
+                ):
+                    with patch(
+                        "src.handlers.command_router.QuestionManager.format_answer_for_codex_request",
+                        return_value={"answers": {"q_1": {"answers": ["Yes"]}}},
+                    ):
+                        await execute_for_session(
+                            deps=deps,
+                            session=session,
+                            prompt="hello",
+                            channel_id="C123",
+                            thread_ts=None,
+                            execution_id="exec-9b",
+                            on_chunk=initial_on_chunk,
+                            slack_client=SimpleNamespace(),
+                            user_id="U123",
+                            on_interaction_resumed=on_interaction_resumed,
+                        )
+
+        on_interaction_resumed.assert_awaited_once()
+        assert initial_on_chunk.await_count == 1
+        assert replacement_on_chunk.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_codex_approval_resume_can_swap_streaming_callback(self):
+        """Approval decisions should allow Codex streaming to move to a new Slack message."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock()),
+        )
+
+        initial_on_chunk = AsyncMock()
+        replacement_on_chunk = AsyncMock()
+
+        async def _fake_codex_execute(**kwargs):
+            await kwargs["on_chunk"](
+                SimpleNamespace(type="assistant", content="Before approval.", tool_activities=[])
+            )
+            payload = await kwargs["on_approval_request"](
+                "permissions.request",
+                {"tool_name": "shell", "input": {"command": "ls"}},
+            )
+            assert payload is not None
+            await kwargs["on_chunk"](
+                SimpleNamespace(type="assistant", content="After approval.", tool_activities=[])
+            )
+            return SimpleNamespace(session_id="codex-new", success=True, output="After approval.")
+
+        deps.codex_executor.execute = AsyncMock(side_effect=_fake_codex_execute)
+        session = Session(
+            id=19,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+        on_interaction_resumed = AsyncMock(return_value=replacement_on_chunk)
+
+        with patch(
+            "src.handlers.command_router.PermissionManager.request_approval",
+            new=AsyncMock(return_value=True),
+        ):
+            await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="hello",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-9c",
+                on_chunk=initial_on_chunk,
+                slack_client=SimpleNamespace(),
+                user_id="U123",
+                on_interaction_resumed=on_interaction_resumed,
+            )
+
+        on_interaction_resumed.assert_awaited_once()
+        assert initial_on_chunk.await_count == 1
+        assert replacement_on_chunk.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_codex_question_limit_still_fails_when_extra_question_requested(self):
         """A question request beyond the limit should still mark the result as failed."""
         deps = SimpleNamespace(

@@ -91,6 +91,7 @@ async def execute_for_session(
     persist_session_ids: bool = True,
     session_scope_override: Optional[str] = None,
     on_plan_approved: Any = None,
+    on_interaction_resumed: Any = None,
 ) -> CommandRouteResult:
     """Execute a prompt with the correct backend and persist resumed session IDs."""
     backend = resolve_backend_for_session(session)
@@ -107,6 +108,15 @@ async def execute_for_session(
         max_questions = config.timeouts.execution.max_questions_per_conversation
         codex_turn_index = 1
         tool_id_namespace = f"turn{codex_turn_index}:"
+
+        async def maybe_swap_on_chunk_after_interaction() -> None:
+            nonlocal on_chunk
+            if on_interaction_resumed is None:
+                return
+
+            replacement_on_chunk = await on_interaction_resumed()
+            if replacement_on_chunk is not None:
+                on_chunk = replacement_on_chunk
 
         async def resolve_initial_resume_session_id() -> Optional[str]:
             """Fork inherited channel thread IDs when entering a new Slack thread scope."""
@@ -212,6 +222,7 @@ async def execute_for_session(
 
             response_payload = QuestionManager.format_answer_for_codex_request(pending_question)
             pending_question = None
+            await maybe_swap_on_chunk_after_interaction()
             return response_payload
 
         async def on_approval_request(method: str, approval_input: dict) -> dict | None:
@@ -230,6 +241,7 @@ async def execute_for_session(
                 db=deps.db,
                 auto_approve_tools=config.AUTO_APPROVE_TOOLS,
             )
+            await maybe_swap_on_chunk_after_interaction()
             return approval_payload_from_decision(method, approved)
 
         async def run_codex_turn(turn_prompt: str, resume_session_id: Optional[str]) -> Any:

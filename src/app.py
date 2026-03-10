@@ -663,6 +663,31 @@ async def _execute_codex_message(
     streaming_state.start_heartbeat()
     on_chunk = create_streaming_callback(streaming_state)
 
+    async def on_interaction_resumed():
+        nonlocal message_ts, streaming_state
+        await streaming_state.stop_heartbeat()
+
+        continue_response = await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text="Continuing...",
+            blocks=processing_message("Continuing after Slack interaction..."),
+        )
+        message_ts = continue_response["ts"]
+        streaming_state = StreamingMessageState(
+            channel_id=channel_id,
+            message_ts=message_ts,
+            prompt=prompt,
+            client=client,
+            logger=logger,
+            track_tools=True,
+            smart_concat=False,
+            db_session_id=session.id,
+            on_error=on_streaming_error,
+        )
+        streaming_state.start_heartbeat()
+        return create_streaming_callback(streaming_state)
+
     try:
         if not deps.codex_executor:
             raise RuntimeError("Codex executor is not configured")
@@ -707,6 +732,7 @@ async def _execute_codex_message(
             user_id=user_id,
             logger=logger,
             on_plan_approved=on_plan_approved,
+            on_interaction_resumed=on_interaction_resumed,
         )
         result = route.result
 
