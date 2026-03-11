@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass, replace
 from pathlib import Path
 import re
+import time
 from typing import Optional
 
 from loguru import logger
@@ -585,11 +586,15 @@ async def ensure_queue_processor(
     task_logger=None,
 ) -> None:
     """Ensure the queue processor is active for this channel/thread scope."""
+    log = task_logger or logger
+    scope = build_session_scope(channel_id, thread_ts)
     task_id = _queue_task_id(channel_id, thread_ts)
     start_lock = await _get_queue_start_lock(task_id)
     async with start_lock:
         if await _is_queue_processor_running(channel_id, thread_ts):
+            log.info(f"Queue processor already active for scope {scope}")
             return
+        log.info(f"Starting queue processor for scope {scope}")
         await _create_queue_task(
             _process_queue(channel_id, deps, client, task_logger, thread_ts=thread_ts),
             channel_id,
@@ -1244,9 +1249,30 @@ async def _process_queue(
                     break
 
                 # Ensure we never overlap with a currently running Codex turn in this scope.
+                active_turn_wait_started_at: float | None = None
+                next_wait_log_at: float = 0.0
                 while deps.codex_executor and await deps.codex_executor.has_active_turn(scope):
-                    log.debug(f"Queue waiting for active Codex turn to finish in scope {scope}")
+                    now = time.monotonic()
+                    if active_turn_wait_started_at is None:
+                        active_turn_wait_started_at = now
+                        next_wait_log_at = now + 30.0
+                        log.info(
+                            f"Queue waiting for active Codex turn to finish in scope {scope}"
+                        )
+                    elif now >= next_wait_log_at:
+                        waited = now - active_turn_wait_started_at
+                        log.info(
+                            f"Queue still waiting for active Codex turn in scope "
+                            f"{scope} (waited {waited:.1f}s)"
+                        )
+                        next_wait_log_at = now + 30.0
                     await asyncio.sleep(0.5)
+                if active_turn_wait_started_at is not None:
+                    waited = time.monotonic() - active_turn_wait_started_at
+                    log.info(
+                        f"Queue resumed after active Codex turn finished in scope "
+                        f"{scope} (waited {waited:.1f}s)"
+                    )
 
                 # Fetch after waiting so we do not act on stale pending snapshots.
                 pending = await deps.db.get_pending_queue_items(channel_id, thread_ts)
