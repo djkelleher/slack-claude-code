@@ -49,3 +49,64 @@ def test_parse_ask_user_question_input_handles_non_list_questions():
     """Non-list questions payloads should return an empty question list."""
     parsed = QuestionManager.parse_ask_user_question_input({"questions": "invalid"})
     assert parsed == []
+
+
+def test_select_recommended_answers_prefers_recommended_suffix():
+    """Auto-answer selection should prefer explicit `(Recommended)` options."""
+    questions = QuestionManager.parse_ask_user_question_input(
+        {
+            "questions": [
+                {
+                    "id": "q1",
+                    "question": "Pick one",
+                    "header": "Choice",
+                    "options": [
+                        {"label": "No"},
+                        {"label": "Yes (Recommended)"},
+                    ],
+                    "multiSelect": False,
+                },
+                {
+                    "id": "q2",
+                    "question": "Pick many",
+                    "header": "Multiple",
+                    "options": [
+                        {"label": "A (Recommended)"},
+                        {"label": "B"},
+                        {"label": "C (Recommended)"},
+                    ],
+                    "multiSelect": True,
+                },
+            ]
+        }
+    )
+
+    answers = QuestionManager.select_recommended_answers(questions)
+    assert answers == {0: ["Yes (Recommended)"], 1: ["A (Recommended)", "C (Recommended)"]}
+
+
+def test_select_recommended_answers_falls_back_to_first_option():
+    """When no recommendation marker exists, auto-answer should use the first option."""
+    questions = QuestionManager.parse_ask_user_question_input(
+        {
+            "questions": [
+                {
+                    "id": "q1",
+                    "question": "Pick one",
+                    "header": "Choice",
+                    "options": [{"label": "First"}, {"label": "Second"}],
+                    "multiSelect": False,
+                },
+                {
+                    "id": "q2",
+                    "question": "Pick many",
+                    "header": "Multiple",
+                    "options": [{"label": "A"}, {"label": "B"}],
+                    "multiSelect": True,
+                },
+            ]
+        }
+    )
+
+    answers = QuestionManager.select_recommended_answers(questions)
+    assert answers == {0: ["First"], 1: ["A"]}

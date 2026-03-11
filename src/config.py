@@ -292,6 +292,9 @@ class Config(BaseSettings):
     CODEX_PREPEND_DEFAULT_INSTRUCTIONS: bool = True
     CODEX_DEFAULT_INSTRUCTIONS_FILE: str = str(Path.home() / ".codex" / "default_instructions.txt")
 
+    # Queue behavior
+    QUEUE_AUTO_ANSWER_QUESTIONS: bool = False
+
     # Valid sandbox modes for Codex app-server
     VALID_SANDBOX_MODES: tuple[str, ...] = (
         "read-only",

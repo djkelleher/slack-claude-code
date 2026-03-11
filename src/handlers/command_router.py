@@ -161,6 +161,7 @@ async def _execute_codex_backend(
     user_id: Optional[str],
     logger: Any,
     persist_session_ids: bool,
+    auto_answer_questions: bool,
     on_plan_approved: Any,
     on_interaction_resumed: Any,
 ) -> Any:
@@ -248,12 +249,6 @@ async def _execute_codex_backend(
 
     async def on_user_input_request(tool_use_id: str, tool_input: dict) -> dict | None:
         nonlocal pending_question, question_count, question_limit_reached
-        if slack_client is None:
-            if pending_question and pending_question.tool_use_id == tool_use_id:
-                await QuestionManager.cancel(pending_question.question_id)
-                pending_question = None
-            return None
-
         if question_count >= max_questions:
             question_limit_reached = True
             if logger:
@@ -263,13 +258,32 @@ async def _execute_codex_backend(
                 )
             return None
 
+        normalized_tool_input = _normalize_codex_question_input("request_user_input", tool_input)
+
+        if auto_answer_questions:
+            questions = QuestionManager.parse_ask_user_question_input(normalized_tool_input)
+            auto_answers = QuestionManager.select_recommended_answers(questions)
+            question_count += 1
+            if logger:
+                logger.info(
+                    f"Auto-answering Codex question request {tool_use_id} "
+                    f"for queue-style execution ({len(questions)} question(s))"
+                )
+            return QuestionManager.format_answers_for_codex_questions(questions, auto_answers)
+
+        if slack_client is None:
+            if pending_question and pending_question.tool_use_id == tool_use_id:
+                await QuestionManager.cancel(pending_question.question_id)
+                pending_question = None
+            return None
+
         if not pending_question or pending_question.tool_use_id != tool_use_id:
             pending_question = await QuestionManager.create_pending_question(
                 session_id=str(session.id),
                 channel_id=channel_id,
                 thread_ts=thread_ts,
                 tool_use_id=tool_use_id,
-                tool_input=_normalize_codex_question_input("request_user_input", tool_input),
+                tool_input=normalized_tool_input,
             )
 
         await QuestionManager.post_question_to_slack(
@@ -401,6 +415,7 @@ async def _execute_claude_backend(
     user_id: Optional[str],
     logger: Any,
     persist_session_ids: bool,
+    auto_answer_questions: bool,
     on_plan_approved: Any,
     on_interaction_resumed: Any,
 ) -> Any:
@@ -421,7 +436,7 @@ async def _execute_claude_backend(
 
     async def wrapped_on_chunk(msg: Any) -> None:
         nonlocal accumulated_context, pending_question
-        if msg.tool_activities and slack_client is not None:
+        if msg.tool_activities and (slack_client is not None or auto_answer_questions):
             for tool in msg.tool_activities:
                 if tool.name != "AskUserQuestion":
                     continue
@@ -485,24 +500,37 @@ async def _execute_claude_backend(
         and result.session_id
         and question_count < max_questions
     ):
-        if slack_client is None:
+        if slack_client is None and not auto_answer_questions:
             break
         question_count += 1
-        await QuestionManager.post_question_to_slack(
-            pending_question,
-            slack_client,
-            deps.db,
-            context_text=accumulated_context,
-        )
-        answers = await QuestionManager.wait_for_answer(pending_question.question_id)
-        if not answers:
-            pending_question = None
-            result.output = (accumulated_context + "\n\n_Question was cancelled._").strip()
-            result.success = False
-            break
-        answer_text = QuestionManager.format_answer_for_claude(pending_question)
+        if auto_answer_questions:
+            pending_question.answers = QuestionManager.select_recommended_answers(
+                pending_question.questions
+            )
+            answer_text = QuestionManager.format_answer_for_claude(pending_question).strip()
+            if not answer_text:
+                answer_text = "Use your recommended/default option and continue."
+            if logger:
+                logger.info(
+                    f"Auto-answering Claude question {pending_question.tool_use_id} "
+                    f"for queue-style execution ({len(pending_question.questions)} question(s))"
+                )
+        else:
+            await QuestionManager.post_question_to_slack(
+                pending_question,
+                slack_client,
+                deps.db,
+                context_text=accumulated_context,
+            )
+            answers = await QuestionManager.wait_for_answer(pending_question.question_id)
+            if not answers:
+                pending_question = None
+                result.output = (accumulated_context + "\n\n_Question was cancelled._").strip()
+                result.success = False
+                break
+            answer_text = QuestionManager.format_answer_for_claude(pending_question)
+            await maybe_swap_on_chunk_after_interaction()
         pending_question = None
-        await maybe_swap_on_chunk_after_interaction()
         result = await run_claude_turn(
             answer_text,
             result.session_id,
@@ -584,6 +612,7 @@ async def execute_for_session(
     user_id: Optional[str] = None,
     logger: Any = None,
     persist_session_ids: bool = True,
+    auto_answer_questions: bool = False,
     session_scope_override: Optional[str] = None,
     on_plan_approved: Any = None,
     on_interaction_resumed: Any = None,
@@ -606,6 +635,7 @@ async def execute_for_session(
             user_id=user_id,
             logger=logger,
             persist_session_ids=persist_session_ids,
+            auto_answer_questions=auto_answer_questions,
             on_plan_approved=on_plan_approved,
             on_interaction_resumed=on_interaction_resumed,
         )
@@ -624,6 +654,7 @@ async def execute_for_session(
         user_id=user_id,
         logger=logger,
         persist_session_ids=persist_session_ids,
+        auto_answer_questions=auto_answer_questions,
         on_plan_approved=on_plan_approved,
         on_interaction_resumed=on_interaction_resumed,
     )

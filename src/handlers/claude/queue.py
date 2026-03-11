@@ -1,10 +1,10 @@
 """Queue command handlers: /q, /qc, /qv, /qclear, /qdelete, and /qr."""
 
 import asyncio
-from dataclasses import dataclass, replace
-from pathlib import Path
 import re
 import time
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -451,6 +451,7 @@ async def _execute_queue_item(
             slack_client=client,
             logger=log,
             persist_session_ids=persist_session_ids,
+            auto_answer_questions=config.QUEUE_AUTO_ANSWER_QUESTIONS,
             session_scope_override=session_scope_override,
             on_plan_approved=on_plan_approved,
         )
@@ -1280,9 +1281,7 @@ async def _process_queue(
                     if active_turn_wait_started_at is None:
                         active_turn_wait_started_at = now
                         next_wait_log_at = now + 30.0
-                        log.info(
-                            f"Queue waiting for active Codex turn to finish in scope {scope}"
-                        )
+                        log.info(f"Queue waiting for active Codex turn to finish in scope {scope}")
                     elif now >= next_wait_log_at:
                         waited = now - active_turn_wait_started_at
                         log.info(

@@ -180,6 +180,7 @@ Queue control behavior:
 - `/qdelete` and `/qc delete` remove the entire queue scope, including running/completed/cancelled records, then reset the scope to `running`.
 - Adding new items with `/q` does not auto-start processing while a scope is paused or stopped; resume it explicitly with `/qc resume`.
 - `/qv` and `/qc view` show queue state and include a notice when the scope is paused or stopped.
+- Set `QUEUE_AUTO_ANSWER_QUESTIONS=true` to auto-answer assistant questions during queue execution by choosing `(Recommended)` options (fallback: first option).
 
 #### Structured Queue DSL (Queues + Worktree + Loops)
 

@@ -9,6 +9,7 @@ input. Instead, we:
 """
 
 import asyncio
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,6 +20,8 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from ..database.repository import DatabaseRepository
 from ..utils.pending_manager import PendingManager
+
+_RECOMMENDED_OPTION_SUFFIX = re.compile(r"\(\s*recommended\s*\)\s*$", re.IGNORECASE)
 
 
 @dataclass
@@ -346,20 +349,51 @@ class QuestionManager:
         return await cls._pending.cancel_for_session(session_id)
 
     @classmethod
-    def format_answer_for_claude(cls, pending: PendingQuestion) -> str:
-        """Format the user's answers into a text response for Claude.
+    def _is_recommended_option_label(cls, label: str) -> bool:
+        """Return True when an option label is explicitly marked as recommended."""
+        return bool(_RECOMMENDED_OPTION_SUFFIX.search(label.strip()))
 
-        Args:
-            pending: The pending question with answers
+    @classmethod
+    def select_recommended_answers(cls, questions: list[Question]) -> dict[int, list[str]]:
+        """Select deterministic auto-answers, preferring recommended options."""
+        answers: dict[int, list[str]] = {}
+        for i, question in enumerate(questions):
+            recommended_labels = [
+                option.label
+                for option in question.options
+                if cls._is_recommended_option_label(option.label)
+            ]
 
-        Returns:
-            Formatted text response to send as a follow-up message
-        """
+            if question.multi_select:
+                if recommended_labels:
+                    answers[i] = recommended_labels
+                elif question.options:
+                    answers[i] = [question.options[0].label]
+                else:
+                    answers[i] = []
+                continue
+
+            if recommended_labels:
+                answers[i] = [recommended_labels[0]]
+            elif question.options:
+                answers[i] = [question.options[0].label]
+            else:
+                answers[i] = []
+
+        return answers
+
+    @classmethod
+    def format_answers_for_claude_questions(
+        cls,
+        questions: list[Question],
+        answers_by_index: dict[int, list[str]],
+    ) -> str:
+        """Format indexed answers for Claude follow-up message text."""
         response_parts = []
 
-        for i, question in enumerate(pending.questions):
-            selected = pending.answers.get(i, [])
-            if len(pending.questions) > 1:
+        for i, question in enumerate(questions):
+            selected = answers_by_index.get(i, [])
+            if len(questions) > 1:
                 # Multiple questions - include question reference
                 response_parts.append(f"**{question.header}**: {', '.join(selected)}")
             else:
@@ -369,13 +403,34 @@ class QuestionManager:
         return "\n".join(response_parts)
 
     @classmethod
+    def format_answers_for_codex_questions(
+        cls,
+        questions: list[Question],
+        answers_by_index: dict[int, list[str]],
+    ) -> dict:
+        """Format indexed answers for Codex app-server requestUserInput response."""
+        answers: dict[str, dict[str, list[str]]] = {}
+        for i, question in enumerate(questions):
+            question_id = question.id or f"q_{i + 1}"
+            answers[question_id] = {"answers": answers_by_index.get(i, [])}
+        return {"answers": answers}
+
+    @classmethod
+    def format_answer_for_claude(cls, pending: PendingQuestion) -> str:
+        """Format the user's answers into a text response for Claude.
+
+        Args:
+            pending: The pending question with answers
+
+        Returns:
+            Formatted text response to send as a follow-up message
+        """
+        return cls.format_answers_for_claude_questions(pending.questions, pending.answers)
+
+    @classmethod
     def format_answer_for_codex_request(cls, pending: PendingQuestion) -> dict:
         """Format answers for Codex app-server `item/tool/requestUserInput` response."""
-        answers: dict[str, dict[str, list[str]]] = {}
-        for i, question in enumerate(pending.questions):
-            question_id = question.id or f"q_{i + 1}"
-            answers[question_id] = {"answers": pending.answers.get(i, [])}
-        return {"answers": answers}
+        return cls.format_answers_for_codex_questions(pending.questions, pending.answers)
 
     @classmethod
     async def count_pending(cls) -> int:
