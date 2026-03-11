@@ -659,6 +659,53 @@ async def test_qc_resume_restarts_pending_queue():
 
 
 @pytest.mark.asyncio
+async def test_qc_resume_recovers_stale_running_items_and_restarts_pending_queue():
+    """`/qc resume` should recover stale running rows and start pending work."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
+            get_pending_queue_items=AsyncMock(return_value=[SimpleNamespace(id=21)]),
+            get_running_queue_items=AsyncMock(
+                side_effect=[[SimpleNamespace(id=88)], []]
+            ),
+            update_queue_item_status=AsyncMock(return_value=True),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/qc"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with patch(
+        "src.handlers.claude.queue._is_queue_processor_running",
+        new=AsyncMock(return_value=False),
+    ):
+        with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+            await handler(
+                ack=AsyncMock(),
+                command={
+                    "channel_id": "C123",
+                    "user_id": "U123",
+                    "text": "resume",
+                    "command": "/qc",
+                },
+                client=client,
+                logger=MagicMock(),
+            )
+
+    deps.db.update_queue_item_status.assert_awaited_once_with(
+        88,
+        "cancelled",
+        error_message="Recovered stale running queue item (no active queue processor).",
+    )
+    mock_ensure.assert_awaited_once()
+    assert client.chat_postMessage.await_args.kwargs["text"] == (
+        "Channel queue: resumed. 1 pending item(s) ready to run. "
+        "Recovered 1 stale running item(s)."
+    )
+
+
+@pytest.mark.asyncio
 async def test_qc_stop_accepts_explicit_thread_scope():
     """`/qc stop <thread_ts>` should target that thread queue."""
     app = _FakeApp()

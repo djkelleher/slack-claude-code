@@ -211,6 +211,37 @@ async def _get_queue_state(
     return control.state
 
 
+async def _recover_stale_running_items(
+    *,
+    channel_id: str,
+    thread_ts: Optional[str],
+    deps: HandlerDependencies,
+    log,
+) -> int:
+    """Mark stale DB-running queue items cancelled when no processor task is active."""
+    if await _is_queue_processor_running(channel_id, thread_ts):
+        return 0
+
+    running_items = await deps.db.get_running_queue_items(channel_id, thread_ts)
+    if not running_items:
+        return 0
+
+    recovered = 0
+    for running_item in running_items:
+        updated = await deps.db.update_queue_item_status(
+            running_item.id,
+            "cancelled",
+            error_message="Recovered stale running queue item (no active queue processor).",
+        )
+        if updated:
+            recovered += 1
+
+    if recovered:
+        scope = build_session_scope(channel_id, thread_ts)
+        log.warning(f"Recovered {recovered} stale running queue item(s) for scope {scope}")
+    return recovered
+
+
 def _extract_codex_thread_id(response: dict) -> Optional[str]:
     """Extract a thread id from a Codex thread/fork response."""
     thread = response.get("thread")
@@ -1054,14 +1085,30 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 return
 
             await deps.db.update_queue_control_state(ctx.channel_id, target_thread_ts, "running")
+            recovered_stale_count = await _recover_stale_running_items(
+                channel_id=ctx.channel_id,
+                thread_ts=target_thread_ts,
+                deps=deps,
+                log=ctx.logger,
+            )
             pending = await deps.db.get_pending_queue_items(ctx.channel_id, target_thread_ts)
             running_items = await deps.db.get_running_queue_items(ctx.channel_id, target_thread_ts)
             scope_label = _queue_scope_label(target_thread_ts)
-            if pending and not running_items:
+            if pending:
                 await ensure_queue_processor(
                     ctx.channel_id, target_thread_ts, deps, ctx.client, ctx.logger
                 )
-                text = f"{scope_label}: resumed. {len(pending)} pending item(s) ready to run."
+                if running_items:
+                    text = (
+                        f"{scope_label}: resumed. Existing running item(s) will continue and "
+                        "pending work will follow."
+                    )
+                else:
+                    text = f"{scope_label}: resumed. {len(pending)} pending item(s) ready to run."
+                    if recovered_stale_count:
+                        text = (
+                            f"{text} Recovered {recovered_stale_count} stale running item(s)."
+                        )
             elif running_items:
                 text = (
                     f"{scope_label}: resumed. Existing running item(s) will continue and pending "
@@ -1069,6 +1116,10 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
             else:
                 text = f"{scope_label}: resumed. No pending items remain."
+                if recovered_stale_count:
+                    text = (
+                        f"{text} Recovered {recovered_stale_count} stale running item(s)."
+                    )
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
