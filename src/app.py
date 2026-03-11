@@ -588,6 +588,39 @@ async def _queue_structured_plan_message(
     return True
 
 
+async def _restore_pending_queue_processors(client, deps, logger) -> None:
+    """Restart queue processors for scopes with pending work after process startup."""
+    pending_scopes = await deps.db.list_pending_queue_scopes()
+    if not pending_scopes:
+        return
+
+    logger.info(f"Startup queue recovery found {len(pending_scopes)} scope(s) with pending items")
+    started_count = 0
+    skipped_count = 0
+    for channel_id, thread_ts in pending_scopes:
+        queue_state = (await deps.db.get_queue_control(channel_id, thread_ts)).state
+        scope = build_session_scope(channel_id, thread_ts)
+        if queue_state != "running":
+            skipped_count += 1
+            logger.info(
+                f"Skipping startup queue recovery for scope {scope} because state={queue_state}"
+            )
+            continue
+        await ensure_queue_processor(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            deps=deps,
+            client=client,
+            task_logger=logger,
+        )
+        started_count += 1
+
+    logger.info(
+        f"Startup queue recovery complete: started {started_count} processor(s), "
+        f"skipped {skipped_count} non-running scope(s)"
+    )
+
+
 async def main():
     """Main application entry point."""
     configure_logging()
@@ -935,6 +968,7 @@ async def main():
     # Start the handler
     await handler.connect_async()
     logger.info("Connected to Slack")
+    await _restore_pending_queue_processors(client=app.client, deps=deps, logger=logger)
 
     # Wait for shutdown signal
     await shutdown_event.wait()

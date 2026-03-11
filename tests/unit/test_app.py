@@ -12,6 +12,7 @@ from src.app import (
     _event_dedupe_key,
     _extract_structured_queue_plan_from_uploaded_files,
     _is_duplicate_event,
+    _restore_pending_queue_processors,
     _slack_uploads_dir,
     _queue_structured_plan_message,
     _route_codex_message_to_active_turn_or_queue,
@@ -485,3 +486,60 @@ class TestStructuredQueuePlanRouting:
         assert handled is True
         kwargs = client.chat_postMessage.await_args.kwargs
         assert "Failed to process structured queue plan" in kwargs["text"]
+
+
+class TestStartupQueueRecovery:
+    """Tests for startup queue processor recovery."""
+
+    @pytest.mark.asyncio
+    async def test_restore_pending_queue_processors_starts_only_running_scopes(self):
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                list_pending_queue_scopes=AsyncMock(
+                    return_value=[
+                        ("C123", None),
+                        ("C123", "111.222"),
+                        ("C999", None),
+                    ]
+                ),
+                get_queue_control=AsyncMock(
+                    side_effect=[
+                        SimpleNamespace(state="running"),
+                        SimpleNamespace(state="paused"),
+                        SimpleNamespace(state="running"),
+                    ]
+                ),
+            )
+        )
+        client = SimpleNamespace()
+        fake_logger = MagicMock()
+
+        with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+            await _restore_pending_queue_processors(client=client, deps=deps, logger=fake_logger)
+
+        assert mock_ensure.await_count == 2
+        scopes_started = {
+            (
+                call.kwargs["channel_id"],
+                call.kwargs["thread_ts"],
+            )
+            for call in mock_ensure.await_args_list
+        }
+        assert scopes_started == {("C123", None), ("C999", None)}
+
+    @pytest.mark.asyncio
+    async def test_restore_pending_queue_processors_noop_without_pending_scopes(self):
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                list_pending_queue_scopes=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(),
+            )
+        )
+        client = SimpleNamespace()
+        fake_logger = MagicMock()
+
+        with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+            await _restore_pending_queue_processors(client=client, deps=deps, logger=fake_logger)
+
+        mock_ensure.assert_not_awaited()
+        deps.db.get_queue_control.assert_not_awaited()

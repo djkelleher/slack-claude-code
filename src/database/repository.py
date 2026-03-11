@@ -1011,6 +1011,23 @@ class DatabaseRepository:
             rows = await cursor.fetchall()
             return [QueueItem.from_row(row) for row in rows]
 
+    async def list_pending_queue_scopes(self) -> list[tuple[str, Optional[str]]]:
+        """List all channel/thread scopes that currently have pending queue items."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """
+                SELECT channel_id, thread_ts
+                FROM queue_items
+                WHERE status = 'pending'
+                GROUP BY channel_id, thread_ts
+                ORDER BY channel_id ASC,
+                         CASE WHEN thread_ts IS NULL THEN 0 ELSE 1 END,
+                         thread_ts ASC
+                """
+            )
+            rows = await cursor.fetchall()
+            return [(str(row[0]), self._normalize_thread_ts(row[1])) for row in rows]
+
     async def list_queue_scopes_for_channel(self, channel_id: str) -> list[Optional[str]]:
         """List queue scopes with activity or non-default control state for a channel."""
         async with self._get_connection() as db:

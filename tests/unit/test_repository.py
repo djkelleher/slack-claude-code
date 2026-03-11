@@ -604,6 +604,24 @@ class TestQueueOperations:
         assert [item.id for item in running] == [item1.id, item2.id]
 
     @pytest.mark.asyncio
+    async def test_list_pending_queue_scopes_returns_unique_scopes(self, db_repo):
+        """list_pending_queue_scopes returns one entry per channel/thread pending scope."""
+        channel_session = await db_repo.get_or_create_session("C123ABC", None)
+        thread_session = await db_repo.get_or_create_session("C123ABC", "123.456")
+        other_channel = await db_repo.get_or_create_session("C999XYZ", None)
+
+        first = await db_repo.add_to_queue(channel_session.id, "C123ABC", None, "pending-1")
+        await db_repo.add_to_queue(channel_session.id, "C123ABC", None, "pending-2")
+        await db_repo.add_to_queue(thread_session.id, "C123ABC", "123.456", "thread-pending")
+        completed = await db_repo.add_to_queue(other_channel.id, "C999XYZ", None, "completed")
+        await db_repo.update_queue_item_status(first.id, "running")
+        await db_repo.update_queue_item_status(completed.id, "completed", output="done")
+
+        scopes = await db_repo.list_pending_queue_scopes()
+
+        assert scopes == [("C123ABC", None), ("C123ABC", "123.456")]
+
+    @pytest.mark.asyncio
     async def test_get_queue_group_items_filters_by_group_and_status(self, db_repo):
         """get_queue_group_items filters by parallel group id and status."""
         session = await db_repo.get_or_create_session("C123ABC", None)
