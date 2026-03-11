@@ -7,12 +7,16 @@ from pathlib import Path
 from slack_bolt.async_app import AsyncApp
 
 from src.codex.capabilities import (
-    get_codex_hint_for_claude_command,
-    is_claude_only_slash_command,
     normalize_codex_approval_mode,
 )
 from src.config import (
     config,
+)
+from src.handlers.backend_command_adapter import (
+    format_codex_review_status,
+    get_codex_mcp_summary,
+    get_codex_usage_snapshot,
+    unsupported_claude_slash_command_message,
 )
 from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.command import command_response_with_tables, error_message
@@ -85,8 +89,8 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             default_cwd=config.DEFAULT_WORKING_DIR,
         )
         command_name = claude_command.strip().split(" ", 1)[0]
-        if session.get_backend() == "codex" and is_claude_only_slash_command(command_name):
-            hint = get_codex_hint_for_claude_command(command_name)
+        unsupported_hint = unsupported_claude_slash_command_message(session, command_name)
+        if unsupported_hint:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
@@ -99,7 +103,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                             "text": (
                                 f":warning: `{command_name}` is Claude-specific and not available "
                                 "for Codex sessions.\n\n"
-                                f"{hint}"
+                                f"{unsupported_hint}"
                             ),
                         },
                     },
@@ -414,63 +418,12 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             await _send_claude_command(ctx, "/cost", deps)
             return
 
-        sandbox_mode = session.sandbox_mode or config.CODEX_SANDBOX_MODE
-        approval_mode = normalize_codex_approval_mode(
-            session.approval_mode or config.CODEX_APPROVAL_MODE
+        usage_snapshot = await get_codex_usage_snapshot(
+            codex_executor=deps.codex_executor,
+            session=session,
+            channel_id=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
         )
-        model = session.model or config.DEFAULT_MODEL or "(default)"
-        has_session = ":white_check_mark:" if session.codex_session_id else ":x:"
-        active_turn_text = ":x:"
-        models_text = "n/a"
-        account_text = "n/a"
-        mcp_text = "n/a"
-        features_text = "n/a"
-
-        if deps.codex_executor:
-            scope = build_session_scope(ctx.channel_id, ctx.thread_ts)
-            active_turn = await deps.codex_executor.get_active_turn(scope)
-            if active_turn:
-                turn_id = active_turn.get("turn_id", "unknown")
-                active_turn_text = f":white_check_mark: `{turn_id}`"
-
-            try:
-                model_list = await deps.codex_executor.model_list(session.working_directory)
-                models_text = str(len(model_list.get("data", [])))
-            except Exception:
-                models_text = "unavailable"
-
-            try:
-                account_read = await deps.codex_executor.account_read(session.working_directory)
-                account = account_read.get("account")
-                if isinstance(account, dict):
-                    account_type = account.get("type", "unknown")
-                    if account_type == "chatgpt":
-                        account_text = (
-                            f"{account_type} ({account.get('planType', 'unknown')}) "
-                            f"{account.get('email', '')}".strip()
-                        )
-                    else:
-                        account_text = account_type
-                else:
-                    account_text = "none"
-            except Exception:
-                account_text = "unavailable"
-
-            try:
-                mcp_status = await deps.codex_executor.mcp_server_status_list(
-                    session.working_directory
-                )
-                mcp_text = str(len(mcp_status.get("data", [])))
-            except Exception:
-                mcp_text = "unavailable"
-
-            try:
-                features = await deps.codex_executor.experimental_feature_list(
-                    session.working_directory
-                )
-                features_text = str(len(features.get("data", [])))
-            except Exception:
-                features_text = "unavailable"
 
         fields = [
             {
@@ -479,19 +432,19 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             },
             {
                 "type": "mrkdwn",
-                "text": f"*Model:*\n`{model}`",
+                "text": f"*Model:*\n`{usage_snapshot.model}`",
             },
             {
                 "type": "mrkdwn",
-                "text": f"*Sandbox:*\n`{sandbox_mode}`",
+                "text": f"*Sandbox:*\n`{usage_snapshot.sandbox_mode}`",
             },
             {
                 "type": "mrkdwn",
-                "text": f"*Approval:*\n`{approval_mode}`",
+                "text": f"*Approval:*\n`{usage_snapshot.approval_mode}`",
             },
             {
                 "type": "mrkdwn",
-                "text": f"*Active Session:*\n{has_session}",
+                "text": f"*Active Session:*\n{usage_snapshot.has_session}",
             },
             {
                 "type": "mrkdwn",
@@ -499,24 +452,24 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             },
             {
                 "type": "mrkdwn",
-                "text": f"*Active Turn:*\n{active_turn_text}",
+                "text": f"*Active Turn:*\n{usage_snapshot.active_turn_text}",
             },
             {
                 "type": "mrkdwn",
-                "text": f"*Available Models:*\n{models_text}",
+                "text": f"*Available Models:*\n{usage_snapshot.models_text}",
             },
             {
                 "type": "mrkdwn",
-                "text": f"*Account:*\n{account_text}",
+                "text": f"*Account:*\n{usage_snapshot.account_text}",
             },
             {
                 "type": "mrkdwn",
-                "text": f"*MCP Servers:*\n{mcp_text}",
+                "text": f"*MCP Servers:*\n{usage_snapshot.mcp_text}",
             },
         ]
         context_text = (
             f"Last active: {session.last_active.strftime('%Y-%m-%d %H:%M:%S')} • "
-            f"Experimental features: {features_text}"
+            f"Experimental features: {usage_snapshot.features_text}"
         )
 
         await ctx.client.chat_postMessage(
@@ -803,30 +756,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                         include_turns=True,
                     )
                     thread = result.get("thread", {})
-                    turns = thread.get("turns", [])
-                    if turns:
-                        recent_turns = turns[-5:]
-                        turn_lines = []
-                        for turn in recent_turns:
-                            turn_lines.append(
-                                f"• `{turn.get('id', 'unknown')}` status=`{turn.get('status', 'unknown')}` "
-                                f"created=`{turn.get('createdAt', 'n/a')}`"
-                            )
-                        turns_text = "\n".join(turn_lines)
-                        latest_status = recent_turns[-1].get(
-                            "status", thread.get("status", "unknown")
-                        )
-                    else:
-                        turns_text = "No turns found."
-                        latest_status = thread.get("status", "unknown")
-                    summary = (
-                        f"*Codex Review Status*\n"
-                        f"Thread: `{thread.get('id', thread_id)}`\n"
-                        f"Name: {thread.get('name') or '(unnamed)'}\n"
-                        f"Status: `{latest_status}`\n"
-                        f"Turns: `{len(turns)}`\n\n"
-                        f"*Recent Turns*\n{turns_text}"
-                    )
+                    summary = format_codex_review_status(thread, thread_id)
                     await ctx.client.chat_postMessage(
                         channel=ctx.channel_id,
                         thread_ts=ctx.thread_ts,
@@ -979,21 +909,10 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 )
                 return
             try:
-                status = await deps.codex_executor.mcp_server_status_list(session.working_directory)
-                servers = status.get("data", [])
-                if not servers:
-                    summary = "No MCP servers detected."
-                else:
-                    lines = []
-                    for server in servers[:10]:
-                        name = server.get("name", "unknown")
-                        auth_status = server.get("authStatus", "unknown")
-                        tools = server.get("tools", {})
-                        resources = server.get("resources", [])
-                        lines.append(
-                            f"• *{name}*\nauth: `{auth_status}` • tools: `{len(tools)}` • resources: `{len(resources)}`"
-                        )
-                    summary = "*Codex MCP Servers*\n" + "\n\n".join(lines)
+                summary = await get_codex_mcp_summary(
+                    deps.codex_executor,
+                    session.working_directory,
+                )
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,

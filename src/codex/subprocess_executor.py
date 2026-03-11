@@ -11,6 +11,7 @@ from loguru import logger
 
 from src.backends.execution_result import BackendExecutionResult
 from src.backends.process_executor_base import ProcessExecutorBase
+from src.backends.stream_accumulator import StreamAccumulator
 from src.backends.process_termination import terminate_processes
 from src.codex.approval_bridge import default_approval_payload
 from src.codex.capabilities import normalize_codex_approval_mode
@@ -270,12 +271,8 @@ class SubprocessExecutor(ProcessExecutorBase):
         )
 
         parser = StreamParser()
-        accumulated_output = ""
-        accumulated_detailed = ""
+        accumulator = StreamAccumulator(join_assistant_chunks=lambda existing, new: existing + new)
         result_session_id = resume_session_id
-        cost_usd = None
-        duration_ms = None
-        error_msg = None
         started_at = time.monotonic()
         next_request_id = 1
         response_cache: dict[str, dict] = {}
@@ -311,8 +308,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             return request_id
 
         async def handle_stream_message(msg: StreamMessage) -> bool:
-            nonlocal accumulated_output, accumulated_detailed, result_session_id
-            nonlocal cost_usd, duration_ms, error_msg
+            nonlocal result_session_id
 
             if msg.type == "assistant" and msg.content:
                 preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
@@ -337,24 +333,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             if msg.session_id:
                 result_session_id = msg.session_id
 
-            if msg.type == "assistant" and msg.content:
-                # App-server emits tiny deltas; preserve raw chunk boundaries.
-                accumulated_output += msg.content
-
-            if msg.type == "result":
-                cost_usd = msg.cost_usd
-                duration_ms = msg.duration_ms
-                if msg.content and not accumulated_output:
-                    accumulated_output = msg.content
-                if msg.detailed_content:
-                    accumulated_detailed = msg.detailed_content
-                if msg.raw and msg.raw.get("is_error"):
-                    errors = msg.raw.get("errors", [])
-                    if errors:
-                        error_msg = "; ".join(str(e) for e in errors)
-
-            if msg.type == "error":
-                error_msg = msg.content
+            accumulator.apply(msg)
 
             if on_chunk:
                 await on_chunk(msg)
@@ -500,14 +479,14 @@ class SubprocessExecutor(ProcessExecutorBase):
                     item_text_raw = item.get("text")
                     item_text = str(item_text_raw) if item_text_raw is not None else ""
                     # item/completed includes full text already streamed as deltas.
-                    if item_text and accumulated_output.endswith(item_text):
+                    if item_text and accumulator.output.endswith(item_text):
                         logger.debug(
                             f"{log_prefix}Skipping duplicate completed assistant item "
                             f"{item_id or '<unknown>'}"
                         )
                         return False
                     if delta_seen_for_item and item_text:
-                        overlap = _suffix_prefix_overlap(accumulated_output, item_text)
+                        overlap = _suffix_prefix_overlap(accumulator.output, item_text)
                         missing_tail = item_text[overlap:]
                         if missing_tail:
                             logger.debug(
@@ -1019,15 +998,15 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if stderr_str:
                     logger.warning(f"{log_prefix}codex app-server stderr: {stderr_str}")
 
-            success = not error_msg
+            success = not accumulator.error_message
             return ExecutionResult(
                 success=success,
-                output=accumulated_output,
-                detailed_output=accumulated_detailed,
+                output=accumulator.output,
+                detailed_output=accumulator.detailed_output,
                 session_id=result_session_id,
-                error=error_msg,
-                cost_usd=cost_usd,
-                duration_ms=duration_ms,
+                error=accumulator.error_message,
+                cost_usd=accumulator.cost_usd,
+                duration_ms=accumulator.duration_ms,
             )
 
         except asyncio.CancelledError:
@@ -1043,8 +1022,8 @@ class SubprocessExecutor(ProcessExecutorBase):
             await terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
-                output=accumulated_output,
-                detailed_output=accumulated_detailed,
+                output=accumulator.output,
+                detailed_output=accumulator.detailed_output,
                 session_id=result_session_id,
                 error="Cancelled",
                 was_cancelled=True,
@@ -1063,8 +1042,8 @@ class SubprocessExecutor(ProcessExecutorBase):
             await terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
-                output=accumulated_output,
-                detailed_output=accumulated_detailed,
+                output=accumulator.output,
+                detailed_output=accumulator.detailed_output,
                 session_id=result_session_id,
                 error=str(e),
             )

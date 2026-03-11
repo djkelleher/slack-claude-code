@@ -1,0 +1,48 @@
+"""Shared stream-message accumulation helpers for backend executors."""
+
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+from src.utils.stream_models import StreamMessage
+
+
+@dataclass
+class StreamAccumulator:
+    """Accumulate normalized stream message state into execution-result fields."""
+
+    join_assistant_chunks: Callable[[str, str], str]
+    output: str = ""
+    detailed_output: str = ""
+    session_id: Optional[str] = None
+    cost_usd: Optional[float] = None
+    duration_ms: Optional[int] = None
+    error_message: Optional[str] = None
+    _stringify_result_errors: bool = field(default=True, repr=False)
+
+    def apply(self, msg: StreamMessage) -> None:
+        """Apply a stream message to tracked execution state."""
+        if msg.session_id:
+            self.session_id = msg.session_id
+
+        if msg.type == "assistant" and msg.content:
+            self.output = self.join_assistant_chunks(self.output, msg.content)
+
+        if msg.type == "result":
+            self.cost_usd = msg.cost_usd
+            self.duration_ms = msg.duration_ms
+            if msg.content and not self.output:
+                self.output = msg.content
+            if msg.detailed_content:
+                self.detailed_output = msg.detailed_content
+
+            raw_errors = []
+            if msg.raw and msg.raw.get("is_error"):
+                raw_errors = msg.raw.get("errors", [])
+            if raw_errors:
+                if self._stringify_result_errors:
+                    self.error_message = "; ".join(str(err) for err in raw_errors)
+                else:
+                    self.error_message = "; ".join(raw_errors)
+
+        if msg.type == "error":
+            self.error_message = msg.content

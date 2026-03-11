@@ -32,6 +32,7 @@ from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 from ..command_router import execute_for_session
+from ..execution_runtime import streaming_flags_for_session
 
 # Default timeout for queue processors (1 hour)
 QUEUE_PROCESSOR_TIMEOUT = 3600
@@ -325,8 +326,7 @@ async def _execute_queue_item(
     smart_concat = True
     terminal_style = False
     if isinstance(base_session, Session):
-        smart_concat = base_session.get_backend() == "claude"
-        terminal_style = base_session.get_backend() == "codex"
+        smart_concat, terminal_style = streaming_flags_for_session(base_session)
     log.info(f"{processing_log_line} (scope={scope}, queue_item_id={item.id})")
 
     message_ts = None

@@ -10,6 +10,7 @@ from loguru import logger
 
 from src.backends.execution_result import BackendExecutionResult
 from src.backends.process_executor_base import ProcessExecutorBase
+from src.backends.stream_accumulator import StreamAccumulator
 from src.utils.process_utils import terminate_process_safely
 from src.utils.stream_models import concat_with_spacing
 
@@ -246,12 +247,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         )
 
         parser = StreamParser()
-        accumulated_output = ""
-        accumulated_detailed = ""
-        result_session_id = None
-        cost_usd = None
-        duration_ms = None
-        error_msg = None
+        accumulator = StreamAccumulator(join_assistant_chunks=concat_with_spacing)
 
         try:
             # Read stdout line by line with timeout protection
@@ -302,9 +298,9 @@ class SubprocessExecutor(ProcessExecutorBase):
                     await terminate_process_safely(process)
                     return ExecutionResult(
                         success=False,
-                        output=accumulated_output,
-                        detailed_output=accumulated_detailed,
-                        session_id=result_session_id,
+                        output=accumulator.output,
+                        detailed_output=accumulator.detailed_output,
+                        session_id=accumulator.session_id,
                         error=(
                             f"Claude process timed out (no output for {READLINE_TIMEOUT_SECONDS}s). "
                             "The process may have hung or lost connection to the API."
@@ -520,36 +516,11 @@ class SubprocessExecutor(ProcessExecutorBase):
                             f"{log_prefix}Claude Finished - completed in {msg.duration_ms}ms"
                         )
 
-                # Track session ID
-                if msg.session_id:
-                    result_session_id = msg.session_id
-
-                # Accumulate content
-                if msg.type == "assistant" and msg.content:
-                    accumulated_output = concat_with_spacing(accumulated_output, msg.content)
-                elif msg.type == "result" and msg.content and not accumulated_output:
-                    # Some CLI commands only populate the result field.
-                    accumulated_output = msg.content
-
-                # Track result metadata
-                if msg.type == "result":
-                    cost_usd = msg.cost_usd
-                    duration_ms = msg.duration_ms
-                    if msg.session_id:
-                        result_session_id = msg.session_id
-                    # Get final accumulated detailed output
-                    if msg.detailed_content:
-                        accumulated_detailed = msg.detailed_content
-                    # Check for errors in result message (e.g., session not found)
-                    if msg.raw and msg.raw.get("is_error"):
-                        errors = msg.raw.get("errors", [])
-                        if errors:
-                            error_msg = "; ".join(errors)
-                            logger.warning(f"{log_prefix}Result contains errors: {error_msg}")
-
-                # Track errors from error-type messages
-                if msg.type == "error":
-                    error_msg = msg.content
+                accumulator.apply(msg)
+                if msg.type == "result" and accumulator.error_message:
+                    logger.warning(
+                        f"{log_prefix}Result contains errors: {accumulator.error_message}"
+                    )
 
                 # Call chunk callback
                 if on_chunk:
@@ -668,16 +639,16 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if stderr_str:
                     logger.warning(f"{log_prefix}Claude stderr: {stderr_str}")
                     # Only treat stderr as error if process failed
-                    if process.returncode != 0 and not error_msg:
-                        error_msg = stderr_str
+                    if process.returncode != 0 and not accumulator.error_message:
+                        accumulator.error_message = stderr_str
 
-            success = process.returncode == 0 and not error_msg
+            success = process.returncode == 0 and not accumulator.error_message
 
             # Check if session not found - retry without resume
             if (
                 not success
                 and resume_session_id
-                and "No conversation found with session ID" in (error_msg or "")
+                and "No conversation found with session ID" in (accumulator.error_message or "")
             ):
                 logger.info(
                     f"{log_prefix}Session {resume_session_id} not found, retrying without resume (depth={_recursion_depth + 1})"
@@ -728,12 +699,12 @@ class SubprocessExecutor(ProcessExecutorBase):
 
             return ExecutionResult(
                 success=success,
-                output=accumulated_output,
-                detailed_output=accumulated_detailed,
-                session_id=result_session_id,
-                error=error_msg,
-                cost_usd=cost_usd,
-                duration_ms=duration_ms,
+                output=accumulator.output,
+                detailed_output=accumulator.detailed_output,
+                session_id=accumulator.session_id,
+                error=accumulator.error_message,
+                cost_usd=accumulator.cost_usd,
+                duration_ms=accumulator.duration_ms,
                 has_pending_question=state.ask_user_question_detected,
                 has_pending_plan_approval=has_plan_approval,
                 plan_subagent_result=state.plan_subagent_result,
@@ -744,9 +715,9 @@ class SubprocessExecutor(ProcessExecutorBase):
             await terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
-                output=accumulated_output,
-                detailed_output=accumulated_detailed,
-                session_id=result_session_id,
+                output=accumulator.output,
+                detailed_output=accumulator.detailed_output,
+                session_id=accumulator.session_id,
                 error="Cancelled",
                 was_cancelled=True,
             )
@@ -755,9 +726,9 @@ class SubprocessExecutor(ProcessExecutorBase):
             await terminate_process_safely(process)
             return ExecutionResult(
                 success=False,
-                output=accumulated_output,
-                detailed_output=accumulated_detailed,
-                session_id=result_session_id,
+                output=accumulator.output,
+                detailed_output=accumulator.detailed_output,
+                session_id=accumulator.session_id,
                 error=str(e),
             )
         finally:

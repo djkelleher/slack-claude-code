@@ -3,7 +3,6 @@
 import asyncio
 import json
 import re
-import uuid
 from typing import Any
 
 from slack_bolt.async_app import AsyncApp
@@ -21,9 +20,8 @@ from src.question.slack_ui import (
 )
 from src.utils.detail_cache import DetailCache
 from src.utils.formatters.base import markdown_to_mrkdwn
-from src.utils.formatters.command import command_response_with_tables, error_message
+from src.utils.formatters.command import error_message
 from src.utils.formatters.job import parallel_job_status, sequential_job_status
-from src.utils.formatters.streaming import processing_message
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.model_selection import (
     codex_model_validation_error,
@@ -31,11 +29,10 @@ from src.utils.model_selection import (
     normalize_model_name,
     resolve_model_selection_action,
 )
-from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from .base import CommandContext, HandlerDependencies
 from .claude.worktree import _handle_merge, _handle_remove, _handle_switch
-from .command_router import execute_for_session
+from .execution_runtime import execute_prompt_with_runtime
 
 
 async def _get_git_commit_hash(working_directory: str) -> str | None:
@@ -289,144 +286,23 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             channel_id, thread_ts=thread_ts, default_cwd=config.DEFAULT_WORKING_DIR
         )
 
-        # Create new command history entry
-        new_cmd = await deps.db.add_command(session.id, cmd.command)
-        await deps.db.update_command_status(new_cmd.id, "running")
-
-        # Send processing message (in thread if original was in thread)
-        response = await client.chat_postMessage(
-            channel=channel_id,
-            thread_ts=thread_ts,
-            blocks=processing_message(cmd.command),
-        )
-        message_ts = response["ts"]
-        smart_concat = session.get_backend() == "claude"
-        terminal_style = session.get_backend() == "codex"
-
-        # Setup streaming state
-        execution_id = str(uuid.uuid4())
-        streaming_state = StreamingMessageState(
-            channel_id=channel_id,
-            message_ts=message_ts,
-            prompt=cmd.command,
-            client=client,
-            logger=logger,
-            track_tools=True,
-            smart_concat=smart_concat,
-            terminal_style=terminal_style,
-        )
-        streaming_state.start_heartbeat()
-        on_chunk = create_streaming_callback(streaming_state)
-
         try:
-
-            async def on_plan_approved():
-                nonlocal message_ts, streaming_state
-                await streaming_state.finalize()
-
-                exec_response = await client.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    text="Plan approved - executing...",
-                    blocks=processing_message(
-                        ":white_check_mark: *Plan approved!* Executing implementation..."
-                    ),
-                )
-                message_ts = exec_response["ts"]
-                streaming_state = StreamingMessageState(
-                    channel_id=channel_id,
-                    message_ts=message_ts,
-                    prompt="[Plan Execution]",
-                    client=client,
-                    logger=logger,
-                    track_tools=True,
-                    smart_concat=smart_concat,
-                    terminal_style=terminal_style,
-                )
-                streaming_state.start_heartbeat()
-                return create_streaming_callback(streaming_state)
-
-            route = await execute_for_session(
+            await execute_prompt_with_runtime(
                 deps=deps,
                 session=session,
                 prompt=cmd.command,
                 channel_id=channel_id,
                 thread_ts=thread_ts,
-                execution_id=execution_id,
-                on_chunk=on_chunk,
-                slack_client=client,
-                user_id=body.get("user", {}).get("id"),
+                client=client,
                 logger=logger,
-                on_plan_approved=on_plan_approved,
+                user_id=body.get("user", {}).get("id"),
             )
-            result = route.result
-
-            if result.success:
-                await deps.db.update_command_status(new_cmd.id, "completed", result.output)
-            else:
-                await deps.db.update_command_status(
-                    new_cmd.id, "failed", result.output, result.error
-                )
-
-            # Stop heartbeat before sending final response
-            await streaming_state.stop_heartbeat()
-
-            # Format response with table support (may produce multiple messages)
-            output = result.output or result.error or "No output"
-            message_blocks_list = command_response_with_tables(
-                prompt=cmd.command,
-                output=output,
-                command_id=new_cmd.id,
-                duration_ms=result.duration_ms,
-                cost_usd=result.cost_usd,
-                is_error=not result.success,
-                terminal_style=terminal_style,
-            )
-
-            # Update the first message
-            await client.chat_update(
-                channel=channel_id,
-                ts=message_ts,
-                blocks=message_blocks_list[0],
-            )
-
-            # Post additional messages for tables
-            for blocks in message_blocks_list[1:]:
-                await client.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    text="Table",
-                    blocks=blocks,
-                )
-
         except asyncio.CancelledError:
             logger.info("Rerun command was cancelled")
-            await streaming_state.stop_heartbeat()
-            await deps.db.update_command_status(new_cmd.id, "cancelled", error_message="Cancelled")
-            await client.chat_update(
-                channel=channel_id,
-                ts=message_ts,
-                blocks=error_message("Command was cancelled"),
-            )
-        except (OSError, IOError) as e:
-            logger.error(f"I/O error rerunning command: {e}")
-            await streaming_state.stop_heartbeat()
-            await deps.db.update_command_status(new_cmd.id, "failed", error_message=str(e))
-            await client.chat_update(
-                channel=channel_id,
-                ts=message_ts,
-                blocks=error_message(f"I/O Error: {str(e)}"),
-            )
+            return
         except Exception as e:
-            # Catch unexpected errors to prevent handler crash
             logger.error(f"Unexpected error rerunning command: {type(e).__name__}: {e}")
-            await streaming_state.stop_heartbeat()
-            await deps.db.update_command_status(new_cmd.id, "failed", error_message=str(e))
-            await client.chat_update(
-                channel=channel_id,
-                ts=message_ts,
-                blocks=error_message(str(e)),
-            )
+            return
 
     @app.action("view_output")
     async def handle_view_output(ack, action, body, client, logger):
