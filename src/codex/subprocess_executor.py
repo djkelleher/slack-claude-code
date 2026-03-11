@@ -11,8 +11,8 @@ from loguru import logger
 
 from src.backends.execution_result import BackendExecutionResult
 from src.backends.process_executor_base import ProcessExecutorBase
-from src.backends.stream_accumulator import StreamAccumulator
 from src.backends.process_termination import terminate_processes
+from src.backends.stream_accumulator import StreamAccumulator
 from src.codex.approval_bridge import default_approval_payload
 from src.codex.capabilities import normalize_codex_approval_mode
 from src.config import config, parse_model_effort
@@ -176,18 +176,15 @@ class SubprocessExecutor(ProcessExecutorBase):
         Returns:
             ExecutionResult with command output.
         """
-        log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
+        log_prefix = self.build_log_prefix(db_session_id)
         effective_prompt = self._build_effective_prompt(prompt, log_prefix)
 
-        max_recursion_depth = 3
-        if _recursion_depth >= max_recursion_depth:
-            logger.error(
-                f"{log_prefix}Max recursion depth ({max_recursion_depth}) reached, aborting"
-            )
+        retry_error = self.validate_retry_depth(_recursion_depth, log_prefix)
+        if retry_error:
             return ExecutionResult(
                 success=False,
                 output="",
-                error=f"Max retry depth ({max_recursion_depth}) exceeded",
+                error=retry_error,
             )
 
         return await self._execute_via_app_server(
@@ -231,28 +228,25 @@ class SubprocessExecutor(ProcessExecutorBase):
         _recursion_depth: int,
     ) -> ExecutionResult:
         """Execute using Codex app-server JSON-RPC flow."""
-        log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
+        log_prefix = self.build_log_prefix(db_session_id)
         logger.info(f"{log_prefix}Executing via `codex app-server` JSON-RPC flow")
 
         approval = self._resolve_approval_mode(approval_mode, log_prefix)
         sandbox = self._resolve_sandbox_mode(sandbox_mode, log_prefix)
 
         cmd = ["codex", "app-server", "--listen", "stdio://"]
-        limit = 200 * 1024 * 1024
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=working_directory,
-                limit=limit,
-            )
-        except Exception as e:
+        process, process_start_error = await self.start_subprocess(
+            cmd=cmd,
+            working_directory=working_directory,
+            process_label="codex app-server",
+            log_prefix=log_prefix,
+            include_stdin=True,
+        )
+        if not process:
             return ExecutionResult(
                 success=False,
                 output="",
-                error=f"Failed to start codex app-server: {e}",
+                error=process_start_error or "Failed to start codex app-server",
             )
 
         tracking = self.create_tracking_context(
@@ -1000,13 +994,7 @@ class SubprocessExecutor(ProcessExecutorBase):
 
             success = not accumulator.error_message
             return ExecutionResult(
-                success=success,
-                output=accumulator.output,
-                detailed_output=accumulator.detailed_output,
-                session_id=result_session_id,
-                error=accumulator.error_message,
-                cost_usd=accumulator.cost_usd,
-                duration_ms=accumulator.duration_ms,
+                **accumulator.result_fields(success=success, session_id=result_session_id)
             )
 
         except asyncio.CancelledError:
@@ -1021,12 +1009,12 @@ class SubprocessExecutor(ProcessExecutorBase):
                     )
             await terminate_process_safely(process)
             return ExecutionResult(
-                success=False,
-                output=accumulator.output,
-                detailed_output=accumulator.detailed_output,
-                session_id=result_session_id,
-                error="Cancelled",
-                was_cancelled=True,
+                **accumulator.result_fields(
+                    success=False,
+                    session_id=result_session_id,
+                    error="Cancelled",
+                    was_cancelled=True,
+                )
             )
         except Exception as e:
             logger.error(f"{log_prefix}Error during app-server execution: {e}")
@@ -1041,11 +1029,11 @@ class SubprocessExecutor(ProcessExecutorBase):
                     )
             await terminate_process_safely(process)
             return ExecutionResult(
-                success=False,
-                output=accumulator.output,
-                detailed_output=accumulator.detailed_output,
-                session_id=result_session_id,
-                error=str(e),
+                **accumulator.result_fields(
+                    success=False,
+                    session_id=result_session_id,
+                    error=str(e),
+                )
             )
         finally:
             for request in pending_control_responses.values():
@@ -1276,14 +1264,16 @@ class SubprocessExecutor(ProcessExecutorBase):
     ) -> dict:
         """Execute a single app-server RPC method call and return its result payload."""
         cmd = ["codex", "app-server", "--listen", "stdio://"]
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=working_directory,
+        process, process_start_error = await self.start_subprocess(
+            cmd=cmd,
+            working_directory=working_directory,
+            process_label="codex app-server",
+            log_prefix="",
+            include_stdin=True,
             limit=50 * 1024 * 1024,
         )
+        if not process:
+            raise RuntimeError(process_start_error or "Failed to start codex app-server")
         next_request_id = 1
         response_cache: dict[str, dict] = {}
 

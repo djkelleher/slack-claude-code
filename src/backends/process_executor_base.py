@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Optional
 
+from loguru import logger
+
 from src.backends.process_registry import ProcessRegistry
 from src.backends.process_termination import terminate_processes
 from src.utils.execution_scope import build_session_scope
@@ -20,6 +22,9 @@ class ProcessTrackingContext:
 
 class ProcessExecutorBase:
     """Shared process-registry lifecycle used by backend executors."""
+
+    DEFAULT_MAX_RECURSION_DEPTH = 3
+    DEFAULT_STREAM_LIMIT_BYTES = 200 * 1024 * 1024
 
     def __init__(self) -> None:
         self._registry = ProcessRegistry()
@@ -45,6 +50,53 @@ class ProcessExecutorBase:
         )
         session_scope = build_session_scope(channel_id or "", thread_ts)
         return ProcessTrackingContext(track_id=track_id, session_scope=session_scope)
+
+    @staticmethod
+    def build_log_prefix(db_session_id: Optional[int]) -> str:
+        """Build a consistent session-aware logging prefix."""
+        return f"[S:{db_session_id}] " if db_session_id else ""
+
+    @classmethod
+    def validate_retry_depth(
+        cls,
+        recursion_depth: int,
+        log_prefix: str,
+        max_depth: Optional[int] = None,
+    ) -> Optional[str]:
+        """Return a user-facing error when recursion depth exceeds limits."""
+        effective_max_depth = max_depth or cls.DEFAULT_MAX_RECURSION_DEPTH
+        if recursion_depth < effective_max_depth:
+            return None
+        logger.error(f"{log_prefix}Max recursion depth ({effective_max_depth}) reached, aborting")
+        return f"Max retry depth ({effective_max_depth}) exceeded"
+
+    async def start_subprocess(
+        self,
+        *,
+        cmd: list[str],
+        working_directory: str,
+        process_label: str,
+        log_prefix: str,
+        include_stdin: bool = False,
+        limit: Optional[int] = None,
+    ) -> tuple[Optional[asyncio.subprocess.Process], Optional[str]]:
+        """Start a subprocess with shared stdout/stderr/limit defaults."""
+        popen_kwargs: dict[str, object] = {
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "cwd": working_directory,
+            "limit": limit if limit is not None else self.DEFAULT_STREAM_LIMIT_BYTES,
+        }
+        if include_stdin:
+            popen_kwargs["stdin"] = asyncio.subprocess.PIPE
+
+        try:
+            process = await asyncio.create_subprocess_exec(*cmd, **popen_kwargs)
+            return process, None
+        except Exception as e:
+            label = process_label.strip() or "subprocess"
+            logger.error(f"{log_prefix}Failed to start {label}: {e}")
+            return None, f"Failed to start {label}: {e}"
 
     async def register_process(
         self,

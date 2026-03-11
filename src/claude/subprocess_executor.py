@@ -147,18 +147,14 @@ class SubprocessExecutor(ProcessExecutorBase):
             ExecutionResult with the command output
         """
         # Create log prefix for this session
-        log_prefix = f"[S:{db_session_id}] " if db_session_id else ""
+        log_prefix = self.build_log_prefix(db_session_id)
 
-        # Prevent infinite recursion (max 3 retries)
-        MAX_RECURSION_DEPTH = 3
-        if _recursion_depth >= MAX_RECURSION_DEPTH:
-            logger.error(
-                f"{log_prefix}Max recursion depth ({MAX_RECURSION_DEPTH}) reached, aborting"
-            )
+        retry_error = self.validate_retry_depth(_recursion_depth, log_prefix)
+        if retry_error:
             return ExecutionResult(
                 success=False,
                 output="",
-                error=f"Max retry depth ({MAX_RECURSION_DEPTH}) exceeded",
+                error=retry_error,
             )
 
         # Create per-execution state to avoid race conditions between concurrent executions
@@ -219,23 +215,17 @@ class SubprocessExecutor(ProcessExecutorBase):
         prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
         logger.info(f"{log_prefix}Executing: {cmd_without_prompt} '{prompt_preview}'")
 
-        # Start subprocess with increased line limit (default is 64KB)
-        # Large files can produce JSON lines exceeding this limit
-        limit = 200 * 1024 * 1024  # 200MB limit for large file reads
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=working_directory,
-                limit=limit,
-            )
-        except Exception as e:
-            logger.error(f"{log_prefix}Failed to start Claude process: {e}")
+        process, process_start_error = await self.start_subprocess(
+            cmd=cmd,
+            working_directory=working_directory,
+            process_label="Claude",
+            log_prefix=log_prefix,
+        )
+        if not process:
             return ExecutionResult(
                 success=False,
                 output="",
-                error=f"Failed to start Claude: {e}",
+                error=process_start_error or "Failed to start Claude",
             )
 
         # Track process for cancellation (track_id already defined above)
@@ -297,14 +287,13 @@ class SubprocessExecutor(ProcessExecutorBase):
                     )
                     await terminate_process_safely(process)
                     return ExecutionResult(
-                        success=False,
-                        output=accumulator.output,
-                        detailed_output=accumulator.detailed_output,
-                        session_id=accumulator.session_id,
-                        error=(
-                            f"Claude process timed out (no output for {READLINE_TIMEOUT_SECONDS}s). "
-                            "The process may have hung or lost connection to the API."
-                        ),
+                        **accumulator.result_fields(
+                            success=False,
+                            error=(
+                                f"Claude process timed out (no output for {READLINE_TIMEOUT_SECONDS}s). "
+                                "The process may have hung or lost connection to the API."
+                            ),
+                        )
                     )
 
                 if not line:
@@ -697,14 +686,9 @@ class SubprocessExecutor(ProcessExecutorBase):
                 state.plan_subagent_completed and state.plan_subagent_is_plan_type
             )
 
+            result_fields = accumulator.result_fields(success=success)
             return ExecutionResult(
-                success=success,
-                output=accumulator.output,
-                detailed_output=accumulator.detailed_output,
-                session_id=accumulator.session_id,
-                error=accumulator.error_message,
-                cost_usd=accumulator.cost_usd,
-                duration_ms=accumulator.duration_ms,
+                **result_fields,
                 has_pending_question=state.ask_user_question_detected,
                 has_pending_plan_approval=has_plan_approval,
                 plan_subagent_result=state.plan_subagent_result,
@@ -714,23 +698,16 @@ class SubprocessExecutor(ProcessExecutorBase):
         except asyncio.CancelledError:
             await terminate_process_safely(process)
             return ExecutionResult(
-                success=False,
-                output=accumulator.output,
-                detailed_output=accumulator.detailed_output,
-                session_id=accumulator.session_id,
-                error="Cancelled",
-                was_cancelled=True,
+                **accumulator.result_fields(
+                    success=False,
+                    error="Cancelled",
+                    was_cancelled=True,
+                )
             )
         except Exception as e:
             logger.error(f"{log_prefix}Error during execution: {e}")
             await terminate_process_safely(process)
-            return ExecutionResult(
-                success=False,
-                output=accumulator.output,
-                detailed_output=accumulator.detailed_output,
-                session_id=accumulator.session_id,
-                error=str(e),
-            )
+            return ExecutionResult(**accumulator.result_fields(success=False, error=str(e)))
         finally:
             await self.unregister_process(
                 context=tracking,

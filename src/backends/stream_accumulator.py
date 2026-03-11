@@ -1,7 +1,7 @@
 """Shared stream-message accumulation helpers for backend executors."""
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from src.utils.stream_models import StreamMessage
 
@@ -46,3 +46,25 @@ class StreamAccumulator:
 
         if msg.type == "error":
             self.error_message = msg.content
+
+    def result_fields(
+        self,
+        *,
+        success: bool,
+        session_id: Optional[str] = None,
+        error: Optional[str] = None,
+        was_cancelled: bool = False,
+    ) -> dict[str, Any]:
+        """Build common execution-result fields from accumulated stream state."""
+        resolved_session_id = self.session_id if session_id is None else session_id
+        resolved_error = self.error_message if error is None else error
+        return {
+            "success": success,
+            "output": self.output,
+            "detailed_output": self.detailed_output,
+            "session_id": resolved_session_id,
+            "error": resolved_error,
+            "cost_usd": self.cost_usd,
+            "duration_ms": self.duration_ms,
+            "was_cancelled": was_cancelled,
+        }
