@@ -92,7 +92,7 @@ def contains_queue_plan_markers(text: str) -> bool:
     for line in text.splitlines():
         stripped = line.strip()
         try:
-            marker = _parse_marker(stripped, strict=False)
+            marker = _parse_marker(stripped)
         except QueuePlanError:
             # Invalid markers should still route through structured-plan handling
             # so users get a clear validation error from the parser.
@@ -253,7 +253,7 @@ def _parse_to_ast(text: str) -> list[_Node]:
     stack: list[_Frame] = [_Frame(kind="root", start_line=0)]
 
     for line_number, line in enumerate(text.splitlines(), start=1):
-        marker = _parse_marker(line.strip(), strict=True)
+        marker, inline_prompt = _parse_marker_with_inline_prompt(line.strip(), strict=True)
         current = stack[-1]
 
         if marker is None:
@@ -264,6 +264,8 @@ def _parse_to_ast(text: str) -> list[_Node]:
         marker_type = marker[0]
 
         if marker_type == "separator":
+            if inline_prompt:
+                current.prompt_lines.append(inline_prompt)
             continue
 
         if marker_type == "branch_start":
@@ -274,9 +276,15 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 _close_frame(stack)
             else:
                 stack.append(_Frame(kind="branch", start_line=line_number, branch_name=branch_name))
+            if inline_prompt:
+                stack[-1].prompt_lines.append(inline_prompt)
             continue
 
         if marker_type == "branch_end":
+            if inline_prompt:
+                raise QueuePlanError(
+                    f"Line {line_number}: inline prompt is not supported on branch end markers."
+                )
             branch_name = marker[1]
             if current.kind != "branch":
                 detail = _unexpected_block_close_detail(current)
@@ -294,9 +302,15 @@ def _parse_to_ast(text: str) -> list[_Node]:
 
         if marker_type == "loop_start":
             stack.append(_Frame(kind="loop", start_line=line_number, loop_count=marker[1]))
+            if inline_prompt:
+                stack[-1].prompt_lines.append(inline_prompt)
             continue
 
         if marker_type == "loop_end":
+            if inline_prompt:
+                raise QueuePlanError(
+                    f"Line {line_number}: inline prompt is not supported on loop end markers."
+                )
             loop_count = marker[1]
             if current.kind != "loop":
                 detail = _unexpected_block_close_detail(current)
@@ -320,9 +334,15 @@ def _parse_to_ast(text: str) -> list[_Node]:
             stack.append(
                 _Frame(kind="parallel", start_line=line_number, parallel_limit=marker[1])
             )
+            if inline_prompt:
+                stack[-1].prompt_lines.append(inline_prompt)
             continue
 
         if marker_type == "parallel_end":
+            if inline_prompt:
+                raise QueuePlanError(
+                    f"Line {line_number}: inline prompt is not supported on parallel end markers."
+                )
             if current.kind != "parallel":
                 detail = _unexpected_block_close_detail(current)
                 raise QueuePlanError(
@@ -462,7 +482,27 @@ def _flush_prompt(frame: _Frame) -> None:
         frame.nodes.append(_PromptNode(prompt=raw_text))
 
 
-def _parse_marker(line: str, strict: bool) -> tuple[str, str | int] | tuple[str] | None:
+def _parse_marker_with_inline_prompt(
+    line: str, strict: bool
+) -> tuple[tuple[str, str | int] | tuple[str] | None, Optional[str]]:
+    """Parse a marker, allowing same-line prompt payload after marker tokens."""
+    marker = _parse_marker(line)
+    if marker is not None:
+        return marker, None
+
+    parts = line.split(maxsplit=1)
+    if len(parts) == 2:
+        marker_token, trailing_text = parts
+        inline_marker = _parse_marker(marker_token)
+        if inline_marker is not None:
+            return inline_marker, trailing_text
+
+    if strict and _ANY_MARKER_RE.match(line):
+        raise QueuePlanError(f"Unknown queue-plan marker: `{line}`")
+    return None, None
+
+
+def _parse_marker(line: str) -> tuple[str, str | int] | tuple[str] | None:
     if line == "***":
         return ("separator",)
 
@@ -490,8 +530,6 @@ def _parse_marker(line: str, strict: bool) -> tuple[str, str | int] | tuple[str]
     if branch_start:
         return _parse_branch_marker_value(branch_start.group(1), marker_type="branch_start")
 
-    if strict and _ANY_MARKER_RE.match(line):
-        raise QueuePlanError(f"Unknown queue-plan marker: `{line}`")
     return None
 
 

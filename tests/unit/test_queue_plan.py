@@ -50,6 +50,11 @@ def test_parse_queue_plan_loop_expands_prompts() -> None:
     assert [item.prompt for item in prompts] == ["run once", "run once", "run once"]
 
 
+def test_parse_queue_plan_loop_supports_single_line_statement() -> None:
+    prompts = parse_queue_plan_text("***loop-3 continue")
+    assert [item.prompt for item in prompts] == ["continue", "continue", "continue"]
+
+
 def test_parse_queue_plan_parallel_block_assigns_shared_group() -> None:
     prompts = parse_queue_plan_text("***parallel-2\nfirst\n***\nsecond\n***parallel-end")
     assert [item.prompt for item in prompts] == ["first", "second"]
@@ -151,6 +156,7 @@ def test_parse_queue_plan_rejects_non_positive_loop_count() -> None:
 def test_parse_queue_plan_rejects_unknown_marker() -> None:
     with pytest.raises(QueuePlanError, match="Unknown queue-plan marker"):
         parse_queue_plan_text("first\n***\n***not-a-marker***\nsecond")
+
 
 def test_parse_queue_plan_enforces_expansion_cap() -> None:
     with pytest.raises(QueuePlanError, match="more than 3 items"):

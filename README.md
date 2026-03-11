@@ -194,7 +194,8 @@ Queue control behavior:
 | `***parallel-<n>` ... `***parallel-end` | Keep up to `<n>` enclosed prompts running concurrently until the block is drained |
 
 Rules:
-- Markers must appear on their own line.
+- Markers normally appear on their own line.
+- Start markers also support a single-line shorthand: `***loop-3 do this` (same as opening the block and placing `do this` on the next line).
 - Blocks can be nested (`loop` inside `branch`, `branch` inside `loop`, etc.).
 - `parallel` can be nested with `loop` and `branch`, but nested `parallel` blocks are invalid.
 - If a block reaches end-of-input, its `*-end` marker can be omitted.
