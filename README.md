@@ -66,7 +66,7 @@ Use these when your session model is a Codex model.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/usage` | Show Codex session state and modes | `/usage` |
+| `/usage` | Show combined Claude `/usage` and Codex `/status` output | `/usage` |
 | `/review` | Start a Codex review for uncommitted changes (or custom target text) | `/review`, `/review API auth flow` |
 | `/review status [thread_id\|current]` | Inspect latest review/thread lifecycle status (`read` is accepted as an alias) | `/review status`, `/review status current` |
 | `/mcp` | Show Codex MCP server status | `/mcp` |
@@ -109,7 +109,7 @@ Each Slack thread maintains an isolated Claude session with its own context.
 | `/clear` | Reset conversation | `/clear` |
 | `/compact` | Compact context | `/compact` |
 | `/cost` | Show session cost | `/cost` |
-| `/usage` | Show usage/cost (Claude) or session status (Codex) | `/usage` |
+| `/usage` | Show combined Claude `/usage` and Codex `/status` output | `/usage` |
 
 #### Claude CLI Utilities
 These map to terminal Claude Code slash commands. In Codex sessions, unsupported ones return a hint.

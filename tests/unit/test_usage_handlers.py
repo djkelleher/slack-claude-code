@@ -24,26 +24,45 @@ class _FakeApp:
 
 
 @pytest.mark.asyncio
-async def test_usage_codex_returns_codex_status():
+async def test_usage_runs_claude_usage_and_codex_status_for_codex_session():
     app = _FakeApp()
     session = Session(model="gpt-5.3-codex", working_directory="/repo", codex_session_id="thread-1")
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_or_create_session=AsyncMock(return_value=session),
             update_session_claude_id=AsyncMock(),
+            update_session_codex_id=AsyncMock(),
             clear_session_claude_id=AsyncMock(),
             clear_session_codex_id=AsyncMock(),
             get_session_dirs=AsyncMock(return_value=[]),
             add_session_dir=AsyncMock(return_value=[]),
             remove_session_dir=AsyncMock(return_value=[]),
         ),
-        executor=SimpleNamespace(execute=AsyncMock()),
+        executor=SimpleNamespace(
+            execute=AsyncMock(
+                return_value=SimpleNamespace(
+                    session_id="claude-2",
+                    output="Claude usage output",
+                    error=None,
+                    detailed_output=None,
+                    duration_ms=100,
+                    cost_usd=0.01,
+                    success=True,
+                )
+            )
+        ),
         codex_executor=SimpleNamespace(
-            get_active_turn=AsyncMock(return_value={"turn_id": "turn-123"}),
-            model_list=AsyncMock(return_value={"data": [{"id": "gpt-5.3-codex"}]}),
-            account_read=AsyncMock(return_value={"account": {"type": "chatgpt"}}),
-            mcp_server_status_list=AsyncMock(return_value={"data": []}),
-            experimental_feature_list=AsyncMock(return_value={"data": []}),
+            execute=AsyncMock(
+                return_value=SimpleNamespace(
+                    session_id="codex-2",
+                    output="Codex status output",
+                    error=None,
+                    detailed_output=None,
+                    duration_ms=50,
+                    cost_usd=0.0,
+                    success=True,
+                )
+            ),
             cancel_by_scope=AsyncMock(return_value=0),
             cancel_by_channel=AsyncMock(return_value=0),
         ),
@@ -66,18 +85,23 @@ async def test_usage_codex_returns_codex_status():
 
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Usage"
-    assert "Codex Session Status" in kwargs["blocks"][0]["text"]["text"]
-    deps.codex_executor.get_active_turn.assert_awaited_once()
+    deps.executor.execute.assert_awaited_once()
+    deps.codex_executor.execute.assert_awaited_once()
+    assert deps.executor.execute.await_args.kwargs["prompt"] == "/usage"
+    assert deps.codex_executor.execute.await_args.kwargs["prompt"] == "/status"
+    deps.db.update_session_claude_id.assert_awaited_once_with("C123", None, "claude-2")
+    deps.db.update_session_codex_id.assert_awaited_once_with("C123", None, "codex-2")
 
 
 @pytest.mark.asyncio
-async def test_usage_claude_delegates_to_cost_command():
+async def test_usage_runs_claude_usage_and_codex_status_for_claude_session():
     app = _FakeApp()
     session = Session(model="sonnet", working_directory="/repo", claude_session_id="claude-1")
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_or_create_session=AsyncMock(return_value=session),
             update_session_claude_id=AsyncMock(),
+            update_session_codex_id=AsyncMock(),
             clear_session_claude_id=AsyncMock(),
             clear_session_codex_id=AsyncMock(),
             get_session_dirs=AsyncMock(return_value=[]),
@@ -100,6 +124,17 @@ async def test_usage_claude_delegates_to_cost_command():
             cancel_by_channel=AsyncMock(return_value=0),
         ),
         codex_executor=SimpleNamespace(
+            execute=AsyncMock(
+                return_value=SimpleNamespace(
+                    session_id="codex-2",
+                    output="Status output",
+                    error=None,
+                    detailed_output=None,
+                    duration_ms=75,
+                    cost_usd=0.0,
+                    success=True,
+                )
+            ),
             cancel_by_scope=AsyncMock(return_value=0),
             cancel_by_channel=AsyncMock(return_value=0),
         ),
@@ -121,4 +156,6 @@ async def test_usage_claude_delegates_to_cost_command():
     )
 
     deps.executor.execute.assert_awaited_once()
-    assert deps.executor.execute.await_args.kwargs["prompt"] == "/cost"
+    deps.codex_executor.execute.assert_awaited_once()
+    assert deps.executor.execute.await_args.kwargs["prompt"] == "/usage"
+    assert deps.codex_executor.execute.await_args.kwargs["prompt"] == "/status"

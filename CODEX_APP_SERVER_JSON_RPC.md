@@ -33,7 +33,7 @@ Additional metadata/lifecycle RPCs (invoked on-demand by commands/status):
 - `mcpServerStatus/list`
 
 Used by Slack command surfaces:
-- `/usage` -> status APIs (`model/list`, `account/read`, `mcpServerStatus/list`, `experimentalFeature/list`)
+- `/usage` -> runs Codex `/status` through `turn/start` input
 - `/mcp` -> `mcpServerStatus/list`
 - `/review status` -> `thread/read` status inspection
 
