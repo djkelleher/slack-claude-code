@@ -421,6 +421,53 @@ class TestStructuredQueuePlanRouting:
         )
 
     @pytest.mark.asyncio
+    async def test_structured_plan_message_supports_clear_slash_directive(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
+                get_running_queue_items=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+            )
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.materialize_queue_plan_text",
+                new=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(
+                            prompt="first",
+                            working_directory_override=None,
+                            parallel_group_id=None,
+                            parallel_limit=None,
+                        )
+                    ]
+                ),
+            ) as mock_materialize:
+                with patch("src.app.ensure_queue_processor", new=AsyncMock()):
+                    handled = await _queue_structured_plan_message(
+                        client=client,
+                        deps=deps,
+                        session=session,
+                        channel_id="C123",
+                        thread_ts="123.456",
+                        prompt="/clear\nfirst",
+                        logger=MagicMock(),
+                    )
+
+        assert handled is True
+        deps.db.add_many_to_queue.assert_awaited_once_with(
+            session_id=1,
+            channel_id="C123",
+            thread_ts="123.456",
+            queue_entries=[("first", None, None, None)],
+            replace_pending=True,
+        )
+        assert mock_materialize.await_args.kwargs["text"] == "first"
+
+    @pytest.mark.asyncio
     async def test_structured_plan_queue_restarts_when_replacing_paused_queue(self):
         session = SimpleNamespace(id=1, working_directory="/repo")
         deps = SimpleNamespace(

@@ -16,7 +16,9 @@ _LOOP_START_RE = re.compile(r"^\*\*\*loop-(-?\d+)$")
 _LOOP_END_RE = re.compile(r"^\*\*\*loop-(-?\d+)-end$")
 _PARALLEL_START_RE = re.compile(r"^\*\*\*parallel(?:-(-?\d+))?$")
 _PARALLEL_END_RE = re.compile(r"^\*\*\*parallel-end$")
-_QUEUE_SUBMISSION_DIRECTIVE_RE = re.compile(r"^\*\*\*queue-(append|new|replace)$")
+_QUEUE_SUBMISSION_DIRECTIVE_RE = re.compile(
+    r"^(?:\*\*\*queue-(append|new|replace)|/(append|new|replace|clear))$"
+)
 
 
 class QueuePlanError(ValueError):
@@ -134,6 +136,8 @@ def parse_queue_plan_submission(text: str) -> tuple[QueuePlanSubmissionOptions, 
     Supported directives must appear before the first non-empty, non-directive line:
     - ``***queue-new`` or ``***queue-replace``: replace pending items in scope
     - ``***queue-append``: append to the current pending queue
+    - ``/new``, ``/replace``, or ``/clear``: replace pending items in scope
+    - ``/append``: append to the current pending queue
     """
     replace_pending = True
     seen_directive: str | None = None
@@ -148,11 +152,15 @@ def parse_queue_plan_submission(text: str) -> tuple[QueuePlanSubmissionOptions, 
 
         directive_match = _QUEUE_SUBMISSION_DIRECTIVE_RE.match(stripped)
         if directive_match:
-            directive = directive_match.group(1)
+            marker_directive, slash_directive = directive_match.groups()
+            directive = marker_directive or slash_directive
+            if directive == "clear":
+                directive = "replace"
             if seen_directive is not None and seen_directive != directive:
                 raise QueuePlanError(
                     "Queue submission directives conflict. Use only one of "
-                    "`***queue-append`, `***queue-new`, or `***queue-replace`."
+                    "`***queue-append`, `***queue-new`, `***queue-replace`, "
+                    "`/append`, `/new`, `/replace`, or `/clear`."
                 )
             seen_directive = directive
             replace_pending = directive != "append"

@@ -175,9 +175,26 @@ def test_parse_queue_plan_submission_supports_append_directive() -> None:
     assert body == "first task\n***\nsecond task"
 
 
+def test_parse_queue_plan_submission_supports_clear_slash_directive() -> None:
+    options, body = parse_queue_plan_submission("/clear\nfirst task\n***\nsecond task")
+    assert options.replace_pending is True
+    assert body == "first task\n***\nsecond task"
+
+
+def test_parse_queue_plan_submission_supports_append_slash_directive() -> None:
+    options, body = parse_queue_plan_submission("/append\nfirst task\n***\nsecond task")
+    assert options.replace_pending is False
+    assert body == "first task\n***\nsecond task"
+
+
 def test_parse_queue_plan_submission_rejects_conflicting_directives() -> None:
     with pytest.raises(QueuePlanError, match="directives conflict"):
         parse_queue_plan_submission("***queue-append\n***queue-new\nfirst task")
+
+
+def test_parse_queue_plan_submission_rejects_conflicting_marker_and_slash_directives() -> None:
+    with pytest.raises(QueuePlanError, match="directives conflict"):
+        parse_queue_plan_submission("/clear\n***queue-append\nfirst task")
 
 
 @pytest.mark.asyncio
