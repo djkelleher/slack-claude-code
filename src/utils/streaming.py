@@ -41,6 +41,8 @@ class StreamingMessageState:
         If True, add newlines between chunks for better readability.
     track_tools : bool
         If True, track tool activities for display.
+    terminal_style : bool
+        If True, preserve line breaks for terminal-like output rendering.
     """
 
     channel_id: str
@@ -59,6 +61,7 @@ class StreamingMessageState:
     _is_idle: bool = field(default=False)
     db_session_id: Optional[int] = None
     on_error: Optional[Callable[[str], Awaitable[None]]] = None
+    terminal_style: bool = False
     truncate_output: bool = True
     _consecutive_failures: int = field(default=0)
     _error_callback_triggered: bool = field(default=False)
@@ -343,6 +346,7 @@ class StreamingMessageState:
                     output,
                     tool_activities=tool_list,
                     truncate_output=self.truncate_output,
+                    terminal_style=self.terminal_style,
                 ),
             )
             # Reset failure counter on success
@@ -396,6 +400,7 @@ class StreamingMessageState:
                     is_complete=True,
                     is_error=is_error,
                     truncate_output=self.truncate_output,
+                    terminal_style=self.terminal_style,
                 ),
             )
         except Exception as e:

@@ -10,6 +10,46 @@ MAX_TEXT_LENGTH = config.SLACK_BLOCK_TEXT_LIMIT
 FILE_THRESHOLD = config.SLACK_FILE_THRESHOLD
 
 
+_LIST_ITEM_RE = re.compile(r"^(\s*[-*•]\s|^\s*\d+\.\s)")
+
+
+def _remove_blank_lines_between_list_items(lines: list[str]) -> list[str]:
+    """Remove blank lines that appear between consecutive list items."""
+    cleaned = []
+    for i, rline in enumerate(lines):
+        if rline == "":
+            # Look ahead past any consecutive blank lines.
+            j = i + 1
+            while j < len(lines) and lines[j] == "":
+                j += 1
+            next_is_list = j < len(lines) and _LIST_ITEM_RE.match(lines[j])
+
+            # Look back past any preceding blank lines.
+            prev_is_list = False
+            for k in range(len(cleaned) - 1, -1, -1):
+                if cleaned[k] == "":
+                    continue
+                prev_is_list = bool(_LIST_ITEM_RE.match(cleaned[k]))
+                break
+
+            if prev_is_list and next_is_list:
+                continue
+        cleaned.append(rline)
+    return cleaned
+
+
+def normalize_terminal_text(text: str) -> str:
+    """Normalize text for terminal-style rendering while preserving line breaks."""
+    if not text:
+        return text
+
+    lines = text.split("\n")
+    lines = _remove_blank_lines_between_list_items(lines)
+    normalized = "\n".join(lines)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip()
+
+
 def flatten_text(text: str) -> str:
     """Flatten paragraph text while preserving markdown structure.
 
@@ -126,26 +166,7 @@ def flatten_text(text: str) -> str:
     # When text is assembled from multiple streaming chunks (joined with \n\n),
     # blank lines can appear between list items, causing each item to render as
     # a separate numbered list in Slack (all starting from 1).
-    _LIST_ITEM_RE = re.compile(r"^(\s*[-*•]\s|^\s*\d+\.\s)")
-    cleaned = []
-    for i, rline in enumerate(result_lines):
-        if rline == "":
-            # Look ahead past any consecutive blank lines
-            j = i + 1
-            while j < len(result_lines) and result_lines[j] == "":
-                j += 1
-            next_is_list = j < len(result_lines) and _LIST_ITEM_RE.match(result_lines[j])
-            # Look back past any preceding blank lines
-            prev_is_list = False
-            for k in range(len(cleaned) - 1, -1, -1):
-                if cleaned[k] == "":
-                    continue
-                prev_is_list = bool(_LIST_ITEM_RE.match(cleaned[k]))
-                break
-            if prev_is_list and next_is_list:
-                continue  # Drop blank line between list items
-        cleaned.append(rline)
-    result_lines = cleaned
+    result_lines = _remove_blank_lines_between_list_items(result_lines)
 
     # Rejoin with newlines
     text = "\n".join(result_lines)
@@ -592,7 +613,11 @@ def _collect_list_elements(lines: list[str], start: int, elements: list[dict]) -
         elements.append(list_element)
 
 
-def text_to_rich_text_blocks(text: str, max_length: int = MAX_TEXT_LENGTH) -> list[dict]:
+def text_to_rich_text_blocks(
+    text: str,
+    max_length: int = MAX_TEXT_LENGTH,
+    terminal_style: bool = False,
+) -> list[dict]:
     """Convert markdown-formatted text to Slack rich_text blocks.
 
     rich_text blocks render at full width unlike section blocks which
@@ -613,6 +638,8 @@ def text_to_rich_text_blocks(text: str, max_length: int = MAX_TEXT_LENGTH) -> li
         Markdown-formatted text.
     max_length : int
         Maximum text length (for splitting into multiple blocks).
+    terminal_style : bool
+        Preserve line breaks for terminal-like output instead of flattening paragraphs.
 
     Returns
     -------
@@ -622,8 +649,11 @@ def text_to_rich_text_blocks(text: str, max_length: int = MAX_TEXT_LENGTH) -> li
     if not text:
         return [{"type": "rich_text", "elements": []}]
 
-    # First flatten paragraph text
-    text = flatten_text(text)
+    # Normalize text before rendering.
+    if terminal_style:
+        text = normalize_terminal_text(text)
+    else:
+        text = flatten_text(text)
 
     elements = []
     lines = text.split("\n")

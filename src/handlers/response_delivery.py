@@ -28,6 +28,7 @@ async def deliver_command_response(
     post_detail_button: bool = False,
     notify_on_snippet_failure: bool = False,
     api_with_retry: Optional[Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]] = None,
+    terminal_style: bool = False,
 ) -> None:
     """Render and deliver final command output to Slack with shared formatting logic."""
     response_thread_ts = thread_ts
@@ -45,6 +46,7 @@ async def deliver_command_response(
             duration_ms=duration_ms,
             cost_usd=cost_usd,
             is_error=is_error,
+            terminal_style=terminal_style,
         )
         await _run_update(
             lambda: client.chat_update(
@@ -107,6 +109,7 @@ async def deliver_command_response(
         duration_ms=duration_ms,
         cost_usd=cost_usd,
         is_error=is_error,
+        terminal_style=terminal_style,
     )
     await _run_update(
         lambda: client.chat_update(

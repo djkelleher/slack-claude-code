@@ -198,7 +198,9 @@ def _parse_scope_selector(selector: str) -> Optional[str]:
         return None
     if _THREAD_TS_PATTERN.match(normalized):
         return normalized
-    raise ValueError("Scope must be `channel` or a Slack thread timestamp like `1234567890.123456`.")
+    raise ValueError(
+        "Scope must be `channel` or a Slack thread timestamp like `1234567890.123456`."
+    )
 
 
 async def _get_queue_state(
@@ -289,8 +291,10 @@ async def _execute_queue_item(
         else _queue_processing_log_line(int(sequence_label), item.prompt)
     )
     smart_concat = True
+    terminal_style = False
     if isinstance(base_session, Session):
         smart_concat = base_session.get_backend() == "claude"
+        terminal_style = base_session.get_backend() == "codex"
     log.info(f"{processing_log_line} (scope={scope}, queue_item_id={item.id})")
 
     message_ts = None
@@ -311,6 +315,7 @@ async def _execute_queue_item(
             logger=log,
             track_tools=True,
             smart_concat=smart_concat,
+            terminal_style=terminal_style,
             truncate_output=False,
         )
         streaming_state.start_heartbeat()
@@ -338,6 +343,7 @@ async def _execute_queue_item(
                 logger=log,
                 track_tools=True,
                 smart_concat=smart_concat,
+                terminal_style=terminal_style,
                 truncate_output=False,
             )
             streaming_state.start_heartbeat()
@@ -855,9 +861,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await _post_channel_queue_overview(ctx)
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -880,9 +884,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -908,9 +910,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -963,9 +963,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -1006,9 +1004,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -1047,9 +1043,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,

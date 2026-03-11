@@ -301,6 +301,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
         message_ts = response["ts"]
         smart_concat = session.get_backend() == "claude"
+        terminal_style = session.get_backend() == "codex"
 
         # Setup streaming state
         execution_id = str(uuid.uuid4())
@@ -312,11 +313,13 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             logger=logger,
             track_tools=True,
             smart_concat=smart_concat,
+            terminal_style=terminal_style,
         )
         streaming_state.start_heartbeat()
         on_chunk = create_streaming_callback(streaming_state)
 
         try:
+
             async def on_plan_approved():
                 nonlocal message_ts, streaming_state
                 await streaming_state.finalize()
@@ -338,6 +341,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     logger=logger,
                     track_tools=True,
                     smart_concat=smart_concat,
+                    terminal_style=terminal_style,
                 )
                 streaming_state.start_heartbeat()
                 return create_streaming_callback(streaming_state)
@@ -376,6 +380,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 duration_ms=result.duration_ms,
                 cost_usd=result.cost_usd,
                 is_error=not result.success,
+                terminal_style=terminal_style,
             )
 
             # Update the first message
@@ -742,9 +747,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ack()
 
         async def resolver(approval_id, user_id):
-            return await PermissionManager.resolve(
-                approval_id, approved=True, resolved_by=user_id
-            )
+            return await PermissionManager.resolve(approval_id, approved=True, resolved_by=user_id)
 
         def block_builder(resolved, user_id):
             return build_approval_result_blocks(
@@ -764,9 +767,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ack()
 
         async def resolver(approval_id, user_id):
-            return await PermissionManager.resolve(
-                approval_id, approved=False, resolved_by=user_id
-            )
+            return await PermissionManager.resolve(approval_id, approved=False, resolved_by=user_id)
 
         def block_builder(resolved, user_id):
             return build_approval_result_blocks(

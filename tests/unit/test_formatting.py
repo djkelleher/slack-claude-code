@@ -216,6 +216,16 @@ class TestTextToRichTextBlocks:
         bullet_text = "".join(e["text"] for e in elems[1]["elements"][0]["elements"])
         assert "_get_us_market_holidays" in bullet_text
 
+    def test_terminal_style_preserves_single_line_breaks(self):
+        text = "Line one\nLine two\nLine three"
+        blocks = text_to_rich_text_blocks(text, terminal_style=True)
+        elems = blocks[0]["elements"]
+
+        assert len(elems) == 3
+        assert elems[0]["type"] == "rich_text_section"
+        assert elems[1]["type"] == "rich_text_section"
+        assert elems[2]["type"] == "rich_text_section"
+
 
 class TestRichTextToPlainText:
     """Tests for _rich_text_to_plain_text fallback."""

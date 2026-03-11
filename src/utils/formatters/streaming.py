@@ -30,6 +30,7 @@ def streaming_update(
     is_error: bool = False,
     max_tools_display: int = 8,
     truncate_output: bool = True,
+    terminal_style: bool = False,
 ) -> list[dict]:
     """Format a streaming update message with tool activity.
 
@@ -49,6 +50,8 @@ def streaming_update(
         Maximum number of tools to show in the activity section.
     truncate_output : bool
         Whether to trim earlier output before splitting into Slack blocks.
+    terminal_style : bool
+        Preserve single line breaks for terminal-like rendering.
 
     Returns
     -------
@@ -85,7 +88,7 @@ def streaming_update(
 
     # Convert to rich_text blocks (renders at full width unlike section blocks)
     if current_output:
-        output_blocks = text_to_rich_text_blocks(current_output)
+        output_blocks = text_to_rich_text_blocks(current_output, terminal_style=terminal_style)
         blocks.extend(output_blocks)
     else:
         blocks.append(

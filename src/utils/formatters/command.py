@@ -43,6 +43,7 @@ def command_response(
     duration_ms: Optional[int] = None,
     cost_usd: Optional[float] = None,
     is_error: bool = False,
+    terminal_style: bool = False,
 ) -> list[dict]:
     """Format a command response using rich_text blocks for full-width display."""
     blocks = [
@@ -60,7 +61,7 @@ def command_response(
 
     # Convert to rich_text blocks (renders at full width unlike section blocks)
     if output:
-        output_blocks = text_to_rich_text_blocks(output)
+        output_blocks = text_to_rich_text_blocks(output, terminal_style=terminal_style)
         blocks.extend(output_blocks)
     else:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}})
@@ -93,6 +94,7 @@ def command_response_with_file(
     duration_ms: Optional[int] = None,
     cost_usd: Optional[float] = None,
     is_error: bool = False,
+    terminal_style: bool = False,
 ) -> tuple[list[dict], str, str]:
     """Format response with file attachment for large outputs.
 
@@ -131,7 +133,7 @@ def command_response_with_file(
 
     # Use rich_text blocks for full-width preview display
     if preview:
-        preview_blocks = text_to_rich_text_blocks(preview)
+        preview_blocks = text_to_rich_text_blocks(preview, terminal_style=terminal_style)
         blocks.extend(preview_blocks)
         # Add truncation notice
         if len(output) > len(preview):
@@ -188,6 +190,7 @@ def command_response_with_tables(
     duration_ms: Optional[int] = None,
     cost_usd: Optional[float] = None,
     is_error: bool = False,
+    terminal_style: bool = False,
 ) -> list[list[dict]]:
     """Format a command response, splitting on tables.
 
@@ -220,7 +223,17 @@ def command_response_with_tables(
 
     # If no tables, return regular response in a list
     if not table_blocks:
-        return [command_response(prompt, output, command_id, duration_ms, cost_usd, is_error)]
+        return [
+            command_response(
+                prompt,
+                output,
+                command_id,
+                duration_ms,
+                cost_usd,
+                is_error,
+                terminal_style=terminal_style,
+            )
+        ]
 
     # Split text by table placeholders
     segments = split_text_by_tables(text_with_placeholders)
@@ -255,7 +268,10 @@ def command_response_with_tables(
                 is_first = False
 
             # Use rich_text blocks for full-width display
-            output_blocks = text_to_rich_text_blocks(text_content)
+            output_blocks = text_to_rich_text_blocks(
+                text_content,
+                terminal_style=terminal_style,
+            )
             blocks.extend(output_blocks)
 
             # Split into multiple messages if block count exceeds Slack limit

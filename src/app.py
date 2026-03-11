@@ -657,6 +657,7 @@ async def _execute_codex_message(
         logger=logger,
         track_tools=True,
         smart_concat=False,
+        terminal_style=True,
         db_session_id=session.id,
         on_error=on_streaming_error,
     )
@@ -682,6 +683,7 @@ async def _execute_codex_message(
             logger=logger,
             track_tools=True,
             smart_concat=False,
+            terminal_style=True,
             db_session_id=session.id,
             on_error=on_streaming_error,
         )
@@ -714,6 +716,7 @@ async def _execute_codex_message(
                 logger=logger,
                 track_tools=True,
                 smart_concat=False,
+                terminal_style=True,
                 db_session_id=session.id,
                 on_error=on_streaming_error,
             )
@@ -766,6 +769,7 @@ async def _execute_codex_message(
             post_detail_button=True,
             notify_on_snippet_failure=True,
             api_with_retry=slack_api_with_retry,
+            terminal_style=route.backend == "codex",
         )
 
     except asyncio.CancelledError:

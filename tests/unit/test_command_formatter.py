@@ -44,10 +44,29 @@ def test_command_response_without_output_has_placeholder() -> None:
     assert blocks[2]["text"]["text"] == "_No output_"
 
 
+def test_command_response_passes_terminal_style(monkeypatch) -> None:
+    seen = {}
+
+    def fake_text_to_rich_text_blocks(text: str, terminal_style: bool = False) -> list[dict]:
+        seen["terminal_style"] = terminal_style
+        return [{"type": "rich_text", "elements": [{"type": "text", "text": text}]}]
+
+    monkeypatch.setattr(command_fmt, "text_to_rich_text_blocks", fake_text_to_rich_text_blocks)
+
+    _ = command_fmt.command_response(
+        prompt="run command",
+        output="line1\nline2",
+        command_id=1,
+        terminal_style=True,
+    )
+
+    assert seen["terminal_style"] is True
+
+
 def test_command_response_with_file_truncates_preview_and_adds_notice(monkeypatch) -> None:
     captured_previews = []
 
-    def fake_text_to_rich_text_blocks(text: str) -> list[dict]:
+    def fake_text_to_rich_text_blocks(text: str, terminal_style: bool = False) -> list[dict]:
         captured_previews.append(text)
         return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
 
@@ -89,8 +108,24 @@ def test_command_response_with_tables_falls_back_to_regular_response(monkeypatch
 
     called = {}
 
-    def fake_command_response(prompt, output, command_id, duration_ms, cost_usd, is_error):
-        called["args"] = (prompt, output, command_id, duration_ms, cost_usd, is_error)
+    def fake_command_response(
+        prompt,
+        output,
+        command_id,
+        duration_ms,
+        cost_usd,
+        is_error,
+        terminal_style=False,
+    ):
+        called["args"] = (
+            prompt,
+            output,
+            command_id,
+            duration_ms,
+            cost_usd,
+            is_error,
+            terminal_style,
+        )
         return sentinel
 
     monkeypatch.setattr(command_fmt, "command_response", fake_command_response)
@@ -105,7 +140,7 @@ def test_command_response_with_tables_falls_back_to_regular_response(monkeypatch
     )
 
     assert messages == [sentinel]
-    assert called["args"] == ("prompt", "output", 9, 20, 0.1, True)
+    assert called["args"] == ("prompt", "output", 9, 20, 0.1, True, False)
 
 
 def test_command_response_with_tables_splits_messages_and_adds_footer(monkeypatch) -> None:
@@ -131,7 +166,9 @@ def test_command_response_with_tables_splits_messages_and_adds_footer(monkeypatc
     monkeypatch.setattr(
         command_fmt,
         "text_to_rich_text_blocks",
-        lambda text: [{"type": "rich_text", "elements": [{"type": "text", "text": text}]}],
+        lambda text, terminal_style=False: [
+            {"type": "rich_text", "elements": [{"type": "text", "text": text}]}
+        ],
     )
 
     messages = command_fmt.command_response_with_tables(
