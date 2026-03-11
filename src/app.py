@@ -640,9 +640,9 @@ async def main():
         await handle_message(routed_event, client, logger)
 
     @app.event("message")
-    async def handle_message(event, client, logger, skip_dedupe: bool = False):
+    async def handle_message(event, client, logger):
         """Handle messages and pipe them to Claude Code."""
-        if not skip_dedupe and _is_duplicate_event(
+        if _is_duplicate_event(
             event=event,
             seen_events=recent_message_events,
             now_monotonic=time.monotonic(),
