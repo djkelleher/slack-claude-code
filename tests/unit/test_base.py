@@ -1,6 +1,6 @@
 """Unit tests for handler base infrastructure."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

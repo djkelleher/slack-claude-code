@@ -1,7 +1,5 @@
 """Unit tests for text formatting utilities."""
 
-import pytest
-
 from src.utils.formatters.base import (
     _parse_inline_elements,
     flatten_text,

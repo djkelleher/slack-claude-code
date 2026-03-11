@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from src.config import (
     PLANS_DIR,
     CacheTimeouts,
@@ -11,7 +9,6 @@ from src.config import (
     DisplayConfig,
     ExecutionTimeouts,
     SlackTimeouts,
-    StreamingConfig,
     TimeoutConfig,
     config,
 )

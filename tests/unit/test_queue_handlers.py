@@ -9,6 +9,7 @@ import pytest
 from src.database.models import Session
 from src.handlers.claude.queue import (
     _QUEUE_START_LOCKS,
+    _execute_queue_item,
     _process_queue,
     _queue_task_id,
     ensure_queue_processor,
@@ -44,6 +45,41 @@ def _queue_item(item_id: int, prompt: str, working_directory_override: str | Non
 def _queue_control(state: str = "running"):
     """Build a queue-control-like namespace for tests."""
     return SimpleNamespace(state=state)
+
+
+def _registered_handler(command_name: str, db):
+    """Register queue commands and return a single command handler + deps wrapper."""
+    app = _FakeApp()
+    deps = SimpleNamespace(db=db)
+    register_queue_commands(app, deps)
+    return app.handlers[command_name], deps
+
+
+async def _invoke_slash_handler(
+    handler,
+    *,
+    command_name: str,
+    text: str = "",
+    client: SimpleNamespace | None = None,
+    thread_ts: str | None = None,
+):
+    """Invoke a slash-command handler with boilerplate test payload."""
+    slack_client = client or SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
+    command = {
+        "channel_id": "C123",
+        "user_id": "U123",
+        "text": text,
+        "command": command_name,
+    }
+    if thread_ts is not None:
+        command["thread_ts"] = thread_ts
+    await handler(
+        ack=AsyncMock(),
+        command=command,
+        client=slack_client,
+        logger=MagicMock(),
+    )
+    return slack_client
 
 
 @pytest.mark.asyncio
@@ -442,12 +478,80 @@ async def test_process_queue_pause_stops_before_next_item():
 
 
 @pytest.mark.asyncio
+async def test_execute_queue_item_plan_approval_posts_implementation_message():
+    """Approved-plan handoff should post a new implementation processing message."""
+    item = _queue_item(88, "ship fix")
+    session = Session(id=1, channel_id="C123", model="opus")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(update_queue_item_status=AsyncMock(side_effect=[True, None])),
+        codex_executor=None,
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(side_effect=[{"ts": "123.001"}, {"ts": "123.002"}]),
+        chat_update=AsyncMock(),
+    )
+
+    class _FakeStreamingState:
+        def __init__(self, **kwargs):
+            self.message_ts = kwargs["message_ts"]
+            self.accumulated_output = ""
+
+        def start_heartbeat(self):
+            return None
+
+        async def finalize(self, is_error: bool = False):
+            return None
+
+        async def stop_heartbeat(self):
+            return None
+
+    async def _fake_execute_for_session(**kwargs):
+        replacement_callback = await kwargs["on_plan_approved"]()
+        assert callable(replacement_callback)
+        return SimpleNamespace(
+            backend="claude",
+            result=SimpleNamespace(success=True, output="done", error=None, session_id=None),
+        )
+
+    with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
+        with patch(
+            "src.handlers.claude.queue.create_streaming_callback",
+            side_effect=lambda _state: AsyncMock(),
+        ) as mock_callback_factory:
+            with patch(
+                "src.handlers.claude.queue.execute_for_session",
+                new=AsyncMock(side_effect=_fake_execute_for_session),
+            ):
+                result = await _execute_queue_item(
+                    item,
+                    channel_id="C123",
+                    thread_ts=None,
+                    scope="C123:channel",
+                    deps=deps,
+                    client=client,
+                    log=MagicMock(),
+                    base_session=session,
+                    sequence_label="1",
+                    override_resume_ids={},
+                )
+
+    assert result == "completed"
+    assert client.chat_postMessage.await_count == 2
+    second_message = client.chat_postMessage.await_args_list[1].kwargs
+    assert (
+        second_message["text"] == "Processing queue item 1: ship fix (implementing approved plan)"
+    )
+    assert "Plan approved" in second_message["blocks"][0]["text"]["text"]
+    assert mock_callback_factory.call_count == 2
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
+    assert statuses == ["running", "completed"]
+
+
+@pytest.mark.asyncio
 async def test_register_queue_commands_exposes_current_queue_commands():
     """Queue command registration should expose the current queue command set."""
     app = _FakeApp()
-    deps = SimpleNamespace(db=SimpleNamespace())
-
-    register_queue_commands(app, deps)
+    register_queue_commands(app, SimpleNamespace(db=SimpleNamespace()))
 
     assert "/q" in app.handlers
     assert "/qc" in app.handlers
@@ -460,30 +564,16 @@ async def test_register_queue_commands_exposes_current_queue_commands():
 @pytest.mark.asyncio
 async def test_qv_posts_queue_status():
     """`/qv` should render queue state."""
-    app = _FakeApp()
-    deps = SimpleNamespace(
-        db=SimpleNamespace(
+    handler, deps = _registered_handler(
+        "/qv",
+        SimpleNamespace(
             list_queue_scopes_for_channel=AsyncMock(return_value=[]),
             get_pending_queue_items=AsyncMock(return_value=[]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
-        )
+        ),
     )
-    register_queue_commands(app, deps)
-
-    handler = app.handlers["/qv"]
-    client = SimpleNamespace(chat_postMessage=AsyncMock())
-    await handler(
-        ack=AsyncMock(),
-        command={
-            "channel_id": "C123",
-            "user_id": "U123",
-            "text": "",
-            "command": "/qv",
-        },
-        client=client,
-        logger=MagicMock(),
-    )
+    client = await _invoke_slash_handler(handler, command_name="/qv")
 
     deps.db.list_queue_scopes_for_channel.assert_awaited_once_with("C123")
     kwargs = client.chat_postMessage.await_args.kwargs
@@ -493,30 +583,16 @@ async def test_qv_posts_queue_status():
 @pytest.mark.asyncio
 async def test_qc_view_subcommand_posts_channel_overview_without_thread_context():
     """`/qc view` should render a channel overview when no thread context exists."""
-    app = _FakeApp()
-    deps = SimpleNamespace(
-        db=SimpleNamespace(
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
             list_queue_scopes_for_channel=AsyncMock(return_value=["123.456"]),
             get_pending_queue_items=AsyncMock(side_effect=[[], [_queue_item(10, "pending")]]),
             get_running_queue_items=AsyncMock(side_effect=[[], [_queue_item(11, "running")]]),
             get_queue_control=AsyncMock(side_effect=[_queue_control(), _queue_control("paused")]),
-        )
+        ),
     )
-    register_queue_commands(app, deps)
-
-    handler = app.handlers["/qc"]
-    client = SimpleNamespace(chat_postMessage=AsyncMock())
-    await handler(
-        ack=AsyncMock(),
-        command={
-            "channel_id": "C123",
-            "user_id": "U123",
-            "text": "view",
-            "command": "/qc",
-        },
-        client=client,
-            logger=MagicMock(),
-    )
+    client = await _invoke_slash_handler(handler, command_name="/qc", text="view")
 
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Queue status"
@@ -527,29 +603,15 @@ async def test_qc_view_subcommand_posts_channel_overview_without_thread_context(
 @pytest.mark.asyncio
 async def test_qc_view_subcommand_accepts_explicit_thread_scope():
     """`/qc view <thread_ts>` should render that thread queue even without thread context."""
-    app = _FakeApp()
-    deps = SimpleNamespace(
-        db=SimpleNamespace(
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
             get_pending_queue_items=AsyncMock(return_value=[]),
             get_running_queue_items=AsyncMock(return_value=[_queue_item(12, "running")]),
             get_queue_control=AsyncMock(return_value=_queue_control("paused")),
-        )
+        ),
     )
-    register_queue_commands(app, deps)
-
-    handler = app.handlers["/qc"]
-    client = SimpleNamespace(chat_postMessage=AsyncMock())
-    await handler(
-        ack=AsyncMock(),
-        command={
-            "channel_id": "C123",
-            "user_id": "U123",
-            "text": "view 123.456",
-            "command": "/qc",
-        },
-        client=client,
-        logger=MagicMock(),
-    )
+    client = await _invoke_slash_handler(handler, command_name="/qc", text="view 123.456")
 
     deps.db.get_pending_queue_items.assert_awaited_once_with("C123", "123.456")
     deps.db.get_running_queue_items.assert_awaited_once_with("C123", "123.456")
@@ -561,28 +623,14 @@ async def test_qc_view_subcommand_accepts_explicit_thread_scope():
 @pytest.mark.asyncio
 async def test_qc_pause_updates_control_state():
     """`/qc pause` should persist paused queue state."""
-    app = _FakeApp()
-    deps = SimpleNamespace(
-        db=SimpleNamespace(
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
             get_running_queue_items=AsyncMock(return_value=[SimpleNamespace(id=1)]),
             update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
-        )
+        ),
     )
-    register_queue_commands(app, deps)
-
-    handler = app.handlers["/qc"]
-    client = SimpleNamespace(chat_postMessage=AsyncMock())
-    await handler(
-        ack=AsyncMock(),
-        command={
-            "channel_id": "C123",
-            "user_id": "U123",
-            "text": "pause",
-            "command": "/qc",
-        },
-        client=client,
-        logger=MagicMock(),
-    )
+    client = await _invoke_slash_handler(handler, command_name="/qc", text="pause")
 
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
     assert client.chat_postMessage.await_args.kwargs["text"].startswith("Channel queue: pause")
@@ -591,65 +639,41 @@ async def test_qc_pause_updates_control_state():
 @pytest.mark.asyncio
 async def test_qc_stop_cancels_running_processor():
     """`/qc stop` should persist stopped state and cancel the worker."""
-    app = _FakeApp()
-    deps = SimpleNamespace(
-        db=SimpleNamespace(
-            update_queue_control_state=AsyncMock(return_value=_queue_control("stopped")),
-        )
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
+            update_queue_control_state=AsyncMock(return_value=_queue_control("stopped"))
+        ),
     )
-    register_queue_commands(app, deps)
-
-    handler = app.handlers["/qc"]
-    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
     with patch(
         "src.handlers.claude.queue.TaskManager.cancel", new=AsyncMock(return_value=True)
     ) as mock_cancel:
-        await handler(
-            ack=AsyncMock(),
-            command={
-                "channel_id": "C123",
-                "user_id": "U123",
-                "text": "stop",
-                "command": "/qc",
-            },
-            client=client,
-            logger=MagicMock(),
-        )
+        await _invoke_slash_handler(handler, command_name="/qc", text="stop", client=client)
 
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "stopped")
     mock_cancel.assert_awaited_once_with(_queue_task_id("C123", None))
-    assert client.chat_postMessage.await_args.kwargs["text"] == "Channel queue: stopped immediately."
+    assert (
+        client.chat_postMessage.await_args.kwargs["text"] == "Channel queue: stopped immediately."
+    )
 
 
 @pytest.mark.asyncio
 async def test_qc_resume_restarts_pending_queue():
     """`/qc resume` should flip the queue back to running and restart processing."""
-    app = _FakeApp()
-    deps = SimpleNamespace(
-        db=SimpleNamespace(
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
             update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
             get_pending_queue_items=AsyncMock(
                 return_value=[SimpleNamespace(id=11), SimpleNamespace(id=12)]
             ),
             get_running_queue_items=AsyncMock(return_value=[]),
-        )
+        ),
     )
-    register_queue_commands(app, deps)
-
-    handler = app.handlers["/qc"]
-    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
     with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
-        await handler(
-            ack=AsyncMock(),
-            command={
-                "channel_id": "C123",
-                "user_id": "U123",
-                "text": "resume",
-                "command": "/qc",
-            },
-            client=client,
-            logger=MagicMock(),
-        )
+        await _invoke_slash_handler(handler, command_name="/qc", text="resume", client=client)
 
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "running")
     mock_ensure.assert_awaited_once()
@@ -661,37 +685,24 @@ async def test_qc_resume_restarts_pending_queue():
 @pytest.mark.asyncio
 async def test_qc_resume_recovers_stale_running_items_and_restarts_pending_queue():
     """`/qc resume` should recover stale running rows and start pending work."""
-    app = _FakeApp()
-    deps = SimpleNamespace(
-        db=SimpleNamespace(
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
             update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
             get_pending_queue_items=AsyncMock(return_value=[SimpleNamespace(id=21)]),
-            get_running_queue_items=AsyncMock(
-                side_effect=[[SimpleNamespace(id=88)], []]
-            ),
+            get_running_queue_items=AsyncMock(side_effect=[[SimpleNamespace(id=88)], []]),
             update_queue_item_status=AsyncMock(return_value=True),
-        )
+        ),
     )
-    register_queue_commands(app, deps)
-
-    handler = app.handlers["/qc"]
-    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
     with patch(
         "src.handlers.claude.queue._is_queue_processor_running",
         new=AsyncMock(return_value=False),
     ):
-        with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
-            await handler(
-                ack=AsyncMock(),
-                command={
-                    "channel_id": "C123",
-                    "user_id": "U123",
-                    "text": "resume",
-                    "command": "/qc",
-                },
-                client=client,
-                logger=MagicMock(),
-            )
+        with patch(
+            "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
+        ) as mock_ensure:
+            await _invoke_slash_handler(handler, command_name="/qc", text="resume", client=client)
 
     deps.db.update_queue_item_status.assert_awaited_once_with(
         88,
@@ -708,34 +719,23 @@ async def test_qc_resume_recovers_stale_running_items_and_restarts_pending_queue
 @pytest.mark.asyncio
 async def test_qc_stop_accepts_explicit_thread_scope():
     """`/qc stop <thread_ts>` should target that thread queue."""
-    app = _FakeApp()
-    deps = SimpleNamespace(
-        db=SimpleNamespace(
-            update_queue_control_state=AsyncMock(return_value=_queue_control("stopped")),
-        )
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
+            update_queue_control_state=AsyncMock(return_value=_queue_control("stopped"))
+        ),
     )
-    register_queue_commands(app, deps)
-
-    handler = app.handlers["/qc"]
-    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
     with patch(
         "src.handlers.claude.queue.TaskManager.cancel", new=AsyncMock(return_value=True)
     ) as mock_cancel:
-        await handler(
-            ack=AsyncMock(),
-            command={
-                "channel_id": "C123",
-                "user_id": "U123",
-                "text": "stop 123.456",
-                "command": "/qc",
-            },
-            client=client,
-            logger=MagicMock(),
-        )
+        await _invoke_slash_handler(handler, command_name="/qc", text="stop 123.456", client=client)
 
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", "123.456", "stopped")
     mock_cancel.assert_awaited_once_with(_queue_task_id("C123", "123.456"))
-    assert client.chat_postMessage.await_args.kwargs["text"] == "Thread 123.456: stopped immediately."
+    assert (
+        client.chat_postMessage.await_args.kwargs["text"] == "Thread 123.456: stopped immediately."
+    )
 
 
 @pytest.mark.asyncio

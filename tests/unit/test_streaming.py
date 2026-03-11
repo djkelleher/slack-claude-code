@@ -1,6 +1,5 @@
 """Unit tests for streaming message utilities."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

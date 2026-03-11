@@ -5,6 +5,32 @@ from typing import Any
 from .base import escape_markdown
 
 
+def _escaped_preview(text: str, limit: int) -> str:
+    """Escape and truncate text for compact queue previews."""
+    suffix = "..." if len(text) > limit else ""
+    return f"{escape_markdown(text[:limit])}{suffix}"
+
+
+def _running_item_label(item: Any) -> str:
+    """Build a compact identifier for running queue items."""
+    label = f"#{item.id}"
+    if item.parallel_group_id:
+        width = item.parallel_limit or "all"
+        label += f" · parallel `{item.parallel_group_id}` (max {width})"
+    return label
+
+
+def _pending_item_text(item: Any) -> str:
+    """Render one pending queue line."""
+    parallel_suffix = ""
+    if item.parallel_group_id:
+        parallel_suffix = f", parallel max {item.parallel_limit or 'all'}"
+    return (
+        f"*#{item.id}* (pos {item.position}{parallel_suffix})\n> "
+        f"{_escaped_preview(item.prompt, 100)}"
+    )
+
+
 def queue_status(pending: list, running: Any) -> list[dict]:
     """Format queue status for /qv command."""
     running_items = running if isinstance(running, list) else ([running] if running else [])
@@ -23,13 +49,9 @@ def queue_status(pending: list, running: Any) -> list[dict]:
     if running_items:
         running_lines = []
         for item in running_items[:10]:
-            label = f"#{item.id}"
-            if item.parallel_group_id:
-                width = item.parallel_limit or "all"
-                label += f" · parallel `{item.parallel_group_id}` (max {width})"
+            label = _running_item_label(item)
             running_lines.append(
-                f":arrow_forward: *Running:* {label}\n> "
-                f"{escape_markdown(item.prompt[:100])}{'...' if len(item.prompt) > 100 else ''}"
+                f":arrow_forward: *Running:* {label}\n> " f"{_escaped_preview(item.prompt, 100)}"
             )
         blocks.append(
             {
@@ -51,20 +73,7 @@ def queue_status(pending: list, running: Any) -> list[dict]:
             blocks.append(
                 {
                     "type": "section",
-                    "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"*#{item.id}* (pos {item.position}"
-                        + (
-                            f", parallel max {item.parallel_limit or 'all'}"
-                            if item.parallel_group_id
-                            else ""
-                        )
-                        + ")\n> "
-                        + f"{escape_markdown(item.prompt[:100])}"
-                        + ("..." if len(item.prompt) > 100 else "")
-                    ),
-                    },
+                    "text": {"type": "mrkdwn", "text": _pending_item_text(item)},
                 }
             )
 
@@ -86,7 +95,10 @@ def queue_item_running(item: Any, sequence_number: str) -> list[dict]:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f":arrow_forward: *Processing queue item {sequence_number}:*\n> {escape_markdown(item.prompt[:200])}{'...' if len(item.prompt) > 200 else ''}",
+                "text": (
+                    f":arrow_forward: *Processing queue item {sequence_number}:*\n> "
+                    f"{_escaped_preview(item.prompt, 200)}"
+                ),
             },
         },
     ]
@@ -110,7 +122,7 @@ def queue_item_complete(item: Any, result: Any) -> list[dict]:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"> {escape_markdown(item.prompt[:100])}{'...' if len(item.prompt) > 100 else ''}",
+                "text": f"> {_escaped_preview(item.prompt, 100)}",
             },
         },
         {"type": "divider"},
@@ -153,7 +165,7 @@ def queue_scope_overview(scopes: list[dict[str, Any]]) -> list[dict]:
         text = f"*{escape_markdown(scope['label'])}*\n" + " | ".join(summary_parts)
         preview = scope.get("preview")
         if preview:
-            text += f"\n> {escape_markdown(preview[:120])}{'...' if len(preview) > 120 else ''}"
+            text += f"\n> {_escaped_preview(preview, 120)}"
         blocks.append(
             {
                 "type": "section",

@@ -3,8 +3,6 @@
 import json
 from datetime import datetime
 
-import pytest
-
 from src.config import is_supported_codex_model, parse_model_effort
 from src.database.models import (
     CommandHistory,

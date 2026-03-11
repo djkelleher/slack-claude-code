@@ -169,7 +169,7 @@ class TestSessionOperations:
     @pytest.mark.asyncio
     async def test_update_session_cwd(self, db_repo):
         """update_session_cwd updates working directory."""
-        session = await db_repo.get_or_create_session("C123ABC", None, "~")
+        await db_repo.get_or_create_session("C123ABC", None, "~")
         await db_repo.update_session_cwd("C123ABC", None, "/new/path")
 
         updated = await db_repo.get_or_create_session("C123ABC", None)
@@ -701,7 +701,7 @@ class TestParallelJobOperations:
     async def test_get_active_jobs(self, db_repo):
         """get_active_jobs returns pending/running jobs."""
         session = await db_repo.get_or_create_session("C123ABC", None)
-        job1 = await db_repo.create_parallel_job(session.id, "C123ABC", "test1", {})
+        await db_repo.create_parallel_job(session.id, "C123ABC", "test1", {})
         job2 = await db_repo.create_parallel_job(session.id, "C123ABC", "test2", {})
         await db_repo.update_parallel_job(job2.id, status="running")
 

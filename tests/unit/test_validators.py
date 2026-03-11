@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from src.utils.validators import ALLOWED_BASE_PATHS, validate_path
 
 

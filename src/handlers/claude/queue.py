@@ -27,6 +27,7 @@ from src.utils.formatters.queue import (
     queue_scope_overview,
     queue_status,
 )
+from src.utils.formatters.streaming import processing_message
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from ..base import CommandContext, HandlerDependencies, slack_command
@@ -331,6 +332,22 @@ async def _execute_queue_item(
     message_ts = None
     streaming_state = None
     try:
+
+        def _create_streaming_state(message_timestamp: str) -> StreamingMessageState:
+            state = StreamingMessageState(
+                channel_id=channel_id,
+                message_ts=message_timestamp,
+                prompt=processing_log_line,
+                client=client,
+                logger=log,
+                track_tools=True,
+                smart_concat=smart_concat,
+                terminal_style=terminal_style,
+                truncate_output=False,
+            )
+            state.start_heartbeat()
+            return state
+
         response = await client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
@@ -338,18 +355,7 @@ async def _execute_queue_item(
             blocks=queue_item_running(item, sequence_label),
         )
         message_ts = response["ts"]
-        streaming_state = StreamingMessageState(
-            channel_id=channel_id,
-            message_ts=message_ts,
-            prompt=processing_log_line,
-            client=client,
-            logger=log,
-            track_tools=True,
-            smart_concat=smart_concat,
-            terminal_style=terminal_style,
-            truncate_output=False,
-        )
-        streaming_state.start_heartbeat()
+        streaming_state = _create_streaming_state(message_ts)
         on_chunk = create_streaming_callback(streaming_state)
 
         async def on_plan_approved():
@@ -366,18 +372,7 @@ async def _execute_queue_item(
                 ),
             )
             message_ts = exec_response["ts"]
-            streaming_state = StreamingMessageState(
-                channel_id=channel_id,
-                message_ts=message_ts,
-                prompt=processing_log_line,
-                client=client,
-                logger=log,
-                track_tools=True,
-                smart_concat=smart_concat,
-                terminal_style=terminal_style,
-                truncate_output=False,
-            )
-            streaming_state.start_heartbeat()
+            streaming_state = _create_streaming_state(message_ts)
             return create_streaming_callback(streaming_state)
 
         effective_session = base_session
@@ -1106,9 +1101,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 else:
                     text = f"{scope_label}: resumed. {len(pending)} pending item(s) ready to run."
                     if recovered_stale_count:
-                        text = (
-                            f"{text} Recovered {recovered_stale_count} stale running item(s)."
-                        )
+                        text = f"{text} Recovered {recovered_stale_count} stale running item(s)."
             elif running_items:
                 text = (
                     f"{scope_label}: resumed. Existing running item(s) will continue and pending "
@@ -1117,9 +1110,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             else:
                 text = f"{scope_label}: resumed. No pending items remain."
                 if recovered_stale_count:
-                    text = (
-                        f"{text} Recovered {recovered_stale_count} stale running item(s)."
-                    )
+                    text = f"{text} Recovered {recovered_stale_count} stale running item(s)."
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
