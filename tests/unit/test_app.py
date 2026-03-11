@@ -320,6 +320,7 @@ class TestStructuredQueuePlanRouting:
                     ]
                 ),
                 get_running_queue_items=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -379,6 +380,7 @@ class TestStructuredQueuePlanRouting:
             db=SimpleNamespace(
                 add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=3)]),
                 get_running_queue_items=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -416,6 +418,48 @@ class TestStructuredQueuePlanRouting:
             queue_entries=[("next", None, None, None)],
             replace_pending=False,
         )
+
+    @pytest.mark.asyncio
+    async def test_structured_plan_queue_reports_paused_state_and_skips_processor_start(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=10, position=10)]),
+                get_running_queue_items=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="paused")),
+            )
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.materialize_queue_plan_text",
+                new=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(
+                            prompt="do work",
+                            working_directory_override=None,
+                            parallel_group_id=None,
+                            parallel_limit=None,
+                        )
+                    ]
+                ),
+            ):
+                with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+                    handled = await _queue_structured_plan_message(
+                        client=client,
+                        deps=deps,
+                        session=session,
+                        channel_id="C123",
+                        thread_ts="123.456",
+                        prompt="do work",
+                        logger=MagicMock(),
+                    )
+
+        assert handled is True
+        mock_ensure.assert_not_awaited()
+        kwargs = client.chat_postMessage.await_args.kwargs
+        assert "Queue is paused" in kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_reports_invalid_structured_plan(self):

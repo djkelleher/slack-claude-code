@@ -300,6 +300,15 @@ def _is_duplicate_event(
     return False
 
 
+def _queue_state_notice(state: str) -> str:
+    """Return a short operator-facing notice for a non-running queue."""
+    if state == "paused":
+        return "Queue is paused. Use `/qc resume` to continue."
+    if state == "stopped":
+        return "Queue is stopped. Use `/qc resume` to continue."
+    return ""
+
+
 async def _handle_typed_model_command(
     client,
     channel_id: str,
@@ -513,17 +522,19 @@ async def _queue_structured_plan_message(
         )
 
         running = await deps.db.get_running_queue_items(channel_id, thread_ts)
+        queue_state = (await deps.db.get_queue_control(channel_id, thread_ts)).state
         position_offset = len(running)
         start_position = queued_items[0].position + position_offset
         end_position = queued_items[-1].position + position_offset
 
-        await ensure_queue_processor(
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            deps=deps,
-            client=client,
-            task_logger=logger,
-        )
+        if queue_state == "running":
+            await ensure_queue_processor(
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                deps=deps,
+                client=client,
+                task_logger=logger,
+            )
     except Exception as e:
         logger.error(f"Failed to enqueue structured queue plan: {e}")
         await client.chat_postMessage(
@@ -540,14 +551,16 @@ async def _queue_structured_plan_message(
         else f"positions #{start_position}-#{end_position}"
     )
     item_count = len(queued_items)
+    paused_notice = _queue_state_notice(queue_state)
+    action_verb = "Queued" if submission_options.replace_pending else "Added"
+    confirmation_text = f"{action_verb} {item_count} item(s) from structured plan."
+    if paused_notice:
+        confirmation_text = f"{confirmation_text} {paused_notice}"
 
     await client.chat_postMessage(
         channel=channel_id,
         thread_ts=thread_ts,
-        text=(
-            f"{'Queued' if submission_options.replace_pending else 'Added'} {item_count} item(s) "
-            "from structured plan."
-        ),
+        text=confirmation_text,
         blocks=[
             {
                 "type": "section",
@@ -555,11 +568,21 @@ async def _queue_structured_plan_message(
                     "type": "mrkdwn",
                     "text": (
                         f":inbox_tray: "
-                        f"{'Queued' if submission_options.replace_pending else 'Added'} "
+                        f"{action_verb} "
                         f"*{item_count}* item(s) from structured plan ({position_text})."
                     ),
                 },
-            }
+            },
+            *(
+                [
+                    {
+                        "type": "context",
+                        "elements": [{"type": "mrkdwn", "text": paused_notice}],
+                    }
+                ]
+                if paused_notice
+                else []
+            ),
         ],
     )
     return True
