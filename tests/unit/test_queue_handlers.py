@@ -1069,6 +1069,41 @@ async def test_q_add_does_not_restart_when_queue_is_paused():
 
 
 @pytest.mark.asyncio
+async def test_q_structured_plan_restarts_when_replacing_paused_queue():
+    """Structured `/q` replacements should start a fresh queue generation."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control("paused")),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/q"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "***loop-2\nqueued now",
+                "command": "/q",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
+
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "running")
+    mock_ensure.assert_awaited_once()
+    assert "Queue is paused" not in client.chat_postMessage.await_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
 async def test_process_queue_uses_worktree_override_and_non_persistent_session_ids():
     """Worktree-scoped queue items should run with cwd override and in-memory resume IDs."""
     item1 = _queue_item(201, "task one", "/repo-worktrees/feature-x")

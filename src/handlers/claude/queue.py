@@ -187,6 +187,25 @@ def _queue_state_notice(state: str) -> str:
     return ""
 
 
+async def _queue_state_for_submission(
+    deps: HandlerDependencies,
+    channel_id: str,
+    thread_ts: Optional[str],
+    replace_pending: bool,
+) -> str:
+    """Return effective queue state for a new submission.
+
+    Replacing pending items starts a new queue generation, so any prior
+    pause/stop control should not block the replacement queue from running.
+    """
+    queue_state = await _get_queue_state(deps, channel_id, thread_ts)
+    if replace_pending and queue_state != "running":
+        queue_state = (
+            await deps.db.update_queue_control_state(channel_id, thread_ts, "running")
+        ).state
+    return queue_state
+
+
 def _queue_scope_label(thread_ts: Optional[str]) -> str:
     """Return a human-friendly queue scope label."""
     if thread_ts:
@@ -665,7 +684,12 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             position_text = f"position #{start_position}"
         else:
             position_text = f"positions #{start_position}-#{end_position}"
-        queue_state = await _get_queue_state(deps, ctx.channel_id, ctx.thread_ts)
+        queue_state = await _queue_state_for_submission(
+            deps,
+            ctx.channel_id,
+            ctx.thread_ts,
+            replace_pending=replace_pending,
+        )
         paused_notice = _queue_state_notice(queue_state)
         action_verb = "Queued" if replace_pending else "Added"
         confirmation_text = f"{action_verb} {item_count} item(s) to queue ({position_text})."

@@ -309,6 +309,25 @@ def _queue_state_notice(state: str) -> str:
     return ""
 
 
+async def _queue_state_for_submission(
+    deps,
+    channel_id: str,
+    thread_ts: str | None,
+    replace_pending: bool,
+) -> str:
+    """Return effective queue state for a new submission.
+
+    Replacing pending items starts a new queue generation, so any prior
+    pause/stop control should not block the replacement queue from running.
+    """
+    queue_state = (await deps.db.get_queue_control(channel_id, thread_ts)).state
+    if replace_pending and queue_state != "running":
+        queue_state = (
+            await deps.db.update_queue_control_state(channel_id, thread_ts, "running")
+        ).state
+    return queue_state
+
+
 async def _handle_typed_model_command(
     client,
     channel_id: str,
@@ -522,7 +541,12 @@ async def _queue_structured_plan_message(
         )
 
         running = await deps.db.get_running_queue_items(channel_id, thread_ts)
-        queue_state = (await deps.db.get_queue_control(channel_id, thread_ts)).state
+        queue_state = await _queue_state_for_submission(
+            deps,
+            channel_id,
+            thread_ts,
+            replace_pending=submission_options.replace_pending,
+        )
         position_offset = len(running)
         start_position = queued_items[0].position + position_offset
         end_position = queued_items[-1].position + position_offset

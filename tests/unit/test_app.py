@@ -421,13 +421,16 @@ class TestStructuredQueuePlanRouting:
         )
 
     @pytest.mark.asyncio
-    async def test_structured_plan_queue_reports_paused_state_and_skips_processor_start(self):
+    async def test_structured_plan_queue_restarts_when_replacing_paused_queue(self):
         session = SimpleNamespace(id=1, working_directory="/repo")
         deps = SimpleNamespace(
             db=SimpleNamespace(
                 add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=10, position=10)]),
                 get_running_queue_items=AsyncMock(return_value=[]),
                 get_queue_control=AsyncMock(return_value=SimpleNamespace(state="paused")),
+                update_queue_control_state=AsyncMock(
+                    return_value=SimpleNamespace(state="running")
+                ),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -458,9 +461,10 @@ class TestStructuredQueuePlanRouting:
                     )
 
         assert handled is True
-        mock_ensure.assert_not_awaited()
+        deps.db.update_queue_control_state.assert_awaited_once_with("C123", "123.456", "running")
+        mock_ensure.assert_awaited_once()
         kwargs = client.chat_postMessage.await_args.kwargs
-        assert "Queue is paused" in kwargs["text"]
+        assert "Queue is paused" not in kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_reports_invalid_structured_plan(self):
