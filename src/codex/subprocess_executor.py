@@ -1259,7 +1259,7 @@ class SubprocessExecutor(ProcessExecutorBase):
     async def _rpc_call(
         self,
         method: str,
-        params: dict,
+        params: Optional[dict],
         working_directory: str = "~",
     ) -> dict:
         """Execute a single app-server RPC method call and return its result payload."""
@@ -1283,7 +1283,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             process.stdin.write((json.dumps(payload) + "\n").encode("utf-8"))
             await process.stdin.drain()
 
-        async def send_request(request_method: str, request_params: dict) -> int:
+        async def send_request(request_method: str, request_params: Optional[dict]) -> int:
             nonlocal next_request_id
             request_id = next_request_id
             next_request_id += 1
@@ -1443,6 +1443,12 @@ class SubprocessExecutor(ProcessExecutorBase):
     async def account_read(self, working_directory: str) -> dict:
         """Return account metadata."""
         return await self._rpc_call("account/read", {}, working_directory=working_directory)
+
+    async def account_rate_limits_read(self, working_directory: str) -> dict:
+        """Return account rate limit metadata."""
+        return await self._rpc_call(
+            "account/rateLimits/read", None, working_directory=working_directory
+        )
 
     async def config_read(self, working_directory: str) -> dict:
         """Return resolved config from app-server."""

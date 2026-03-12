@@ -24,7 +24,7 @@ class _FakeApp:
 
 
 @pytest.mark.asyncio
-async def test_usage_runs_claude_usage_and_codex_status_for_codex_session():
+async def test_usage_for_codex_session_uses_codex_status_snapshot():
     app = _FakeApp()
     session = Session(model="gpt-5.3-codex", working_directory="/repo", codex_session_id="thread-1")
     deps = SimpleNamespace(
@@ -38,34 +38,44 @@ async def test_usage_runs_claude_usage_and_codex_status_for_codex_session():
             add_session_dir=AsyncMock(return_value=[]),
             remove_session_dir=AsyncMock(return_value=[]),
         ),
-        executor=SimpleNamespace(
-            execute=AsyncMock(
-                return_value=SimpleNamespace(
-                    session_id="claude-2",
-                    output="Claude usage output",
-                    error=None,
-                    detailed_output=None,
-                    duration_ms=100,
-                    cost_usd=0.01,
-                    success=True,
-                )
-            )
-        ),
         codex_executor=SimpleNamespace(
-            execute=AsyncMock(
-                return_value=SimpleNamespace(
-                    session_id="codex-2",
-                    output="Codex status output",
-                    error=None,
-                    detailed_output=None,
-                    duration_ms=50,
-                    cost_usd=0.0,
-                    success=True,
-                )
+            get_active_turn=AsyncMock(return_value={"turn_id": "turn-123"}),
+            account_read=AsyncMock(
+                return_value={
+                    "account": {
+                        "type": "chatgpt",
+                        "email": "dev@example.com",
+                        "planType": "pro",
+                    }
+                }
             ),
+            config_read=AsyncMock(
+                return_value={"config": {"model": "gpt-5.4", "model_reasoning_effort": "high"}}
+            ),
+            account_rate_limits_read=AsyncMock(
+                return_value={
+                    "rateLimitsByLimitId": {
+                        "codex": {
+                            "limitId": "codex",
+                            "primary": {
+                                "usedPercent": 1,
+                                "windowDurationMins": 300,
+                                "resetsAt": 1773291900,
+                            },
+                            "secondary": {
+                                "usedPercent": 5,
+                                "windowDurationMins": 10080,
+                                "resetsAt": 1773852600,
+                            },
+                        }
+                    }
+                }
+            ),
+            thread_read=AsyncMock(return_value={"thread": {"id": "thread-1", "path": None}}),
             cancel_by_scope=AsyncMock(return_value=0),
             cancel_by_channel=AsyncMock(return_value=0),
         ),
+        executor=SimpleNamespace(execute=AsyncMock()),
     )
     register_claude_cli_commands(app, deps)
 
@@ -84,17 +94,16 @@ async def test_usage_runs_claude_usage_and_codex_status_for_codex_session():
     )
 
     kwargs = client.chat_postMessage.await_args.kwargs
-    assert kwargs["text"] == "Usage"
-    deps.executor.execute.assert_awaited_once()
-    deps.codex_executor.execute.assert_awaited_once()
-    assert deps.executor.execute.await_args.kwargs["prompt"] == "/usage"
-    assert deps.codex_executor.execute.await_args.kwargs["prompt"] == "/status"
-    deps.db.update_session_claude_id.assert_awaited_once_with("C123", None, "claude-2")
-    deps.db.update_session_codex_id.assert_awaited_once_with("C123", None, "codex-2")
+    assert kwargs["text"] == "Codex usage"
+    summary = kwargs["blocks"][0]["text"]["text"]
+    assert "Codex Status" in summary
+    assert "5h limit" in summary
+    deps.executor.execute.assert_not_awaited()
+    deps.codex_executor.account_rate_limits_read.assert_awaited_once_with("/repo")
 
 
 @pytest.mark.asyncio
-async def test_usage_runs_claude_usage_and_codex_status_for_claude_session():
+async def test_usage_for_claude_session_runs_claude_usage_only():
     app = _FakeApp()
     session = Session(model="sonnet", working_directory="/repo", claude_session_id="claude-1")
     deps = SimpleNamespace(
@@ -124,17 +133,7 @@ async def test_usage_runs_claude_usage_and_codex_status_for_claude_session():
             cancel_by_channel=AsyncMock(return_value=0),
         ),
         codex_executor=SimpleNamespace(
-            execute=AsyncMock(
-                return_value=SimpleNamespace(
-                    session_id="codex-2",
-                    output="Status output",
-                    error=None,
-                    detailed_output=None,
-                    duration_ms=75,
-                    cost_usd=0.0,
-                    success=True,
-                )
-            ),
+            account_rate_limits_read=AsyncMock(),
             cancel_by_scope=AsyncMock(return_value=0),
             cancel_by_channel=AsyncMock(return_value=0),
         ),
@@ -142,7 +141,10 @@ async def test_usage_runs_claude_usage_and_codex_status_for_claude_session():
     register_claude_cli_commands(app, deps)
 
     handler = app.handlers["/usage"]
-    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.456"}),
+        chat_update=AsyncMock(),
+    )
     await handler(
         ack=AsyncMock(),
         command={
@@ -156,6 +158,5 @@ async def test_usage_runs_claude_usage_and_codex_status_for_claude_session():
     )
 
     deps.executor.execute.assert_awaited_once()
-    deps.codex_executor.execute.assert_awaited_once()
     assert deps.executor.execute.await_args.kwargs["prompt"] == "/usage"
-    assert deps.codex_executor.execute.await_args.kwargs["prompt"] == "/status"
+    deps.codex_executor.account_rate_limits_read.assert_not_awaited()

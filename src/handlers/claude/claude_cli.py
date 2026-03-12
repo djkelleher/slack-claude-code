@@ -13,6 +13,7 @@ from src.config import (
     config,
 )
 from src.handlers.backend_command_adapter import (
+    build_codex_status_summary,
     format_codex_review_status,
     get_codex_mcp_summary,
     unsupported_claude_slash_command_message,
@@ -407,98 +408,44 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
     @app.command("/usage")
     @slack_command()
     async def handle_usage(ctx: CommandContext, deps: HandlerDependencies = deps):
-        """Handle /usage command - show Claude `/usage` and Codex `/status` output."""
+        """Handle /usage command."""
         session = await deps.db.get_or_create_session(
             ctx.channel_id,
             thread_ts=ctx.thread_ts,
             default_cwd=config.DEFAULT_WORKING_DIR,
         )
-        session_scope = build_session_scope(ctx.channel_id, ctx.thread_ts)
-        is_codex_backend = session.get_backend() == "codex"
-        claude_model = session.model if not is_codex_backend else None
-        codex_model = session.model if is_codex_backend else None
-
-        async def _run_claude_usage() -> object:
-            if not deps.executor:
-                return RuntimeError("Claude executor is not configured.")
-            return await deps.executor.execute(
-                prompt="/usage",
-                working_directory=session.working_directory,
-                session_id=session_scope,
-                resume_session_id=session.claude_session_id,
-                execution_id=str(uuid.uuid4()),
-                permission_mode=session.permission_mode,
-                model=claude_model,
-                channel_id=ctx.channel_id,
-                thread_ts=ctx.thread_ts,
-            )
-
-        async def _run_codex_status() -> object:
+        if session.get_backend() == "codex":
             if not deps.codex_executor:
-                return RuntimeError("Codex executor is not configured.")
-            return await deps.codex_executor.execute(
-                prompt="/status",
-                working_directory=session.working_directory,
-                session_id=session_scope,
-                resume_session_id=session.codex_session_id,
-                execution_id=str(uuid.uuid4()),
-                permission_mode=session.permission_mode,
-                sandbox_mode=session.sandbox_mode,
-                approval_mode=session.approval_mode,
-                model=codex_model,
-                channel_id=ctx.channel_id,
-                thread_ts=ctx.thread_ts,
-            )
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Codex executor is not configured.",
+                    blocks=error_message("Codex executor is not configured."),
+                )
+                return
+            try:
+                summary = await build_codex_status_summary(
+                    codex_executor=deps.codex_executor,
+                    session=session,
+                    channel_id=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                )
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Codex usage",
+                    blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": summary}}],
+                )
+            except Exception as e:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text=f"Failed to load Codex usage: {e}",
+                    blocks=error_message(str(e)),
+                )
+            return
 
-        def _format_backend_output(
-            label: str, command_name: str, result: object
-        ) -> tuple[bool, str]:
-            if isinstance(result, Exception):
-                return False, f"{label} {command_name} failed: {result}"
-
-            success = bool(result.success)
-            output = result.output or result.error or ""
-            if not output and result.detailed_output:
-                output = result.detailed_output
-            if not output:
-                output = "Command completed (no output)."
-
-            header = f"{label} {command_name} ({'ok' if success else 'error'})"
-            return success, f"{header}\n{output}"
-
-        claude_result, codex_result = await asyncio.gather(
-            _run_claude_usage(),
-            _run_codex_status(),
-            return_exceptions=True,
-        )
-
-        if not isinstance(claude_result, Exception) and claude_result.session_id:
-            await deps.db.update_session_claude_id(
-                ctx.channel_id, ctx.thread_ts, claude_result.session_id
-            )
-        if not isinstance(codex_result, Exception) and codex_result.session_id:
-            await deps.db.update_session_codex_id(
-                ctx.channel_id, ctx.thread_ts, codex_result.session_id
-            )
-
-        claude_success, claude_output = _format_backend_output("Claude", "/usage", claude_result)
-        codex_success, codex_output = _format_backend_output("Codex", "/status", codex_result)
-        combined_output = f"{claude_output}\n\n{codex_output}"
-        combined_success = claude_success and codex_success
-        blocks_list = command_response_with_tables(
-            prompt="/usage",
-            output=combined_output,
-            command_id=None,
-            is_error=not combined_success,
-        )
-
-        for index, blocks in enumerate(blocks_list):
-            await ctx.client.chat_postMessage(
-                channel=ctx.channel_id,
-                thread_ts=ctx.thread_ts,
-                text="Usage" if index == 0 else "Usage (continued)",
-                blocks=blocks,
-            )
+        await _send_claude_command(ctx, "/usage", deps)
 
     @app.command("/context")
     @slack_command()
