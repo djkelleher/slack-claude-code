@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.config import config
 from src.database.models import Session
 from src.handlers.claude.queue import (
     _QUEUE_START_LOCKS,
@@ -287,7 +288,10 @@ async def test_process_queue_streams_updates_during_execution():
             await _process_queue("C123", deps, client, MagicMock())
 
     assert mock_execute.await_args.kwargs["on_chunk"] is not None
-    assert mock_execute.await_args.kwargs["auto_approve_permissions"] is True
+    assert (
+        mock_execute.await_args.kwargs["auto_approve_permissions"]
+        == config.QUEUE_AUTO_APPROVE_PERMISSIONS
+    )
     assert client.chat_update.await_count >= 2
 
 

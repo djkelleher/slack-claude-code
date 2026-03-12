@@ -181,6 +181,7 @@ Queue control behavior:
 - Adding new items with `/q` does not auto-start processing while a scope is paused or stopped; resume it explicitly with `/qc resume`.
 - `/qv` and `/qc view` show queue state and include a notice when the scope is paused or stopped.
 - Set `QUEUE_AUTO_ANSWER_QUESTIONS=true` to auto-answer assistant questions during queue execution by choosing `(Recommended)` options (fallback: first option).
+- Set `QUEUE_AUTO_APPROVE_PERMISSIONS=true` to auto-approve all permission prompts during queue execution.
 
 #### Structured Queue DSL (Queues + Worktree + Loops)
 

@@ -294,6 +294,7 @@ class Config(BaseSettings):
 
     # Queue behavior
     QUEUE_AUTO_ANSWER_QUESTIONS: bool = False
+    QUEUE_AUTO_APPROVE_PERMISSIONS: bool = True
 
     # Valid sandbox modes for Codex app-server
     VALID_SANDBOX_MODES: tuple[str, ...] = (
