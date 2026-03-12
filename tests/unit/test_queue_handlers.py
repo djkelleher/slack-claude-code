@@ -296,6 +296,53 @@ async def test_process_queue_streams_updates_during_execution():
 
 
 @pytest.mark.asyncio
+async def test_execute_queue_item_routes_known_slash_command_through_router():
+    """Queued slash commands should execute through slash handler dispatch."""
+    item = _queue_item(73, "/clear")
+    session = Session(id=1, channel_id="C123", model="opus")
+    slash_router = SimpleNamespace(
+        has_command=MagicMock(return_value=True),
+        dispatch=AsyncMock(return_value=True),
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(update_queue_item_status=AsyncMock(side_effect=[True, None])),
+        codex_executor=None,
+        slash_command_router=slash_router,
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(),
+        chat_update=AsyncMock(),
+    )
+
+    with patch("src.handlers.claude.queue.execute_for_session", new=AsyncMock()) as mock_execute:
+        result = await _execute_queue_item(
+            item,
+            channel_id="C123",
+            thread_ts="123.456",
+            scope="C123:123.456",
+            deps=deps,
+            client=client,
+            log=MagicMock(),
+            base_session=session,
+            sequence_label="1",
+            override_resume_ids={},
+        )
+
+    assert result == "completed"
+    mock_execute.assert_not_awaited()
+    slash_router.has_command.assert_called_once_with("/clear")
+    slash_router.dispatch.assert_awaited_once()
+    dispatch_kwargs = slash_router.dispatch.await_args.kwargs
+    assert dispatch_kwargs["command_name"] == "/clear"
+    assert dispatch_kwargs["command_text"] == ""
+    assert dispatch_kwargs["channel_id"] == "C123"
+    assert dispatch_kwargs["thread_ts"] == "123.456"
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
+    assert statuses == ["running", "completed"]
+    client.chat_postMessage.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_process_queue_waits_for_active_codex_turn():
     """Queue processor should wait while active Codex turn is in progress for the same scope."""
     item = _queue_item(8, "follow up")

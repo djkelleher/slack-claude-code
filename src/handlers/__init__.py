@@ -21,6 +21,7 @@ from .claude import (
     register_worktree_commands,
 )
 from .notifications import register_notifications_command
+from .slash_command_router import build_slash_command_router
 
 
 def register_commands(
@@ -66,5 +67,6 @@ def register_commands(
     register_git_commands(app, deps)
     register_worktree_commands(app, deps)
     register_cancel_commands(app, deps)
+    deps.slash_command_router = build_slash_command_router(app)
 
     return deps

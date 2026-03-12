@@ -73,6 +73,7 @@ class HandlerDependencies:
     db: Any  # DatabaseRepository
     executor: Any  # Claude SubprocessExecutor
     codex_executor: Any = None  # Codex SubprocessExecutor
+    slash_command_router: Any = None  # SlashCommandRouter
 
 
 def slack_command(

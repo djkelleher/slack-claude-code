@@ -34,6 +34,7 @@ from src.utils.streaming import StreamingMessageState, create_streaming_callback
 from ..base import CommandContext, HandlerDependencies, slack_command
 from ..command_router import execute_for_session
 from ..execution_runtime import streaming_flags_for_session
+from ..slash_command_router import parse_slash_command_text
 
 # Default timeout for queue processors (1 hour)
 QUEUE_PROCESSOR_TIMEOUT = 3600
@@ -44,6 +45,7 @@ _PARALLEL_HISTORY_COMMAND_LIMIT = 10
 _PARALLEL_HISTORY_OUTPUT_LIMIT = 1000
 _PARALLEL_HISTORY_TOTAL_LIMIT = 12000
 _THREAD_TS_PATTERN = re.compile(r"^\d+\.\d+$")
+_QUEUE_COMMAND_USER_ID_PREFIX = "queue-item"
 
 
 @dataclass(frozen=True)
@@ -337,6 +339,39 @@ async def _execute_queue_item(
     if not claimed:
         log.info(f"Queue item #{item.id} no longer pending in scope {scope}, skipping")
         return None
+
+    slash_command = parse_slash_command_text(item.prompt)
+    slash_command_router = None
+    try:
+        slash_command_router = deps.slash_command_router
+    except AttributeError:
+        slash_command_router = None
+
+    if (
+        slash_command
+        and slash_command_router
+        and slash_command_router.has_command(slash_command.name)
+    ):
+        queue_user_id = f"{_QUEUE_COMMAND_USER_ID_PREFIX}-{item.id}"
+        log.info(
+            f"Routing queue item #{item.id} to slash command handler {slash_command.name} "
+            f"(scope={scope})"
+        )
+        await slash_command_router.dispatch(
+            command_name=slash_command.name,
+            command_text=slash_command.text,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=queue_user_id,
+            client=client,
+            logger=log,
+        )
+        await deps.db.update_queue_item_status(
+            item.id,
+            "completed",
+            output=f"Executed slash command {slash_command.name}",
+        )
+        return "completed"
 
     processing_log_line = (
         _parallel_processing_log_line(item.id, parallel_config.group_id, item.prompt)
