@@ -452,6 +452,7 @@ async def _execute_queue_item(
             logger=log,
             persist_session_ids=persist_session_ids,
             auto_answer_questions=config.QUEUE_AUTO_ANSWER_QUESTIONS,
+            auto_approve_permissions=True,
             session_scope_override=session_scope_override,
             on_plan_approved=on_plan_approved,
         )

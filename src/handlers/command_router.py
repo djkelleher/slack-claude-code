@@ -162,6 +162,7 @@ async def _execute_codex_backend(
     logger: Any,
     persist_session_ids: bool,
     auto_answer_questions: bool,
+    auto_approve_permissions: bool,
     on_plan_approved: Any,
     on_interaction_resumed: Any,
 ) -> Any:
@@ -304,6 +305,14 @@ async def _execute_codex_backend(
         return response_payload
 
     async def on_approval_request(method: str, approval_input: dict) -> dict | None:
+        if auto_approve_permissions:
+            if logger:
+                logger.info(
+                    f"Auto-approving Codex permission request {method} "
+                    "for queue-style execution"
+                )
+            return approval_payload_from_decision(method, True)
+
         if slack_client is None:
             return None
 
@@ -416,6 +425,7 @@ async def _execute_claude_backend(
     logger: Any,
     persist_session_ids: bool,
     auto_answer_questions: bool,
+    auto_approve_permissions: bool,
     on_plan_approved: Any,
     on_interaction_resumed: Any,
 ) -> Any:
@@ -613,6 +623,7 @@ async def execute_for_session(
     logger: Any = None,
     persist_session_ids: bool = True,
     auto_answer_questions: bool = False,
+    auto_approve_permissions: bool = False,
     session_scope_override: Optional[str] = None,
     on_plan_approved: Any = None,
     on_interaction_resumed: Any = None,
@@ -636,6 +647,7 @@ async def execute_for_session(
             logger=logger,
             persist_session_ids=persist_session_ids,
             auto_answer_questions=auto_answer_questions,
+            auto_approve_permissions=auto_approve_permissions,
             on_plan_approved=on_plan_approved,
             on_interaction_resumed=on_interaction_resumed,
         )
@@ -655,6 +667,7 @@ async def execute_for_session(
         logger=logger,
         persist_session_ids=persist_session_ids,
         auto_answer_questions=auto_answer_questions,
+        auto_approve_permissions=auto_approve_permissions,
         on_plan_approved=on_plan_approved,
         on_interaction_resumed=on_interaction_resumed,
     )

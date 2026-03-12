@@ -287,6 +287,7 @@ async def test_process_queue_streams_updates_during_execution():
             await _process_queue("C123", deps, client, MagicMock())
 
     assert mock_execute.await_args.kwargs["on_chunk"] is not None
+    assert mock_execute.await_args.kwargs["auto_approve_permissions"] is True
     assert client.chat_update.await_count >= 2
 
 

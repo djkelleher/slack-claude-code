@@ -706,6 +706,57 @@ class TestCommandRouter:
         assert routed.result.output == "Done."
 
     @pytest.mark.asyncio
+    async def test_codex_auto_approves_permissions_for_queue_execution(self):
+        """Auto-approve mode should bypass Slack permission UI for Codex prompts."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock()),
+        )
+
+        async def _fake_codex_execute(**kwargs):
+            payload = await kwargs["on_approval_request"](
+                "item/commandExecution/requestApproval",
+                {"command": "ls"},
+            )
+            assert payload == {"decision": "accept"}
+            return SimpleNamespace(session_id="codex-new", success=True, output="Done.")
+
+        deps.codex_executor.execute = AsyncMock(side_effect=_fake_codex_execute)
+        session = Session(
+            id=22,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+
+        with patch(
+            "src.handlers.command_router.PermissionManager.request_approval",
+            new=AsyncMock(),
+        ) as request_approval:
+            routed = await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="hello",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-9-auto-approval",
+                slack_client=SimpleNamespace(),
+                user_id="U123",
+                auto_approve_permissions=True,
+            )
+
+        request_approval.assert_not_awaited()
+        assert routed.result.success is True
+        assert routed.result.output == "Done."
+
+    @pytest.mark.asyncio
     async def test_codex_question_resume_can_swap_streaming_callback(self):
         """Question answers should allow Codex streaming to move to a new Slack message."""
         deps = SimpleNamespace(
