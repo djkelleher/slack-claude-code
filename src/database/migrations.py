@@ -120,6 +120,19 @@ CREATE TABLE IF NOT EXISTS queue_controls (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Scheduled queue controls per channel/thread scope
+CREATE TABLE IF NOT EXISTS queue_scheduled_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
+    action TEXT NOT NULL,
+    execute_at TIMESTAMP NOT NULL,
+    status TEXT DEFAULT 'pending',
+    error_message TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    executed_at TIMESTAMP DEFAULT NULL
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread ON sessions(channel_id, thread_ts);
@@ -138,6 +151,8 @@ CREATE INDEX IF NOT EXISTS idx_git_checkpoints_channel ON git_checkpoints(channe
 CREATE INDEX IF NOT EXISTS idx_git_checkpoints_session ON git_checkpoints(session_id);
 CREATE INDEX IF NOT EXISTS idx_notification_settings_channel ON notification_settings(channel_id);
 CREATE INDEX IF NOT EXISTS idx_queue_controls_scope ON queue_controls(channel_id, thread_ts);
+CREATE INDEX IF NOT EXISTS idx_queue_scheduled_events_due ON queue_scheduled_events(status, execute_at);
+CREATE INDEX IF NOT EXISTS idx_queue_scheduled_events_scope ON queue_scheduled_events(channel_id, thread_ts, status);
 """
 
 
@@ -161,6 +176,19 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                state TEXT DEFAULT 'running',
                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS queue_scheduled_events (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               channel_id TEXT NOT NULL,
+               thread_ts TEXT DEFAULT NULL,
+               action TEXT NOT NULL,
+               execute_at TIMESTAMP NOT NULL,
+               status TEXT DEFAULT 'pending',
+               error_message TEXT DEFAULT NULL,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               executed_at TIMESTAMP DEFAULT NULL
            )"""
     )
 
@@ -239,7 +267,19 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_queue_controls_scope ON queue_controls(channel_id, thread_ts)"
     )
     await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_queue_scheduled_events_due "
+        "ON queue_scheduled_events(status, execute_at)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_queue_scheduled_events_scope "
+        "ON queue_scheduled_events(channel_id, thread_ts, status)"
+    )
+    await db.execute(
         "UPDATE queue_controls SET thread_ts = NULL WHERE TRIM(COALESCE(thread_ts, '')) = ''"
+    )
+    await db.execute(
+        "UPDATE queue_scheduled_events SET thread_ts = NULL "
+        "WHERE TRIM(COALESCE(thread_ts, '')) = ''"
     )
     await db.commit()
 
@@ -250,6 +290,7 @@ async def reset_database(db_path: str) -> None:
         await db.executescript(
             """
             DROP TABLE IF EXISTS notification_settings;
+            DROP TABLE IF EXISTS queue_scheduled_events;
             DROP TABLE IF EXISTS queue_controls;
             DROP TABLE IF EXISTS git_checkpoints;
             DROP TABLE IF EXISTS uploaded_files;

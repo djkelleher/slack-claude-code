@@ -1,6 +1,7 @@
 """Unit tests for queue processing handlers."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +13,7 @@ from src.handlers.claude.queue import (
     _QUEUE_START_LOCKS,
     _execute_queue_item,
     _process_queue,
+    _process_queue_scheduled_events,
     _queue_task_id,
     ensure_queue_processor,
     register_queue_commands,
@@ -530,6 +532,83 @@ async def test_process_queue_pause_stops_before_next_item():
 
 
 @pytest.mark.asyncio
+async def test_scheduled_queue_dispatcher_applies_resume_event():
+    """Due scheduled resume event should flip state and restart pending queue work."""
+    event = SimpleNamespace(
+        id=501,
+        channel_id="C123",
+        thread_ts=None,
+        action="resume",
+        execute_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_due_queue_scheduled_events=AsyncMock(side_effect=[[event], []]),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
+            get_pending_queue_items=AsyncMock(return_value=[SimpleNamespace(id=7)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            mark_queue_scheduled_event_executed=AsyncMock(return_value=True),
+            mark_queue_scheduled_event_failed=AsyncMock(return_value=False),
+        ),
+        codex_executor=None,
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+    with patch(
+        "src.handlers.claude.queue.ensure_queue_processor",
+        new=AsyncMock(),
+    ) as mock_ensure_queue:
+        with patch(
+            "src.handlers.claude.queue._recover_stale_running_items",
+            new=AsyncMock(return_value=0),
+        ):
+            with patch(
+                "src.handlers.claude.queue.asyncio.sleep",
+                new=AsyncMock(side_effect=asyncio.CancelledError()),
+            ):
+                with pytest.raises(asyncio.CancelledError):
+                    await _process_queue_scheduled_events(deps, client, MagicMock())
+
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "running")
+    deps.db.mark_queue_scheduled_event_executed.assert_awaited_once_with(501)
+    deps.db.mark_queue_scheduled_event_failed.assert_not_awaited()
+    mock_ensure_queue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_queue_dispatcher_marks_failed_event():
+    """Unsupported scheduled action should be marked failed and not executed."""
+    event = SimpleNamespace(
+        id=777,
+        channel_id="C123",
+        thread_ts="123.456",
+        action="unknown",
+        execute_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_due_queue_scheduled_events=AsyncMock(side_effect=[[event], []]),
+            mark_queue_scheduled_event_executed=AsyncMock(return_value=False),
+            mark_queue_scheduled_event_failed=AsyncMock(return_value=True),
+        ),
+        codex_executor=None,
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+    with patch(
+        "src.handlers.claude.queue.asyncio.sleep",
+        new=AsyncMock(side_effect=asyncio.CancelledError()),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await _process_queue_scheduled_events(deps, client, MagicMock())
+
+    deps.db.mark_queue_scheduled_event_executed.assert_not_awaited()
+    deps.db.mark_queue_scheduled_event_failed.assert_awaited_once()
+    error_text = deps.db.mark_queue_scheduled_event_failed.await_args.args[1]
+    assert "Unsupported scheduled queue action" in error_text
+
+
+@pytest.mark.asyncio
 async def test_execute_queue_item_plan_approval_posts_implementation_message():
     """Approved-plan handoff should post a new implementation processing message."""
     item = _queue_item(88, "ship fix")
@@ -622,6 +701,7 @@ async def test_qv_posts_queue_status():
             list_queue_scopes_for_channel=AsyncMock(return_value=[]),
             get_pending_queue_items=AsyncMock(return_value=[]),
             get_running_queue_items=AsyncMock(return_value=[]),
+            get_pending_queue_scheduled_events=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
     )
@@ -641,6 +721,7 @@ async def test_qc_view_subcommand_posts_channel_overview_without_thread_context(
             list_queue_scopes_for_channel=AsyncMock(return_value=["123.456"]),
             get_pending_queue_items=AsyncMock(side_effect=[[], [_queue_item(10, "pending")]]),
             get_running_queue_items=AsyncMock(side_effect=[[], [_queue_item(11, "running")]]),
+            get_pending_queue_scheduled_events=AsyncMock(side_effect=[[], []]),
             get_queue_control=AsyncMock(side_effect=[_queue_control(), _queue_control("paused")]),
         ),
     )
@@ -660,6 +741,7 @@ async def test_qc_view_subcommand_accepts_explicit_thread_scope():
         SimpleNamespace(
             get_pending_queue_items=AsyncMock(return_value=[]),
             get_running_queue_items=AsyncMock(return_value=[_queue_item(12, "running")]),
+            get_pending_queue_scheduled_events=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control("paused")),
         ),
     )
@@ -890,6 +972,7 @@ async def test_qdelete_deletes_entire_queue_scope():
         db=SimpleNamespace(
             update_queue_control_state=AsyncMock(),
             delete_queue=AsyncMock(return_value=4),
+            delete_pending_queue_scheduled_events=AsyncMock(return_value=0),
         )
     )
     register_queue_commands(app, deps)
@@ -914,6 +997,7 @@ async def test_qdelete_deletes_entire_queue_scope():
     deps.db.update_queue_control_state.assert_any_await("C123", None, "stopped")
     deps.db.update_queue_control_state.assert_any_await("C123", None, "running")
     deps.db.delete_queue.assert_awaited_once_with("C123", None)
+    deps.db.delete_pending_queue_scheduled_events.assert_awaited_once_with("C123", None)
     mock_cancel.assert_awaited_once_with(_queue_task_id("C123", None))
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Deleted queue with 4 item(s)"
@@ -927,6 +1011,7 @@ async def test_qc_delete_deletes_entire_queue_scope():
         db=SimpleNamespace(
             update_queue_control_state=AsyncMock(),
             delete_queue=AsyncMock(return_value=2),
+            delete_pending_queue_scheduled_events=AsyncMock(return_value=0),
         )
     )
     register_queue_commands(app, deps)
@@ -951,6 +1036,7 @@ async def test_qc_delete_deletes_entire_queue_scope():
     deps.db.update_queue_control_state.assert_any_await("C123", None, "stopped")
     deps.db.update_queue_control_state.assert_any_await("C123", None, "running")
     deps.db.delete_queue.assert_awaited_once_with("C123", None)
+    deps.db.delete_pending_queue_scheduled_events.assert_awaited_once_with("C123", None)
     mock_cancel.assert_awaited_once_with(_queue_task_id("C123", None))
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Deleted queue with 2 item(s)"
@@ -1138,6 +1224,76 @@ async def test_q_add_structured_plan_supports_clear_slash_directive():
         replace_pending=True,
     )
     assert mock_materialize.await_args.kwargs["text"] == "next"
+
+
+@pytest.mark.asyncio
+async def test_q_add_structured_plan_persists_scheduled_controls():
+    """Structured `/q` should persist schedule directives and start scheduler dispatcher."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=4, position=4)]),
+            add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=501)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/q"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    scheduled_time = datetime.now(timezone.utc) + timedelta(minutes=30)
+    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
+        with patch(
+            "src.handlers.claude.queue.parse_queue_plan_submission",
+            return_value=(
+                SimpleNamespace(
+                    replace_pending=True,
+                    scheduled_controls=[
+                        SimpleNamespace(action="pause", execute_at=scheduled_time),
+                    ],
+                ),
+                "next",
+            ),
+        ):
+            with patch(
+                "src.handlers.claude.queue.materialize_queue_plan_text",
+                new=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(
+                            prompt="next",
+                            working_directory_override=None,
+                            parallel_group_id=None,
+                            parallel_limit=None,
+                        )
+                    ]
+                ),
+            ):
+                with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
+                    with patch(
+                        "src.handlers.claude.queue.ensure_queue_schedule_dispatcher",
+                        new=AsyncMock(),
+                    ) as mock_ensure_scheduler:
+                        await handler(
+                            ack=AsyncMock(),
+                            command={
+                                "channel_id": "C123",
+                                "user_id": "U123",
+                                "text": "***at 19:30 pause\nnext",
+                                "command": "/q",
+                            },
+                            client=client,
+                            logger=MagicMock(),
+                        )
+
+    deps.db.add_queue_scheduled_events.assert_awaited_once_with(
+        channel_id="C123",
+        thread_ts=None,
+        events=[("pause", scheduled_time)],
+    )
+    mock_ensure_scheduler.assert_awaited_once()
+    assert "Scheduled controls:" in client.chat_postMessage.await_args.kwargs["text"]
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 """Unit tests for database repository."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 import pytest
@@ -679,6 +680,80 @@ class TestQueueOperations:
 
         assert channel_control.state == "paused"
         assert thread_control.state == "stopped"
+
+    @pytest.mark.asyncio
+    async def test_add_queue_scheduled_events_persists_and_lists_by_scope(self, db_repo):
+        """Scheduled queue controls should persist and be returned in time order."""
+        now = datetime.now(timezone.utc)
+        events = await db_repo.add_queue_scheduled_events(
+            "C123ABC",
+            None,
+            [
+                ("pause", now + timedelta(minutes=10)),
+                ("resume", now + timedelta(minutes=20)),
+            ],
+        )
+
+        assert [event.action for event in events] == ["pause", "resume"]
+        pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", None)
+        assert [event.action for event in pending] == ["pause", "resume"]
+
+    @pytest.mark.asyncio
+    async def test_get_due_queue_scheduled_events_returns_pending_due_only(self, db_repo):
+        """Due scheduled event lookup should filter by status and execute_at."""
+        now = datetime.now(timezone.utc)
+        created = await db_repo.add_queue_scheduled_events(
+            "C123ABC",
+            None,
+            [
+                ("pause", now - timedelta(minutes=1)),
+                ("resume", now + timedelta(minutes=5)),
+            ],
+        )
+        await db_repo.mark_queue_scheduled_event_executed(created[0].id)
+
+        due = await db_repo.get_due_queue_scheduled_events(now + timedelta(minutes=1))
+
+        assert due == []
+
+    @pytest.mark.asyncio
+    async def test_mark_queue_scheduled_event_failed_updates_status(self, db_repo):
+        """Failing scheduled event should persist failure metadata."""
+        now = datetime.now(timezone.utc)
+        created = await db_repo.add_queue_scheduled_events(
+            "C123ABC",
+            "123.456",
+            [("stop", now + timedelta(minutes=1))],
+        )
+
+        marked = await db_repo.mark_queue_scheduled_event_failed(created[0].id, "boom")
+
+        assert marked is True
+        pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", "123.456")
+        assert pending == []
+
+    @pytest.mark.asyncio
+    async def test_delete_pending_queue_scheduled_events_is_scope_specific(self, db_repo):
+        """Deleting pending schedules should only affect the target scope."""
+        now = datetime.now(timezone.utc)
+        await db_repo.add_queue_scheduled_events(
+            "C123ABC",
+            None,
+            [("pause", now + timedelta(minutes=5))],
+        )
+        await db_repo.add_queue_scheduled_events(
+            "C123ABC",
+            "123.456",
+            [("resume", now + timedelta(minutes=10))],
+        )
+
+        deleted = await db_repo.delete_pending_queue_scheduled_events("C123ABC", None)
+
+        assert deleted == 1
+        channel_pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", None)
+        thread_pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", "123.456")
+        assert channel_pending == []
+        assert len(thread_pending) == 1
 
 
 class TestParallelJobOperations:

@@ -4,6 +4,7 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,7 @@ from src.database.models import Session
 from src.git.service import GitService
 from src.tasks.manager import TaskManager
 from src.tasks.queue_plan import (
+    QueueScheduledControl,
     QueuePlanError,
     contains_queue_plan_markers,
     materialize_queue_plan_text,
@@ -46,6 +48,11 @@ _PARALLEL_HISTORY_OUTPUT_LIMIT = 1000
 _PARALLEL_HISTORY_TOTAL_LIMIT = 12000
 _THREAD_TS_PATTERN = re.compile(r"^\d+\.\d+$")
 _QUEUE_COMMAND_USER_ID_PREFIX = "queue-item"
+_QUEUE_SCHEDULE_DISPATCHER_TASK_ID = "queue_schedule_dispatcher"
+_QUEUE_SCHEDULE_DISPATCHER_POLL_SECONDS = 1.0
+_QUEUE_SCHEDULE_DISPATCHER_BATCH_SIZE = 50
+_QUEUE_SCHEDULE_DISPATCHER_LOCK: Optional[asyncio.Lock] = None
+_QUEUE_SCHEDULE_DISPATCHER_LOCK_LOOP: Optional[asyncio.AbstractEventLoop] = None
 
 
 @dataclass(frozen=True)
@@ -187,6 +194,27 @@ def _queue_state_notice(state: str) -> str:
     if state == "stopped":
         return "Queue is stopped. Use `/qc resume` to continue."
     return ""
+
+
+def _format_scheduled_event_timestamp(event_time: datetime) -> str:
+    """Format scheduled event timestamps in UTC for operator visibility."""
+    if event_time.tzinfo is None or event_time.tzinfo.utcoffset(event_time) is None:
+        event_time = event_time.replace(tzinfo=timezone.utc)
+    return event_time.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _scheduled_controls_summary(controls: list[QueueScheduledControl]) -> str:
+    """Build a short queue scheduled controls summary."""
+    if not controls:
+        return ""
+    parts = [
+        f"{control.action} at {_format_scheduled_event_timestamp(control.execute_at)}"
+        for control in controls[:3]
+    ]
+    summary = ", ".join(parts)
+    if len(controls) > 3:
+        summary = f"{summary}, and {len(controls) - 3} more"
+    return f"Scheduled controls: {summary}."
 
 
 async def _queue_state_for_submission(
@@ -659,6 +687,178 @@ async def ensure_queue_processor(
         )
 
 
+async def _get_queue_schedule_dispatcher_lock() -> asyncio.Lock:
+    """Return the singleton lock that serializes scheduler startup."""
+    global _QUEUE_SCHEDULE_DISPATCHER_LOCK, _QUEUE_SCHEDULE_DISPATCHER_LOCK_LOOP
+    current_loop = asyncio.get_running_loop()
+    if _QUEUE_SCHEDULE_DISPATCHER_LOCK_LOOP is not current_loop:
+        _QUEUE_SCHEDULE_DISPATCHER_LOCK_LOOP = current_loop
+        _QUEUE_SCHEDULE_DISPATCHER_LOCK = asyncio.Lock()
+
+    if _QUEUE_SCHEDULE_DISPATCHER_LOCK is None:
+        _QUEUE_SCHEDULE_DISPATCHER_LOCK = asyncio.Lock()
+    return _QUEUE_SCHEDULE_DISPATCHER_LOCK
+
+
+async def _is_queue_schedule_dispatcher_running() -> bool:
+    """Return True when queue scheduled-event dispatcher is already active."""
+    tracked = await TaskManager.get(_QUEUE_SCHEDULE_DISPATCHER_TASK_ID)
+    return tracked is not None and not tracked.is_done
+
+
+async def _post_scheduled_queue_action_notice(client, event, text: str, log) -> None:
+    """Post a Slack notice for a successfully applied scheduled queue action."""
+    try:
+        await client.chat_postMessage(
+            channel=event.channel_id,
+            thread_ts=event.thread_ts,
+            text=text,
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
+        )
+    except Exception as notify_error:
+        log.error(
+            f"Failed to post scheduled queue action notice for event {event.id}: " f"{notify_error}"
+        )
+
+
+async def _apply_scheduled_queue_action(event, deps: HandlerDependencies, client, log) -> None:
+    """Apply one scheduled queue action for a scope."""
+    action = (event.action or "").strip().lower()
+    effective_action = "resume" if action == "start" else action
+    scope_label = _queue_scope_label(event.thread_ts)
+    action_label = "start" if action == "start" else effective_action
+    scheduled_at_text = _format_scheduled_event_timestamp(event.execute_at)
+
+    if effective_action == "pause":
+        running_items = await deps.db.get_running_queue_items(event.channel_id, event.thread_ts)
+        await deps.db.update_queue_control_state(event.channel_id, event.thread_ts, "paused")
+        text = (
+            f"{scope_label}: scheduled {action_label} at {scheduled_at_text}. "
+            "Current item(s) will finish before stopping."
+            if running_items
+            else f"{scope_label}: scheduled {action_label} at {scheduled_at_text}. Queue paused."
+        )
+        await _post_scheduled_queue_action_notice(client, event, text, log)
+        return
+
+    if effective_action == "stop":
+        await deps.db.update_queue_control_state(event.channel_id, event.thread_ts, "stopped")
+        cancelled = await TaskManager.cancel(_queue_task_id(event.channel_id, event.thread_ts))
+        text = (
+            f"{scope_label}: scheduled stop at {scheduled_at_text}. Queue stopped immediately."
+            if cancelled
+            else f"{scope_label}: scheduled stop at {scheduled_at_text}. Queue stopped."
+        )
+        await _post_scheduled_queue_action_notice(client, event, text, log)
+        return
+
+    if effective_action != "resume":
+        raise ValueError(f"Unsupported scheduled queue action `{event.action}`")
+
+    await deps.db.update_queue_control_state(event.channel_id, event.thread_ts, "running")
+    recovered_stale_count = await _recover_stale_running_items(
+        channel_id=event.channel_id,
+        thread_ts=event.thread_ts,
+        deps=deps,
+        log=log,
+    )
+    pending = await deps.db.get_pending_queue_items(event.channel_id, event.thread_ts)
+    running_items = await deps.db.get_running_queue_items(event.channel_id, event.thread_ts)
+
+    if pending:
+        await ensure_queue_processor(event.channel_id, event.thread_ts, deps, client, log)
+        if running_items:
+            text = (
+                f"{scope_label}: scheduled {action_label} at {scheduled_at_text}. "
+                "Running item(s) continue and pending work will follow."
+            )
+        else:
+            text = (
+                f"{scope_label}: scheduled {action_label} at {scheduled_at_text}. "
+                f"{len(pending)} pending item(s) ready to run."
+            )
+            if recovered_stale_count:
+                text = f"{text} Recovered {recovered_stale_count} stale running item(s)."
+    elif running_items:
+        text = (
+            f"{scope_label}: scheduled {action_label} at {scheduled_at_text}. "
+            "Running item(s) continue."
+        )
+    else:
+        text = (
+            f"{scope_label}: scheduled {action_label} at {scheduled_at_text}. "
+            "No pending items remain."
+        )
+        if recovered_stale_count:
+            text = f"{text} Recovered {recovered_stale_count} stale running item(s)."
+
+    await _post_scheduled_queue_action_notice(client, event, text, log)
+
+
+async def _process_queue_scheduled_events(
+    deps: HandlerDependencies,
+    client,
+    task_logger,
+) -> None:
+    """Poll and apply due queue scheduled control events."""
+    log = task_logger or logger
+    log.info("Queue scheduled-event dispatcher started")
+    try:
+        while True:
+            now_utc = datetime.now(timezone.utc)
+            due_events = await deps.db.get_due_queue_scheduled_events(
+                now_utc, limit=_QUEUE_SCHEDULE_DISPATCHER_BATCH_SIZE
+            )
+            if not due_events:
+                await asyncio.sleep(_QUEUE_SCHEDULE_DISPATCHER_POLL_SECONDS)
+                continue
+
+            for event in due_events:
+                try:
+                    await _apply_scheduled_queue_action(event, deps, client, log)
+                    await deps.db.mark_queue_scheduled_event_executed(event.id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    log.error(
+                        f"Failed to apply scheduled queue action for event {event.id}: {e}",
+                        exc_info=e,
+                    )
+                    await deps.db.mark_queue_scheduled_event_failed(event.id, str(e))
+    except asyncio.CancelledError:
+        log.info("Queue scheduled-event dispatcher cancelled")
+        raise
+
+
+async def ensure_queue_schedule_dispatcher(
+    deps: HandlerDependencies,
+    client,
+    task_logger=None,
+) -> None:
+    """Ensure the scheduled queue control dispatcher task is active."""
+    log = task_logger or logger
+    start_lock = await _get_queue_schedule_dispatcher_lock()
+    async with start_lock:
+        if await _is_queue_schedule_dispatcher_running():
+            return
+
+        task = asyncio.create_task(_process_queue_scheduled_events(deps, client, log))
+        await TaskManager.register(
+            task_id=_QUEUE_SCHEDULE_DISPATCHER_TASK_ID,
+            task=task,
+            channel_id="system",
+            task_type="queue_schedule_dispatcher",
+        )
+
+        def done_callback(t: asyncio.Task) -> None:
+            if not t.cancelled():
+                exc = t.exception()
+                if exc:
+                    log.error(f"Queue scheduled-event dispatcher failed: {exc}", exc_info=exc)
+
+        task.add_done_callback(done_callback)
+
+
 def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register queue command handlers."""
     git_service = GitService()
@@ -675,10 +875,12 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         queue_entries: list[tuple[str, Optional[str], Optional[str], Optional[int]]]
         replace_pending = False
+        scheduled_controls: list[QueueScheduledControl] = []
         if contains_queue_plan_markers(ctx.text):
             try:
                 submission_options, plan_text = parse_queue_plan_submission(ctx.text)
                 replace_pending = submission_options.replace_pending
+                scheduled_controls = submission_options.scheduled_controls
                 materialized_prompts = await materialize_queue_plan_text(
                     text=plan_text,
                     working_directory=session.working_directory,
@@ -711,6 +913,12 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             queue_entries=queue_entries,
             replace_pending=replace_pending,
         )
+        if scheduled_controls:
+            await deps.db.add_queue_scheduled_events(
+                channel_id=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                events=[(control.action, control.execute_at) for control in scheduled_controls],
+            )
 
         running_items = await deps.db.get_running_queue_items(ctx.channel_id, ctx.thread_ts)
         position_offset = len(running_items)
@@ -732,6 +940,9 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         confirmation_text = f"{action_verb} {item_count} item(s) to queue ({position_text})."
         if paused_notice:
             confirmation_text = f"{confirmation_text} {paused_notice}"
+        scheduled_summary = _scheduled_controls_summary(scheduled_controls)
+        if scheduled_summary:
+            confirmation_text = f"{confirmation_text} {scheduled_summary}"
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
@@ -751,6 +962,16 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     [
                         {
                             "type": "context",
+                            "elements": [{"type": "mrkdwn", "text": scheduled_summary}],
+                        }
+                    ]
+                    if scheduled_summary
+                    else []
+                ),
+                *(
+                    [
+                        {
+                            "type": "context",
                             "elements": [{"type": "mrkdwn", "text": paused_notice}],
                         }
                     ]
@@ -764,12 +985,17 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await ensure_queue_processor(
                 ctx.channel_id, ctx.thread_ts, deps, ctx.client, ctx.logger
             )
+        if scheduled_controls:
+            await ensure_queue_schedule_dispatcher(deps, ctx.client, ctx.logger)
 
     async def _post_queue_status(ctx: CommandContext, target_thread_ts: Optional[str]) -> None:
         pending = await deps.db.get_pending_queue_items(ctx.channel_id, target_thread_ts)
         running = await deps.db.get_running_queue_items(ctx.channel_id, target_thread_ts)
+        scheduled = await deps.db.get_pending_queue_scheduled_events(
+            ctx.channel_id, target_thread_ts
+        )
         queue_state = await _get_queue_state(deps, ctx.channel_id, target_thread_ts)
-        blocks = queue_status(pending, running)
+        blocks = queue_status(pending, running, scheduled)
         if queue_state != "running":
             blocks.insert(
                 2,
@@ -804,8 +1030,15 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         for thread_ts in scope_thread_ids:
             pending = await deps.db.get_pending_queue_items(ctx.channel_id, thread_ts)
             running = await deps.db.get_running_queue_items(ctx.channel_id, thread_ts)
+            scheduled = await deps.db.get_pending_queue_scheduled_events(ctx.channel_id, thread_ts)
             queue_state = await _get_queue_state(deps, ctx.channel_id, thread_ts)
-            if not pending and not running and queue_state == "running" and thread_ts is not None:
+            if (
+                not pending
+                and not running
+                and not scheduled
+                and queue_state == "running"
+                and thread_ts is not None
+            ):
                 continue
 
             preview = None
@@ -820,6 +1053,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     "state": queue_state,
                     "running_count": len(running),
                     "pending_count": len(pending),
+                    "scheduled_count": len(scheduled),
                     "preview": preview,
                 }
             )
@@ -870,6 +1104,9 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "stopped")
         await TaskManager.cancel(_queue_task_id(ctx.channel_id, ctx.thread_ts))
         deleted = await deps.db.delete_queue(ctx.channel_id, ctx.thread_ts)
+        deleted_scheduled = await deps.db.delete_pending_queue_scheduled_events(
+            ctx.channel_id, ctx.thread_ts
+        )
         await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "running")
 
         await ctx.client.chat_postMessage(
@@ -883,7 +1120,8 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                         "type": "mrkdwn",
                         "text": (
                             f":wastebasket: Deleted the entire queue for this scope "
-                            f"({deleted} item(s))."
+                            f"({deleted} item(s)). Cleared {deleted_scheduled} pending "
+                            "scheduled control event(s)."
                         ),
                     },
                 },

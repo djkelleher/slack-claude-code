@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -468,6 +469,69 @@ class TestStructuredQueuePlanRouting:
         assert mock_materialize.await_args.kwargs["text"] == "first"
 
     @pytest.mark.asyncio
+    async def test_structured_plan_message_persists_scheduled_controls(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        scheduled_time = datetime.now(timezone.utc) + timedelta(minutes=30)
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
+                add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=900)]),
+                get_running_queue_items=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+            )
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.parse_queue_plan_submission",
+                return_value=(
+                    SimpleNamespace(
+                        replace_pending=True,
+                        scheduled_controls=[
+                            SimpleNamespace(action="pause", execute_at=scheduled_time),
+                        ],
+                    ),
+                    "first",
+                ),
+            ):
+                with patch(
+                    "src.app.materialize_queue_plan_text",
+                    new=AsyncMock(
+                        return_value=[
+                            SimpleNamespace(
+                                prompt="first",
+                                working_directory_override=None,
+                                parallel_group_id=None,
+                                parallel_limit=None,
+                            )
+                        ]
+                    ),
+                ):
+                    with patch("src.app.ensure_queue_processor", new=AsyncMock()):
+                        with patch(
+                            "src.app.ensure_queue_schedule_dispatcher", new=AsyncMock()
+                        ) as mock_scheduler:
+                            handled = await _queue_structured_plan_message(
+                                client=client,
+                                deps=deps,
+                                session=session,
+                                channel_id="C123",
+                                thread_ts="123.456",
+                                prompt="***at 19:00 pause\nfirst",
+                                logger=MagicMock(),
+                            )
+
+        assert handled is True
+        deps.db.add_queue_scheduled_events.assert_awaited_once_with(
+            channel_id="C123",
+            thread_ts="123.456",
+            events=[("pause", scheduled_time)],
+        )
+        mock_scheduler.assert_awaited_once()
+        assert "Scheduled controls:" in client.chat_postMessage.await_args.kwargs["text"]
+
+    @pytest.mark.asyncio
     async def test_structured_plan_queue_restarts_when_replacing_paused_queue(self):
         session = SimpleNamespace(id=1, working_directory="/repo")
         deps = SimpleNamespace(
@@ -475,9 +539,7 @@ class TestStructuredQueuePlanRouting:
                 add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=10, position=10)]),
                 get_running_queue_items=AsyncMock(return_value=[]),
                 get_queue_control=AsyncMock(return_value=SimpleNamespace(state="paused")),
-                update_queue_control_state=AsyncMock(
-                    return_value=SimpleNamespace(state="running")
-                ),
+                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="running")),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())

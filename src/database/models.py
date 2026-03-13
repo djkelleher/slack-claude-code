@@ -356,3 +356,32 @@ class QueueControl:
     def default(cls, channel_id: str, thread_ts: Optional[str]) -> "QueueControl":
         """Return the default running state for a queue scope."""
         return cls(channel_id=channel_id, thread_ts=thread_ts, state="running")
+
+
+@dataclass
+class QueueScheduledEvent:
+    """Scheduled queue control event for a channel/thread scope."""
+
+    id: Optional[int] = None
+    channel_id: str = ""
+    thread_ts: Optional[str] = None
+    action: str = ""  # start, pause, resume, stop
+    execute_at: datetime = field(default_factory=datetime.now)
+    status: str = "pending"  # pending, executed, failed, cancelled
+    error_message: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    executed_at: Optional[datetime] = None
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "QueueScheduledEvent":
+        return cls(
+            id=row[0],
+            channel_id=row[1],
+            thread_ts=row[2],
+            action=row[3],
+            execute_at=datetime.fromisoformat(row[4]) if row[4] else datetime.now(),
+            status=row[5] or "pending",
+            error_message=row[6],
+            created_at=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
+            executed_at=datetime.fromisoformat(row[8]) if row[8] else None,
+        )

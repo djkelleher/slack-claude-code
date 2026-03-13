@@ -1,5 +1,6 @@
 """Unit tests for structured queue-plan parsing and materialization."""
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -197,6 +198,55 @@ def test_parse_queue_plan_submission_rejects_conflicting_marker_and_slash_direct
         parse_queue_plan_submission("/clear\n***queue-append\nfirst task")
 
 
+def test_parse_queue_plan_submission_parses_timer_directives_with_iso_time() -> None:
+    now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
+    options, body = parse_queue_plan_submission(
+        "***at 2026-03-13T18:30:00+00:00 pause\nfirst task",
+        now_utc=now,
+    )
+
+    assert body == "first task"
+    assert len(options.scheduled_controls) == 1
+    assert options.scheduled_controls[0].action == "pause"
+    assert options.scheduled_controls[0].execute_at == datetime(
+        2026, 3, 13, 18, 30, tzinfo=timezone.utc
+    )
+
+
+def test_parse_queue_plan_submission_parses_timer_directives_with_hhmm_time() -> None:
+    local_now = datetime.now().astimezone()
+    now_utc = local_now.astimezone(timezone.utc)
+    future_local = local_now + timedelta(minutes=5)
+    hhmm = future_local.strftime("%H:%M")
+
+    options, _ = parse_queue_plan_submission(
+        f"***at {hhmm} resume\nfirst task",
+        now_utc=now_utc,
+    )
+
+    assert len(options.scheduled_controls) == 1
+    assert options.scheduled_controls[0].action == "resume"
+    assert options.scheduled_controls[0].execute_at > now_utc
+
+
+def test_parse_queue_plan_submission_rejects_past_timer_directive() -> None:
+    now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
+    with pytest.raises(QueuePlanError, match="in the past"):
+        parse_queue_plan_submission(
+            "***at 2026-03-13T17:59:00+00:00 pause\nfirst task",
+            now_utc=now,
+        )
+
+
+def test_parse_queue_plan_submission_rejects_iso_time_without_timezone() -> None:
+    now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
+    with pytest.raises(QueuePlanError, match="must include a timezone offset"):
+        parse_queue_plan_submission(
+            "***at 2026-03-13T18:30:00 pause\nfirst task",
+            now_utc=now,
+        )
+
+
 @pytest.mark.asyncio
 async def test_materialize_queue_plan_without_branch_does_not_touch_git() -> None:
     git_service = SimpleNamespace(
@@ -296,9 +346,7 @@ async def test_materialize_queue_plan_rejects_branch_sections_outside_git_repo()
 
 @pytest.mark.asyncio
 async def test_materialize_queue_plan_prompts_applies_branch_path_mapping() -> None:
-    prompts = parse_queue_plan_text(
-        "***branch-feature/a\nfirst\n***branch-feature/a-end\nsecond"
-    )
+    prompts = parse_queue_plan_text("***branch-feature/a\nfirst\n***branch-feature/a-end\nsecond")
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
         list_worktrees=AsyncMock(return_value=[]),

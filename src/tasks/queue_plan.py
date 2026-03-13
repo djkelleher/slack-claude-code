@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,10 @@ _PARALLEL_END_RE = re.compile(r"^\*\*\*parallel-end$")
 _QUEUE_SUBMISSION_DIRECTIVE_RE = re.compile(
     r"^(?:\*\*\*queue-(append|new|replace)|/(append|new|replace|clear))$"
 )
+_QUEUE_TIMER_DIRECTIVE_RE = re.compile(
+    r"^\*\*\*at\s+(.+?)\s+(start|pause|resume|stop)$", re.IGNORECASE
+)
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
 class QueuePlanError(ValueError):
@@ -50,6 +55,15 @@ class QueuePlanSubmissionOptions:
     """Submission-time queue behavior for a structured queue plan."""
 
     replace_pending: bool = True
+    scheduled_controls: list["QueueScheduledControl"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class QueueScheduledControl:
+    """A scheduled queue control action parsed from the queue DSL."""
+
+    action: str
+    execute_at: datetime
 
 
 @dataclass
@@ -130,17 +144,25 @@ def parse_queue_plan_text(
     return expanded
 
 
-def parse_queue_plan_submission(text: str) -> tuple[QueuePlanSubmissionOptions, str]:
+def parse_queue_plan_submission(
+    text: str, now_utc: Optional[datetime] = None
+) -> tuple[QueuePlanSubmissionOptions, str]:
     """Extract top-level queue submission directives from queue-plan text.
 
     Supported directives must appear before the first non-empty, non-directive line:
     - ``***queue-new`` or ``***queue-replace``: replace pending items in scope
     - ``***queue-append``: append to the current pending queue
+    - ``***at <time> <action>``: schedule queue scope control events
     - ``/new``, ``/replace``, or ``/clear``: replace pending items in scope
     - ``/append``: append to the current pending queue
     """
+    current_now_utc = now_utc or datetime.now(timezone.utc)
+    if current_now_utc.tzinfo is None or current_now_utc.tzinfo.utcoffset(current_now_utc) is None:
+        raise QueuePlanError("now_utc must be timezone-aware")
+    current_now_utc = current_now_utc.astimezone(timezone.utc)
     replace_pending = True
     seen_directive: str | None = None
+    scheduled_controls: list[QueueScheduledControl] = []
     body_start_index = 0
     lines = text.splitlines()
 
@@ -167,10 +189,70 @@ def parse_queue_plan_submission(text: str) -> tuple[QueuePlanSubmissionOptions, 
             body_start_index = index + 1
             continue
 
+        timer_match = _QUEUE_TIMER_DIRECTIVE_RE.match(stripped)
+        if timer_match:
+            scheduled_controls.append(
+                _parse_queue_timer_directive(
+                    time_text=timer_match.group(1),
+                    action=timer_match.group(2).lower(),
+                    now_utc=current_now_utc,
+                )
+            )
+            body_start_index = index + 1
+            continue
+
         break
 
     remaining_text = "\n".join(lines[body_start_index:])
-    return QueuePlanSubmissionOptions(replace_pending=replace_pending), remaining_text
+    return (
+        QueuePlanSubmissionOptions(
+            replace_pending=replace_pending,
+            scheduled_controls=scheduled_controls,
+        ),
+        remaining_text,
+    )
+
+
+def _parse_queue_timer_directive(
+    time_text: str, action: str, now_utc: datetime
+) -> QueueScheduledControl:
+    """Parse and validate one queue timer directive."""
+    execute_at_utc = _parse_queue_timer_time(time_text, now_utc)
+    if execute_at_utc <= now_utc:
+        raise QueuePlanError(
+            f"Scheduled queue control time `{time_text}` is in the past. " "Use a future timestamp."
+        )
+    return QueueScheduledControl(action=action, execute_at=execute_at_utc)
+
+
+def _parse_queue_timer_time(time_text: str, now_utc: datetime) -> datetime:
+    """Parse timer text as ISO8601 with timezone or HH:MM server-local time."""
+    raw = time_text.strip()
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        parsed = None
+
+    if parsed is not None:
+        if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+            raise QueuePlanError(
+                f"Invalid queue timer `{time_text}`. ISO datetimes must include a timezone "
+                "offset (example: `2026-03-13T18:30:00-04:00`)."
+            )
+        return parsed.astimezone(timezone.utc)
+
+    hhmm_match = _HHMM_RE.match(raw)
+    if hhmm_match:
+        hours = int(hhmm_match.group(1))
+        minutes = int(hhmm_match.group(2))
+        local_now = now_utc.astimezone()
+        local_dt = local_now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
+        return local_dt.astimezone(timezone.utc)
+
+    raise QueuePlanError(
+        f"Invalid queue timer `{time_text}`. Use ISO datetime with timezone "
+        "(for example: `2026-03-13T18:30:00-04:00`) or `HH:MM`."
+    )
 
 
 async def materialize_queue_plan_text(
@@ -339,9 +421,7 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 raise QueuePlanError(
                     f"Line {line_number}: nested parallel blocks are not supported."
                 )
-            stack.append(
-                _Frame(kind="parallel", start_line=line_number, parallel_limit=marker[1])
-            )
+            stack.append(_Frame(kind="parallel", start_line=line_number, parallel_limit=marker[1]))
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
@@ -561,9 +641,7 @@ def _parse_branch_marker_value(branch_text: str, marker_type: str) -> tuple[str,
     return marker_type, branch_name
 
 
-def _parse_parallel_marker_value(
-    limit_text: Optional[str], line: str
-) -> tuple[str, Optional[int]]:
+def _parse_parallel_marker_value(limit_text: Optional[str], line: str) -> tuple[str, Optional[int]]:
     """Parse and validate parallel marker payload."""
     if limit_text is None:
         return "parallel_start", None

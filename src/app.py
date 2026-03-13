@@ -14,6 +14,7 @@ import signal
 import sys
 import time
 import traceback
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,11 +31,12 @@ from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
-from src.handlers.claude.queue import ensure_queue_processor
+from src.handlers.claude.queue import ensure_queue_processor, ensure_queue_schedule_dispatcher
 from src.handlers.execution_runtime import execute_prompt_with_runtime
 from src.question.manager import QuestionManager
 from src.tasks.queue_plan import (
     QueuePlanError,
+    QueueScheduledControl,
     contains_queue_plan_markers,
     materialize_queue_plan_text,
     parse_queue_plan_submission,
@@ -309,6 +311,27 @@ def _queue_state_notice(state: str) -> str:
     return ""
 
 
+def _format_scheduled_event_timestamp(event_time) -> str:
+    """Format scheduled event timestamps in UTC for operator visibility."""
+    if event_time.tzinfo is None or event_time.tzinfo.utcoffset(event_time) is None:
+        event_time = event_time.replace(tzinfo=timezone.utc)
+    return event_time.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _scheduled_controls_summary(controls: list[QueueScheduledControl]) -> str:
+    """Build a short queue scheduled controls summary for confirmations."""
+    if not controls:
+        return ""
+    parts = [
+        f"{control.action} at {_format_scheduled_event_timestamp(control.execute_at)}"
+        for control in controls[:3]
+    ]
+    summary = ", ".join(parts)
+    if len(controls) > 3:
+        summary = f"{summary}, and {len(controls) - 3} more"
+    return f"Scheduled controls: {summary}."
+
+
 async def _queue_state_for_submission(
     deps,
     channel_id: str,
@@ -498,8 +521,10 @@ async def _queue_structured_plan_message(
     if not contains_queue_plan_markers(prompt):
         return False
 
+    scheduled_controls: list[QueueScheduledControl] = []
     try:
         submission_options, plan_text = parse_queue_plan_submission(prompt)
+        scheduled_controls = submission_options.scheduled_controls
         materialized_prompts = await materialize_queue_plan_text(
             text=plan_text,
             working_directory=session.working_directory,
@@ -539,6 +564,12 @@ async def _queue_structured_plan_message(
             queue_entries=queue_entries,
             replace_pending=submission_options.replace_pending,
         )
+        if scheduled_controls:
+            await deps.db.add_queue_scheduled_events(
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                events=[(control.action, control.execute_at) for control in scheduled_controls],
+            )
 
         running = await deps.db.get_running_queue_items(channel_id, thread_ts)
         queue_state = await _queue_state_for_submission(
@@ -555,6 +586,12 @@ async def _queue_structured_plan_message(
             await ensure_queue_processor(
                 channel_id=channel_id,
                 thread_ts=thread_ts,
+                deps=deps,
+                client=client,
+                task_logger=logger,
+            )
+        if scheduled_controls:
+            await ensure_queue_schedule_dispatcher(
                 deps=deps,
                 client=client,
                 task_logger=logger,
@@ -576,10 +613,13 @@ async def _queue_structured_plan_message(
     )
     item_count = len(queued_items)
     paused_notice = _queue_state_notice(queue_state)
+    scheduled_summary = _scheduled_controls_summary(scheduled_controls)
     action_verb = "Queued" if submission_options.replace_pending else "Added"
     confirmation_text = f"{action_verb} {item_count} item(s) from structured plan."
     if paused_notice:
         confirmation_text = f"{confirmation_text} {paused_notice}"
+    if scheduled_summary:
+        confirmation_text = f"{confirmation_text} {scheduled_summary}"
 
     await client.chat_postMessage(
         channel=channel_id,
@@ -597,6 +637,16 @@ async def _queue_structured_plan_message(
                     ),
                 },
             },
+            *(
+                [
+                    {
+                        "type": "context",
+                        "elements": [{"type": "mrkdwn", "text": scheduled_summary}],
+                    }
+                ]
+                if scheduled_summary
+                else []
+            ),
             *(
                 [
                     {
@@ -993,6 +1043,7 @@ async def main():
     await handler.connect_async()
     logger.info("Connected to Slack")
     await _restore_pending_queue_processors(client=app.client, deps=deps, logger=logger)
+    await ensure_queue_schedule_dispatcher(deps=deps, client=app.client, task_logger=logger)
 
     # Wait for shutdown signal
     await shutdown_event.wait()

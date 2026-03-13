@@ -13,6 +13,7 @@ from .models import (
     ParallelJob,
     QueueControl,
     QueueItem,
+    QueueScheduledEvent,
     Session,
     UploadedFile,
 )
@@ -32,6 +33,8 @@ class DatabaseRepository:
                        working_directory_override, parallel_group_id, parallel_limit,
                        status, output, error_message, position, message_ts,
                        created_at, started_at, completed_at"""
+    _QUEUE_SCHEDULED_EVENT_SELECT = """id, channel_id, thread_ts, action, execute_at,
+                                   status, error_message, created_at, executed_at"""
 
     def __init__(self, db_path: str, timeout: float = DB_TIMEOUT):
         self.db_path = db_path
@@ -1042,10 +1045,14 @@ class DatabaseRepository:
                     SELECT thread_ts
                     FROM queue_controls
                     WHERE channel_id = ? AND state != 'running'
+                    UNION
+                    SELECT thread_ts
+                    FROM queue_scheduled_events
+                    WHERE channel_id = ? AND status = 'pending'
                 )
                 ORDER BY CASE WHEN thread_ts IS NULL THEN 0 ELSE 1 END, thread_ts ASC
                 """,
-                (channel_id, channel_id),
+                (channel_id, channel_id, channel_id),
             )
             rows = await cursor.fetchall()
             return [self._normalize_thread_ts(row[0]) for row in rows]
@@ -1102,6 +1109,129 @@ class DatabaseRepository:
                 )
 
         return await self.get_queue_control(channel_id, normalized_thread_ts)
+
+    async def add_queue_scheduled_events(
+        self,
+        channel_id: str,
+        thread_ts: Optional[str],
+        events: list[tuple[str, datetime]],
+    ) -> list[QueueScheduledEvent]:
+        """Create queue scheduled control events for a scope."""
+        if not events:
+            return []
+
+        normalized_thread_ts = self._normalize_thread_ts(thread_ts)
+        async with self._transact() as db:
+            created_ids: list[int] = []
+            for action, execute_at in events:
+                if execute_at.tzinfo is None or execute_at.tzinfo.utcoffset(execute_at) is None:
+                    raise ValueError("execute_at must be timezone-aware")
+                cursor = await db.execute(
+                    """INSERT INTO queue_scheduled_events
+                       (channel_id, thread_ts, action, execute_at, status)
+                       VALUES (?, ?, ?, ?, 'pending')""",
+                    (
+                        channel_id,
+                        normalized_thread_ts,
+                        action,
+                        execute_at.astimezone(timezone.utc).isoformat(),
+                    ),
+                )
+                event_id = cursor.lastrowid
+                if event_id is None:
+                    raise RuntimeError("Failed to create queue scheduled event")
+                created_ids.append(event_id)
+
+            placeholders = ", ".join("?" for _ in created_ids)
+            cursor = await db.execute(
+                f"""SELECT {self._QUEUE_SCHEDULED_EVENT_SELECT}
+                    FROM queue_scheduled_events
+                    WHERE id IN ({placeholders})
+                    ORDER BY execute_at ASC, id ASC""",
+                tuple(created_ids),
+            )
+            rows = await cursor.fetchall()
+            if len(rows) != len(created_ids):
+                raise RuntimeError("Failed to load all queue scheduled events after insert")
+            return [QueueScheduledEvent.from_row(row) for row in rows]
+
+    async def get_pending_queue_scheduled_events(
+        self, channel_id: str, thread_ts: Optional[str]
+    ) -> list[QueueScheduledEvent]:
+        """Get pending queue scheduled control events for a scope."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._QUEUE_SCHEDULED_EVENT_SELECT}
+                    FROM queue_scheduled_events
+                    WHERE """
+                + self._QUEUE_SCOPE_WHERE
+                + " AND status = 'pending'"
+                + " ORDER BY execute_at ASC, id ASC",
+                self._queue_scope_params(channel_id, thread_ts),
+            )
+            rows = await cursor.fetchall()
+            return [QueueScheduledEvent.from_row(row) for row in rows]
+
+    async def get_due_queue_scheduled_events(
+        self,
+        now_utc: datetime,
+        limit: int = 50,
+    ) -> list[QueueScheduledEvent]:
+        """Get pending queue scheduled events due for execution."""
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        if now_utc.tzinfo is None or now_utc.tzinfo.utcoffset(now_utc) is None:
+            raise ValueError("now_utc must be timezone-aware")
+
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._QUEUE_SCHEDULED_EVENT_SELECT}
+                    FROM queue_scheduled_events
+                    WHERE status = 'pending' AND execute_at <= ?
+                    ORDER BY execute_at ASC, id ASC
+                    LIMIT ?""",
+                (now_utc.astimezone(timezone.utc).isoformat(), limit),
+            )
+            rows = await cursor.fetchall()
+            return [QueueScheduledEvent.from_row(row) for row in rows]
+
+    async def mark_queue_scheduled_event_executed(self, event_id: int) -> bool:
+        """Mark a queue scheduled event as executed."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """UPDATE queue_scheduled_events
+                   SET status = 'executed', error_message = NULL, executed_at = ?
+                   WHERE id = ? AND status = 'pending'""",
+                (datetime.now(timezone.utc).isoformat(), event_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def mark_queue_scheduled_event_failed(self, event_id: int, error_message: str) -> bool:
+        """Mark a queue scheduled event as failed."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """UPDATE queue_scheduled_events
+                   SET status = 'failed', error_message = ?, executed_at = ?
+                   WHERE id = ? AND status = 'pending'""",
+                (error_message, datetime.now(timezone.utc).isoformat(), event_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def delete_pending_queue_scheduled_events(
+        self, channel_id: str, thread_ts: Optional[str]
+    ) -> int:
+        """Delete pending queue scheduled events for a scope."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "DELETE FROM queue_scheduled_events WHERE "
+                + self._QUEUE_SCOPE_WHERE
+                + " AND status = 'pending'",
+                self._queue_scope_params(channel_id, thread_ts),
+            )
+            await db.commit()
+            return cursor.rowcount
 
     # Uploaded file operations
     async def add_uploaded_file(

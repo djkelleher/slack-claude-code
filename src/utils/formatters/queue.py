@@ -1,5 +1,6 @@
 """Queue status formatting."""
 
+from datetime import timezone
 from typing import Any
 
 from .base import escape_markdown
@@ -31,9 +32,19 @@ def _pending_item_text(item: Any) -> str:
     )
 
 
-def queue_status(pending: list, running: Any) -> list[dict]:
+def _scheduled_event_text(event: Any) -> str:
+    """Render one pending scheduled queue event."""
+    execute_at = event.execute_at
+    if execute_at.tzinfo is None or execute_at.tzinfo.utcoffset(execute_at) is None:
+        execute_at = execute_at.replace(tzinfo=timezone.utc)
+    execute_at_utc = execute_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return f":alarm_clock: *{event.action}* at `{execute_at_utc}`"
+
+
+def queue_status(pending: list, running: Any, scheduled_events: list | None = None) -> list[dict]:
     """Format queue status for /qv command."""
     running_items = running if isinstance(running, list) else ([running] if running else [])
+    scheduled = scheduled_events or []
     blocks = [
         {
             "type": "header",
@@ -59,6 +70,25 @@ def queue_status(pending: list, running: Any) -> list[dict]:
                 "text": {"type": "mrkdwn", "text": "\n\n".join(running_lines)},
             }
         )
+        blocks.append({"type": "divider"})
+
+    if scheduled:
+        lines = [_scheduled_event_text(event) for event in scheduled[:5]]
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Scheduled Controls:*\n" + "\n".join(lines)},
+            }
+        )
+        if len(scheduled) > 5:
+            blocks.append(
+                {
+                    "type": "context",
+                    "elements": [
+                        {"type": "mrkdwn", "text": f"_... and {len(scheduled) - 5} more_"}
+                    ],
+                }
+            )
         blocks.append({"type": "divider"})
 
     if not pending:
@@ -162,6 +192,9 @@ def queue_scope_overview(scopes: list[dict[str, Any]]) -> list[dict]:
             f"*Running:* {scope['running_count']}",
             f"*Pending:* {scope['pending_count']}",
         ]
+        scheduled_count = int(scope.get("scheduled_count", 0))
+        if scheduled_count:
+            summary_parts.append(f"*Scheduled:* {scheduled_count}")
         text = f"*{escape_markdown(scope['label'])}*\n" + " | ".join(summary_parts)
         preview = scope.get("preview")
         if preview:

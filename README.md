@@ -177,7 +177,7 @@ Queue control behavior:
 - `/qc stop` cancels the active queue processor immediately and marks the queue as stopped.
 - `/qc resume` flips the scope back to running and restarts processing if pending items remain.
 - `/qclear` and `/qc clear` remove only pending items.
-- `/qdelete` and `/qc delete` remove the entire queue scope, including running/completed/cancelled records, then reset the scope to `running`.
+- `/qdelete` and `/qc delete` remove the entire queue scope, including running/completed/cancelled records, clear pending scheduled controls, then reset the scope to `running`.
 - Adding new items with `/q` does not auto-start processing while a scope is paused or stopped; resume it explicitly with `/qc resume`.
 - `/qv` and `/qc view` show queue state and include a notice when the scope is paused or stopped.
 - Set `QUEUE_AUTO_ANSWER_QUESTIONS=true` to auto-answer assistant questions during queue execution by choosing `(Recommended)` options (fallback: first option).
@@ -194,6 +194,7 @@ Queue control behavior:
 | `***loop-<n>` ... `***loop-<n>-end` | Repeat enclosed prompts `n` times (`n >= 1`, `-end` optional at EOF) |
 | `***parallel` ... `***parallel-end` | Run all enclosed prompts concurrently as one barriered queue group |
 | `***parallel-<n>` ... `***parallel-end` | Keep up to `<n>` enclosed prompts running concurrently until the block is drained |
+| `***at <time> <action>` | Schedule queue control action (`start`, `pause`, `resume`, `stop`) for this queue scope |
 
 Rules:
 - Markers normally appear on their own line.
@@ -203,6 +204,11 @@ Rules:
 - If a block reaches end-of-input, its `*-end` marker can be omitted.
 - For branches, repeating a matching marker also closes it (for example: open with `***branch-f1`, close later with `***branch-f1`).
 - Use `*-end` markers when you need to close a block before the end of the plan.
+- Timer directives are top-level queue submission directives (before first non-directive content line).
+- Timer `<time>` supports ISO datetime with timezone (for example `2026-03-13T18:30:00-04:00`) or server-local `HH:MM` for today.
+- Timer directives must be in the future when submitted.
+- Scheduled controls append to any existing pending scheduled controls in the same scope.
+- `start` uses the same runtime behavior as `resume`.
 - Branch blocks require your current session directory to be a git repo.
 - Missing branch worktrees are auto-created for that branch when needed.
 - Parallel blocks are barriers: later queue items do not start until the parallel block fully finishes.
