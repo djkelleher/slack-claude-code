@@ -28,7 +28,7 @@
 
 ### Prerequisites
 - Python 3.10+
-- [Claude Code](https://github.com/anthropics/claude-code) installed/authenticated (used via SDK client)
+- [Claude Code CLI](https://github.com/anthropics/claude-code) installed and authenticated
 
 ### 1. Install the `ccslack` executable
 ```bash
@@ -372,7 +372,7 @@ src/
 ├── app.py                 # Main entry point
 ├── config.py              # Configuration
 ├── database/              # SQLite persistence (models, migrations, repository)
-├── claude/                # Claude SDK integration (streaming + control protocol)
+├── claude/                # Claude CLI integration (streaming)
 ├── handlers/              # Slack command handlers
 ├── agents/                # Configurable subagent system (explore, plan, bash, general)
 ├── approval/              # Permission & plan approval handling

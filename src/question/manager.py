@@ -1,6 +1,7 @@
 """Question manager for handling Claude's AskUserQuestion tool.
 
-When Claude asks for input mid-turn, we bridge that interaction through Slack:
+Since we run Claude in non-interactive mode, AskUserQuestion can't get direct
+input. Instead, we:
 1. Detect when Claude uses AskUserQuestion
 2. Display the question(s) in Slack with interactive buttons/options
 3. Store pending questions with async futures
@@ -158,9 +159,7 @@ class QuestionManager:
         )
 
         await cls._pending.add(question_id, pending)
-        logger.info(
-            f"Created pending question {question_id} with {len(questions)} question(s)"
-        )
+        logger.info(f"Created pending question {question_id} with {len(questions)} question(s)")
 
         return pending
 
@@ -194,9 +193,7 @@ class QuestionManager:
         pending.message_ts = result.get("ts")
 
         # Post channel notification if configured
-        await cls._post_notification(
-            slack_client, pending.channel_id, pending.thread_ts, db
-        )
+        await cls._post_notification(slack_client, pending.channel_id, pending.thread_ts, db)
 
     @classmethod
     async def _post_notification(
@@ -217,7 +214,9 @@ class QuestionManager:
 
             # Build thread link
             if thread_ts:
-                thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
+                thread_link = (
+                    f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
+                )
                 message = f":question: Assistant has a question • <{thread_link}|Answer in thread>"
             else:
                 message = ":question: Assistant has a question"
@@ -254,9 +253,7 @@ class QuestionManager:
             logger.warning(f"Question {question_id} not found")
             return False
         pending.answers[question_index] = selected_labels
-        logger.debug(
-            f"Set answer for question {question_id}[{question_index}]: {selected_labels}"
-        )
+        logger.debug(f"Set answer for question {question_id}[{question_index}]: {selected_labels}")
         return True
 
     @classmethod
@@ -357,9 +354,7 @@ class QuestionManager:
         return bool(_RECOMMENDED_OPTION_SUFFIX.search(label.strip()))
 
     @classmethod
-    def select_recommended_answers(
-        cls, questions: list[Question]
-    ) -> dict[int, list[str]]:
+    def select_recommended_answers(cls, questions: list[Question]) -> dict[int, list[str]]:
         """Select deterministic auto-answers, preferring recommended options."""
         answers: dict[int, list[str]] = {}
         for i, question in enumerate(questions):
@@ -430,16 +425,12 @@ class QuestionManager:
         Returns:
             Formatted text response to send as a follow-up message
         """
-        return cls.format_answers_for_claude_questions(
-            pending.questions, pending.answers
-        )
+        return cls.format_answers_for_claude_questions(pending.questions, pending.answers)
 
     @classmethod
     def format_answer_for_codex_request(cls, pending: PendingQuestion) -> dict:
         """Format answers for Codex app-server `item/tool/requestUserInput` response."""
-        return cls.format_answers_for_codex_questions(
-            pending.questions, pending.answers
-        )
+        return cls.format_answers_for_codex_questions(pending.questions, pending.answers)
 
     @classmethod
     async def count_pending(cls) -> int:
@@ -468,9 +459,7 @@ class QuestionManager:
             age = now - pending.created_at
             if age.total_seconds() > max_age_seconds:
                 expired.append(qid)
-                logger.info(
-                    f"Cleaning up expired question {qid} (age: {age.total_seconds():.0f}s)"
-                )
+                logger.info(f"Cleaning up expired question {qid} (age: {age.total_seconds():.0f}s)")
 
         for qid in expired:
             await cls._pending.cancel(qid)

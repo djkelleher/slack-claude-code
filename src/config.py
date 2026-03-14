@@ -134,9 +134,7 @@ class SlackTimeouts(BaseModel):
     heartbeat_interval: float = 15.0
     heartbeat_threshold: float = 20.0
 
-    @field_validator(
-        "message_update_throttle", "heartbeat_interval", "heartbeat_threshold"
-    )
+    @field_validator("message_update_throttle", "heartbeat_interval", "heartbeat_threshold")
     @classmethod
     def validate_positive_float(cls, v: float, info) -> float:
         """Ensure timeout values are positive."""
@@ -238,9 +236,7 @@ class Config(BaseSettings):
         """Customize settings sources to add encrypted storage with highest priority."""
         return (
             init_settings,
-            EncryptedSettingsSource(
-                settings_cls
-            ),  # Encrypted storage (highest priority)
+            EncryptedSettingsSource(settings_cls),  # Encrypted storage (highest priority)
             env_settings,  # Environment variables
             dotenv_settings,  # .env file
             file_secret_settings,
@@ -253,22 +249,13 @@ class Config(BaseSettings):
 
     # Database - defaults to ~/.slack-claude-code/
     DATABASE_PATH: str = Field(
-        default_factory=lambda: str(
-            Path.home() / ".slack-claude-code" / "slack_claude.db"
-        )
+        default_factory=lambda: str(Path.home() / ".slack-claude-code" / "slack_claude.db")
     )
     DEFAULT_WORKING_DIR: str = Field(default_factory=lambda: str(Path.cwd()))
 
     # Claude Code configuration
     CLAUDE_PERMISSION_MODE: str = "bypassPermissions"
     DEFAULT_MODEL: Optional[str] = None
-    CLAUDE_INCLUDE_PARTIAL_MESSAGES: bool = True
-    CLAUDE_PARTIAL_UPDATE_MIN_CHARS: int = 24
-    CLAUDE_PARTIAL_UPDATE_MIN_INTERVAL_MS: int = 700
-    CLAUDE_TOOL_POLICY_MODE: str = "approve_risky"
-    CLAUDE_TOOL_POLICY_DENYLIST_STR: str = Field(
-        default="", alias="CLAUDE_TOOL_POLICY_DENYLIST"
-    )
 
     # Default permission mode constant (used as fallback when invalid mode specified)
     DEFAULT_BYPASS_MODE: str = "bypassPermissions"
@@ -303,9 +290,7 @@ class Config(BaseSettings):
     CODEX_SANDBOX_MODE: str = "workspace-write"
     CODEX_APPROVAL_MODE: str = "on-request"
     CODEX_PREPEND_DEFAULT_INSTRUCTIONS: bool = True
-    CODEX_DEFAULT_INSTRUCTIONS_FILE: str = str(
-        Path.home() / ".codex" / "default_instructions.txt"
-    )
+    CODEX_DEFAULT_INSTRUCTIONS_FILE: str = str(Path.home() / ".codex" / "default_instructions.txt")
 
     # Queue behavior
     QUEUE_AUTO_ANSWER_QUESTIONS: bool = False
@@ -354,17 +339,6 @@ class Config(BaseSettings):
         if not self.AUTO_APPROVE_TOOLS_STR:
             return []
         return [t.strip() for t in self.AUTO_APPROVE_TOOLS_STR.split(",") if t.strip()]
-
-    @property
-    def CLAUDE_TOOL_POLICY_DENYLIST(self) -> list[str]:
-        """Parse CLAUDE_TOOL_POLICY_DENYLIST from comma-separated string."""
-        if not self.CLAUDE_TOOL_POLICY_DENYLIST_STR:
-            return []
-        return [
-            tool.strip().lower()
-            for tool in self.CLAUDE_TOOL_POLICY_DENYLIST_STR.split(",")
-            if tool.strip()
-        ]
 
     @functools.cached_property
     def timeouts(self) -> TimeoutConfig:

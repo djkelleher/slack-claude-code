@@ -295,10 +295,7 @@ class StreamingMessageState:
                     self.tool_activities[tool.id] = tool
 
         # Limit accumulated output to prevent memory exhaustion
-        if (
-            len(self.accumulated_output)
-            < config.timeouts.streaming.max_accumulated_size
-        ):
+        if len(self.accumulated_output) < config.timeouts.streaming.max_accumulated_size:
             if self.smart_concat and content and self.accumulated_output:
                 # Ensure proper spacing between chunks
                 last_char = self.accumulated_output[-1]
@@ -315,10 +312,7 @@ class StreamingMessageState:
             self.accumulated_output += content
 
         # Rate limit updates to avoid Slack API limits
-        if (
-            current_time - self.last_update_time
-            > config.timeouts.slack.message_update_throttle
-        ):
+        if current_time - self.last_update_time > config.timeouts.slack.message_update_throttle:
             self.last_update_time = current_time
             await self._send_update()
 
@@ -437,57 +431,10 @@ def create_streaming_callback(state: StreamingMessageState) -> Callable:
         Async callback function for on_chunk parameter.
     """
 
-    partial_buffer = ""
-    partial_last_flush = time.monotonic()
-    partial_min_chars = max(1, config.CLAUDE_PARTIAL_UPDATE_MIN_CHARS)
-    partial_min_interval = max(
-        0.0, config.CLAUDE_PARTIAL_UPDATE_MIN_INTERVAL_MS / 1000.0
-    )
-
-    async def _flush_partial(tools=None) -> None:
-        nonlocal partial_buffer, partial_last_flush
-        if not partial_buffer and not tools:
-            return
-        content = partial_buffer
-        partial_buffer = ""
-        partial_last_flush = time.monotonic()
-        await state.append_and_update(content, tools)
-
     async def on_chunk(msg) -> None:
-        nonlocal partial_buffer
-        msg_type = getattr(msg, "type", "")
-        tools = getattr(msg, "tool_activities", None) if state.track_tools else None
-        if msg_type == "assistant":
-            content = getattr(msg, "content", "") or ""
-            raw = getattr(msg, "raw", None)
-            is_partial = isinstance(raw, dict) and bool(raw.get("partial"))
-            if not is_partial:
-                if partial_buffer:
-                    await _flush_partial()
-                if content or tools:
-                    await state.append_and_update(content, tools)
-                return
-
-            partial_buffer += content
-            should_flush = False
-            if len(partial_buffer) >= partial_min_chars:
-                should_flush = True
-            if not should_flush and partial_min_interval <= 0:
-                should_flush = True
-            if (
-                not should_flush
-                and (time.monotonic() - partial_last_flush) >= partial_min_interval
-            ):
-                should_flush = True
-
-            if should_flush:
-                await _flush_partial(tools)
-            return
-
-        if msg_type in {"result", "error"} and partial_buffer:
-            await _flush_partial()
-
-        if tools:
-            await state.append_and_update("", tools)
+        content = msg.content if msg.type == "assistant" else ""
+        tools = msg.tool_activities if state.track_tools else None
+        if content or tools:
+            await state.append_and_update(content or "", tools)
 
     return on_chunk

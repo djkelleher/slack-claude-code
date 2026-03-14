@@ -1,11 +1,11 @@
 """Unit tests for streaming message utilities."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.claude.streaming import ToolActivity, _concat_with_spacing
-from src.config import PLANS_DIR, config
+from src.config import PLANS_DIR
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 
@@ -56,9 +56,7 @@ class TestToolInputSummary:
             "Task",
             {"description": "Summarize repository state", "prompt": "ignored"},
         )
-        summary_with_prompt = ToolActivity.create_input_summary(
-            "Task", {"prompt": "Do X"}
-        )
+        summary_with_prompt = ToolActivity.create_input_summary("Task", {"prompt": "Do X"})
         assert "Summarize repository state" in summary_with_description
         assert "Do X" in summary_with_prompt
 
@@ -171,9 +169,7 @@ class TestStreamingMessageState:
             db_session_id=42,
         )
 
-        assert (
-            state.get_execution_plan_filename("abc123") == "plan-session-42-abc123.md"
-        )
+        assert state.get_execution_plan_filename("abc123") == "plan-session-42-abc123.md"
 
     def test_get_execution_plan_filename_without_execution_id(self):
         """get_execution_plan_filename without execution ID."""
@@ -420,69 +416,3 @@ class TestCreateStreamingCallback:
         await callback(msg)
 
         assert state.accumulated_output == ""
-
-    @pytest.mark.asyncio
-    async def test_callback_buffers_partial_chunks_until_result_flush(self):
-        """Partial assistant chunks buffer until a final flush trigger arrives."""
-        client = AsyncMock()
-        state = StreamingMessageState(
-            channel_id="C123",
-            message_ts="123.456",
-            prompt="test",
-            client=client,
-            logger=MagicMock(),
-        )
-
-        with patch.object(config, "CLAUDE_PARTIAL_UPDATE_MIN_CHARS", 200):
-            with patch.object(config, "CLAUDE_PARTIAL_UPDATE_MIN_INTERVAL_MS", 60_000):
-                callback = create_streaming_callback(state)
-
-                partial_1 = MagicMock()
-                partial_1.type = "assistant"
-                partial_1.content = "Hello "
-                partial_1.tool_activities = []
-                partial_1.raw = {"partial": True}
-
-                partial_2 = MagicMock()
-                partial_2.type = "assistant"
-                partial_2.content = "world"
-                partial_2.tool_activities = []
-                partial_2.raw = {"partial": True}
-
-                done = MagicMock()
-                done.type = "result"
-                done.content = ""
-                done.tool_activities = []
-                done.raw = {}
-
-                await callback(partial_1)
-                await callback(partial_2)
-                assert state.accumulated_output == ""
-
-                await callback(done)
-                assert state.accumulated_output == "Hello world"
-
-    @pytest.mark.asyncio
-    async def test_callback_flushes_partial_chunks_when_threshold_reached(self):
-        """Partial chunks flush once configured minimum character threshold is met."""
-        client = AsyncMock()
-        state = StreamingMessageState(
-            channel_id="C123",
-            message_ts="123.456",
-            prompt="test",
-            client=client,
-            logger=MagicMock(),
-        )
-
-        with patch.object(config, "CLAUDE_PARTIAL_UPDATE_MIN_CHARS", 5):
-            with patch.object(config, "CLAUDE_PARTIAL_UPDATE_MIN_INTERVAL_MS", 60_000):
-                callback = create_streaming_callback(state)
-
-                partial = MagicMock()
-                partial.type = "assistant"
-                partial.content = "Hello"
-                partial.tool_activities = []
-                partial.raw = {"partial": True}
-
-                await callback(partial)
-                assert state.accumulated_output == "Hello"
