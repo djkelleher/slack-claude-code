@@ -55,6 +55,7 @@ class QueuePlanSubmissionOptions:
     """Submission-time queue behavior for a structured queue plan."""
 
     replace_pending: bool = True
+    directive_explicit: bool = False
     scheduled_controls: list["QueueScheduledControl"] = field(default_factory=list)
 
 
@@ -207,6 +208,7 @@ def parse_queue_plan_submission(
     return (
         QueuePlanSubmissionOptions(
             replace_pending=replace_pending,
+            directive_explicit=seen_directive is not None,
             scheduled_controls=scheduled_controls,
         ),
         remaining_text,

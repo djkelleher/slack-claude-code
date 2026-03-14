@@ -875,11 +875,15 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         queue_entries: list[tuple[str, Optional[str], Optional[str], Optional[int]]]
         replace_pending = False
+        is_structured_submission = False
+        has_explicit_submission_directive = False
         scheduled_controls: list[QueueScheduledControl] = []
         if contains_queue_plan_markers(ctx.text):
+            is_structured_submission = True
             try:
                 submission_options, plan_text = parse_queue_plan_submission(ctx.text)
                 replace_pending = submission_options.replace_pending
+                has_explicit_submission_directive = submission_options.directive_explicit
                 scheduled_controls = submission_options.scheduled_controls
                 materialized_prompts = await materialize_queue_plan_text(
                     text=plan_text,
@@ -905,6 +909,18 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             ]
         else:
             queue_entries = [(ctx.text, None, None, None)]
+
+        running_items_at_submission = await deps.db.get_running_queue_items(
+            ctx.channel_id, ctx.thread_ts
+        )
+        if (
+            is_structured_submission
+            and not has_explicit_submission_directive
+            and running_items_at_submission
+        ):
+            # Keep default structured submissions non-destructive when a queue item
+            # is actively running, unless the DSL explicitly requested replacement.
+            replace_pending = False
 
         queued_items = await deps.db.add_many_to_queue(
             session_id=session.id,
