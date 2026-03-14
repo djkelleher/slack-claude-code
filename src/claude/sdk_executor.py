@@ -11,15 +11,18 @@ from claude_code_sdk import (
     AssistantMessage,
     ClaudeCodeOptions,
     ClaudeSDKClient,
+    PermissionResultAllow,
+    PermissionResultDeny,
     ResultMessage,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
+    ToolPermissionContext,
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
 )
-from claude_code_sdk.types import StreamEvent
+from claude_code_sdk.types import CanUseTool, StreamEvent
 from loguru import logger
 
 from src.backends.execution_result import BackendExecutionResult
@@ -46,6 +49,23 @@ _SDK_PERMISSION_MODE_MAP = {
     "bypasspermissions": "bypassPermissions",
     "delegate": "default",
     "dontask": "bypassPermissions",
+}
+
+_RISKY_TOOL_NAMES = {
+    "bash",
+    "edit",
+    "multiedit",
+    "notebookedit",
+    "write",
+}
+
+_VALID_TOOL_POLICY_MODES = {
+    "off",
+    "allow_all",
+    "deny_all",
+    "denylist",
+    "approve_risky",
+    "manual",
 }
 
 
@@ -153,7 +173,9 @@ class SubprocessExecutor(ProcessExecutorBase):
         """Parse configured allowed tools as a list."""
         if not config.ALLOWED_TOOLS:
             return []
-        return [tool.strip() for tool in config.ALLOWED_TOOLS.split(",") if tool.strip()]
+        return [
+            tool.strip() for tool in config.ALLOWED_TOOLS.split(",") if tool.strip()
+        ]
 
     def _build_sdk_options(
         self,
@@ -163,9 +185,12 @@ class SubprocessExecutor(ProcessExecutorBase):
         permission_mode: Optional[str],
         model: Optional[str],
         log_prefix: str,
+        on_tool_permission_request: Optional[Callable[[str, dict], Awaitable[bool]]],
     ) -> tuple[ClaudeCodeOptions, str]:
         """Build SDK options and initial query session identifier."""
-        sdk_mode = self._normalize_permission_mode(permission_mode or config.CLAUDE_PERMISSION_MODE)
+        sdk_mode = self._normalize_permission_mode(
+            permission_mode or config.CLAUDE_PERMISSION_MODE
+        )
         if sdk_mode is None:
             sdk_mode = self._normalize_permission_mode(config.DEFAULT_BYPASS_MODE)
         if sdk_mode is None:
@@ -177,13 +202,19 @@ class SubprocessExecutor(ProcessExecutorBase):
             resume_uuid = resume_session_id
             initial_query_session_id = resume_session_id
         elif resume_session_id:
-            logger.warning(f"{log_prefix}Invalid session ID format (not UUID): {resume_session_id}")
+            logger.warning(
+                f"{log_prefix}Invalid session ID format (not UUID): {resume_session_id}"
+            )
 
         effective_model = model or config.DEFAULT_MODEL
         if effective_model:
             logger.info(f"{log_prefix}Using --model {effective_model}")
 
         logger.info(f"{log_prefix}Using permission mode {sdk_mode}")
+        can_use_tool_callback = self._build_can_use_tool_callback(
+            log_prefix=log_prefix,
+            on_tool_permission_request=on_tool_permission_request,
+        )
 
         options = ClaudeCodeOptions(
             cwd=working_directory,
@@ -192,8 +223,79 @@ class SubprocessExecutor(ProcessExecutorBase):
             resume=resume_uuid,
             continue_conversation=bool(resume_uuid),
             allowed_tools=self._allowed_tools_list(),
+            can_use_tool=can_use_tool_callback,
+            include_partial_messages=config.CLAUDE_INCLUDE_PARTIAL_MESSAGES,
         )
         return options, initial_query_session_id
+
+    @staticmethod
+    def _normalize_tool_policy_mode(raw_mode: str) -> str:
+        """Normalize and validate Claude tool policy mode."""
+        normalized = (raw_mode or "").strip().lower()
+        if normalized in _VALID_TOOL_POLICY_MODES:
+            return normalized
+        logger.warning(
+            f"Invalid CLAUDE_TOOL_POLICY_MODE='{raw_mode}', falling back to approve_risky"
+        )
+        return "approve_risky"
+
+    def _build_can_use_tool_callback(
+        self,
+        *,
+        log_prefix: str,
+        on_tool_permission_request: Optional[Callable[[str, dict], Awaitable[bool]]],
+    ) -> Optional[CanUseTool]:
+        """Build SDK tool-permission callback according to configured policy mode."""
+        policy_mode = self._normalize_tool_policy_mode(config.CLAUDE_TOOL_POLICY_MODE)
+        denylist = set(config.CLAUDE_TOOL_POLICY_DENYLIST)
+        if policy_mode == "off":
+            logger.info(f"{log_prefix}Claude tool policy disabled (mode=off)")
+            return None
+
+        logger.info(f"{log_prefix}Claude tool policy mode: {policy_mode}")
+
+        async def can_use_tool(
+            tool_name: str,
+            tool_input: dict,
+            context: ToolPermissionContext,
+        ) -> PermissionResultAllow | PermissionResultDeny:
+            del context
+            normalized_name = (tool_name or "").strip()
+            lowered_name = normalized_name.lower()
+            safe_input = tool_input if isinstance(tool_input, dict) else {}
+
+            if policy_mode == "allow_all":
+                return PermissionResultAllow()
+
+            if policy_mode == "deny_all":
+                return PermissionResultDeny(
+                    message=f"{normalized_name} denied by policy"
+                )
+
+            if lowered_name in denylist:
+                return PermissionResultDeny(
+                    message=f"{normalized_name} denied by denylist"
+                )
+
+            needs_manual_approval = policy_mode == "manual"
+            if policy_mode == "approve_risky":
+                needs_manual_approval = lowered_name in _RISKY_TOOL_NAMES
+
+            if not needs_manual_approval:
+                return PermissionResultAllow()
+
+            if on_tool_permission_request is None:
+                logger.warning(
+                    f"{log_prefix}No Slack permission callback for {normalized_name}; allowing"
+                )
+                return PermissionResultAllow()
+
+            approved = await on_tool_permission_request(normalized_name, safe_input)
+            if approved:
+                return PermissionResultAllow()
+            return PermissionResultDeny(message=f"{normalized_name} denied by user")
+
+        return can_use_tool
 
     @staticmethod
     def _content_block_to_dict(block: object) -> dict:
@@ -224,6 +326,29 @@ class SubprocessExecutor(ProcessExecutorBase):
             return payload
         return {"type": "text", "text": str(block)}
 
+    @staticmethod
+    def _extract_partial_text_from_stream_event(event: dict) -> str:
+        """Extract text delta payload from a stream event, if present."""
+        if not isinstance(event, dict):
+            return ""
+
+        delta = event.get("delta")
+        if isinstance(delta, dict):
+            text = delta.get("text")
+            if isinstance(text, str) and text:
+                return text
+
+        content_block = event.get("content_block")
+        if isinstance(content_block, dict):
+            block_text = content_block.get("text")
+            if isinstance(block_text, str) and block_text:
+                return block_text
+
+        text = event.get("text")
+        if isinstance(text, str) and text:
+            return text
+        return ""
+
     def _sdk_message_to_raw(self, sdk_message: object) -> Optional[dict]:
         """Convert SDK message objects into Claude stream-json shaped dictionaries."""
         if isinstance(sdk_message, AssistantMessage):
@@ -232,7 +357,8 @@ class SubprocessExecutor(ProcessExecutorBase):
                 "message": {
                     "role": "assistant",
                     "content": [
-                        self._content_block_to_dict(block) for block in sdk_message.content
+                        self._content_block_to_dict(block)
+                        for block in sdk_message.content
                     ],
                     "model": sdk_message.model,
                 },
@@ -243,7 +369,9 @@ class SubprocessExecutor(ProcessExecutorBase):
             if isinstance(sdk_message.content, str):
                 content: str | list[dict] = sdk_message.content
             else:
-                content = [self._content_block_to_dict(block) for block in sdk_message.content]
+                content = [
+                    self._content_block_to_dict(block) for block in sdk_message.content
+                ]
             return {
                 "type": "user",
                 "message": {
@@ -257,7 +385,11 @@ class SubprocessExecutor(ProcessExecutorBase):
             return sdk_message.data
 
         if isinstance(sdk_message, ResultMessage):
-            errors = [sdk_message.result] if sdk_message.is_error and sdk_message.result else []
+            errors = (
+                [sdk_message.result]
+                if sdk_message.is_error and sdk_message.result
+                else []
+            )
             return {
                 "type": "result",
                 "subtype": sdk_message.subtype,
@@ -274,6 +406,21 @@ class SubprocessExecutor(ProcessExecutorBase):
             }
 
         if isinstance(sdk_message, StreamEvent):
+            partial_text = self._extract_partial_text_from_stream_event(
+                sdk_message.event
+            )
+            if partial_text:
+                return {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": partial_text}],
+                    },
+                    "session_id": sdk_message.session_id,
+                    "parent_tool_use_id": sdk_message.parent_tool_use_id,
+                    "partial": True,
+                    "stream_event": sdk_message.event,
+                }
             return {
                 "type": "stream_event",
                 "uuid": sdk_message.uuid,
@@ -302,9 +449,13 @@ class SubprocessExecutor(ProcessExecutorBase):
             if current is active:
                 self._active_executions_by_scope.pop(active.session_scope, None)
             if active.execution_id:
-                current_by_id = self._active_executions_by_execution_id.get(active.execution_id)
+                current_by_id = self._active_executions_by_execution_id.get(
+                    active.execution_id
+                )
                 if current_by_id is active:
-                    self._active_executions_by_execution_id.pop(active.execution_id, None)
+                    self._active_executions_by_execution_id.pop(
+                        active.execution_id, None
+                    )
 
     async def has_active_execution(self, session_scope: str) -> bool:
         """Return True when an execution is currently active for the session scope."""
@@ -342,7 +493,9 @@ class SubprocessExecutor(ProcessExecutorBase):
         timeout: float = 5.0,
     ) -> TurnControlResult:
         """Interrupt current Claude turn and stream follow-up input into the same session."""
-        return await self._enqueue_control(session_scope, kind="steer", text=text, timeout=timeout)
+        return await self._enqueue_control(
+            session_scope, kind="steer", text=text, timeout=timeout
+        )
 
     async def interrupt_active_execution(
         self,
@@ -350,9 +503,13 @@ class SubprocessExecutor(ProcessExecutorBase):
         timeout: float = 5.0,
     ) -> TurnControlResult:
         """Interrupt the active Claude execution in this session scope."""
-        return await self._enqueue_control(session_scope, kind="interrupt", timeout=timeout)
+        return await self._enqueue_control(
+            session_scope, kind="interrupt", timeout=timeout
+        )
 
-    async def _request_cancel_active(self, active: _ActiveExecution, timeout: float = 2.0) -> None:
+    async def _request_cancel_active(
+        self, active: _ActiveExecution, timeout: float = 2.0
+    ) -> None:
         """Request cancellation for an active execution and wait briefly for shutdown."""
         active.cancel_requested = True
         try:
@@ -430,7 +587,9 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if request.kind == "steer":
                     await active.client.interrupt()
                     steer_text = request.text or ""
-                    await active.client.query(steer_text, session_id=active.query_session_id)
+                    await active.client.query(
+                        steer_text, session_id=active.query_session_id
+                    )
                     async with turn_counter_lock:
                         turn_counter["pending"] += 1
                     result = TurnControlResult(
@@ -456,7 +615,9 @@ class SubprocessExecutor(ProcessExecutorBase):
                 )
                 if not request.future.done():
                     request.future.set_result(
-                        TurnControlResult(success=False, error=str(e), session_id=active.session_id)
+                        TurnControlResult(
+                            success=False, error=str(e), session_id=active.session_id
+                        )
                     )
 
     async def execute(
@@ -467,6 +628,9 @@ class SubprocessExecutor(ProcessExecutorBase):
         resume_session_id: Optional[str] = None,
         execution_id: Optional[str] = None,
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]] = None,
+        on_tool_permission_request: Optional[
+            Callable[[str, dict], Awaitable[bool]]
+        ] = None,
         permission_mode: Optional[str] = None,
         db_session_id: Optional[int] = None,
         model: Optional[str] = None,
@@ -498,10 +662,13 @@ class SubprocessExecutor(ProcessExecutorBase):
             permission_mode=permission_mode,
             model=model,
             log_prefix=log_prefix,
+            on_tool_permission_request=on_tool_permission_request,
         )
 
         prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
-        logger.info(f"{log_prefix}Executing SDK query in {working_directory}: '{prompt_preview}'")
+        logger.info(
+            f"{log_prefix}Executing SDK query in {working_directory}: '{prompt_preview}'"
+        )
 
         parser = StreamParser()
         accumulator = StreamAccumulator(join_assistant_chunks=concat_with_spacing)
@@ -520,6 +687,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         turn_counter_lock = asyncio.Lock()
         stop_after_result = False
         result_is_error = False
+        partial_assistant_buffer = ""
 
         try:
             await client.connect()
@@ -559,6 +727,26 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if not msg:
                     continue
 
+                is_partial_assistant = (
+                    msg.type == "assistant"
+                    and bool(msg.raw and msg.raw.get("partial"))
+                    and bool(msg.content)
+                )
+                if is_partial_assistant:
+                    partial_assistant_buffer += msg.content
+                elif (
+                    msg.type == "assistant" and msg.content and partial_assistant_buffer
+                ):
+                    if msg.content.strip() == partial_assistant_buffer.strip():
+                        logger.debug(
+                            f"{log_prefix}Skipping duplicate final assistant chunk after partial stream"
+                        )
+                        partial_assistant_buffer = ""
+                        continue
+                    partial_assistant_buffer = ""
+                elif msg.type == "result":
+                    partial_assistant_buffer = ""
+
                 if msg.session_id:
                     active.session_id = msg.session_id
                     active.query_session_id = msg.session_id
@@ -566,7 +754,9 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if msg.type == "assistant":
                     if msg.content:
                         preview = (
-                            msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                            msg.content[:100] + "..."
+                            if len(msg.content) > 100
+                            else msg.content
                         )
                         logger.debug(f"{log_prefix}Claude: {preview}")
                     if msg.raw:
@@ -587,24 +777,36 @@ class SubprocessExecutor(ProcessExecutorBase):
 
                                 if tool_name in ("Read", "Edit", "Write"):
                                     file_path = tool_input.get("file_path", "")
-                                    logger.info(f"{log_prefix}Tool: {tool_name} {file_path}")
+                                    logger.info(
+                                        f"{log_prefix}Tool: {tool_name} {file_path}"
+                                    )
                                     if tool_name in ("Write", "Edit") and file_path:
                                         in_plan_mode = state.exit_plan_mode_detected
                                         if not in_plan_mode:
-                                            current_mode = await self._get_current_permission_mode(
-                                                db_session_id, permission_mode
+                                            current_mode = (
+                                                await self._get_current_permission_mode(
+                                                    db_session_id, permission_mode
+                                                )
                                             )
                                             in_plan_mode = current_mode == "plan"
                                         if in_plan_mode and file_path.endswith(".md"):
                                             tool_id = block.get("id")
-                                            if tool_id and tool_id not in state.pending_write_tools:
-                                                state.pending_write_tools[tool_id] = file_path
+                                            if (
+                                                tool_id
+                                                and tool_id
+                                                not in state.pending_write_tools
+                                            ):
+                                                state.pending_write_tools[tool_id] = (
+                                                    file_path
+                                                )
                                                 logger.info(
                                                     f"{log_prefix}Tracking pending plan write: {file_path}"
                                                 )
                                 elif tool_name == "Bash":
                                     command = tool_input.get("command", "")[:50]
-                                    logger.info(f"{log_prefix}Tool: Bash '{command}...'")
+                                    logger.info(
+                                        f"{log_prefix}Tool: Bash '{command}...'"
+                                    )
                                 elif tool_name == "AskUserQuestion":
                                     questions = tool_input.get("questions", [])
                                     if questions:
@@ -613,13 +815,17 @@ class SubprocessExecutor(ProcessExecutorBase):
                                             f"{log_prefix}Tool: AskUserQuestion - '{first_q}...' ({len(questions)} question(s))"
                                         )
                                     else:
-                                        logger.info(f"{log_prefix}Tool: AskUserQuestion")
+                                        logger.info(
+                                            f"{log_prefix}Tool: AskUserQuestion"
+                                        )
                                     state.ask_user_question_detected = True
                                 elif tool_name == "ExitPlanMode":
                                     state.exit_plan_mode_tool_id = block.get("id")
                                     state.exit_plan_mode_detected = True
                                     if state.exit_plan_mode_detected_at is None:
-                                        state.exit_plan_mode_detected_at = time.monotonic()
+                                        state.exit_plan_mode_detected_at = (
+                                            time.monotonic()
+                                        )
                                     logger.info(
                                         f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval"
                                     )
@@ -628,20 +834,26 @@ class SubprocessExecutor(ProcessExecutorBase):
                                     desc = tool_input.get("description", "")[:50]
                                     should_track = subagent_type == "Plan"
                                     if not should_track:
-                                        current_mode = await self._get_current_permission_mode(
-                                            db_session_id, permission_mode
+                                        current_mode = (
+                                            await self._get_current_permission_mode(
+                                                db_session_id, permission_mode
+                                            )
                                         )
                                         should_track = current_mode == "plan"
                                     if should_track:
                                         state.plan_subagent_tool_id = block.get("id")
-                                        state.plan_subagent_is_plan_type = subagent_type == "Plan"
+                                        state.plan_subagent_is_plan_type = (
+                                            subagent_type == "Plan"
+                                        )
                                         state.plan_subagent_completed = False
                                         state.plan_subagent_completed_at = None
                                         logger.info(
                                             f"{log_prefix}Tool: Task (subagent_type={subagent_type or 'default'}) '{desc}...' - tracking for plan approval"
                                         )
                                     else:
-                                        logger.info(f"{log_prefix}Tool: Task '{desc}...'")
+                                        logger.info(
+                                            f"{log_prefix}Tool: Task '{desc}...'"
+                                        )
                                 else:
                                     logger.info(f"{log_prefix}Tool: {tool_name}")
                 elif msg.type == "user" and msg.raw:
@@ -688,8 +900,8 @@ class SubprocessExecutor(ProcessExecutorBase):
                                         if not isinstance(content_block, dict):
                                             continue
                                         if content_block.get("type") == "text":
-                                            state.plan_subagent_result = content_block.get(
-                                                "text", ""
+                                            state.plan_subagent_result = (
+                                                content_block.get("text", "")
                                             )
                                             break
                                 elif isinstance(result_content, str):
@@ -715,7 +927,8 @@ class SubprocessExecutor(ProcessExecutorBase):
 
                 if state.exit_plan_mode_detected and not stop_after_result:
                     plan_subagent_pending = (
-                        state.plan_subagent_tool_id and not state.plan_subagent_completed
+                        state.plan_subagent_tool_id
+                        and not state.plan_subagent_completed
                     )
                     write_pending = bool(state.pending_write_tools)
                     if not plan_subagent_pending and not write_pending:
@@ -733,7 +946,10 @@ class SubprocessExecutor(ProcessExecutorBase):
                     and state.plan_subagent_is_plan_type
                     and not stop_after_result
                 ):
-                    if state.pending_write_tools and state.plan_subagent_completed_at is not None:
+                    if (
+                        state.pending_write_tools
+                        and state.plan_subagent_completed_at is not None
+                    ):
                         elapsed = time.monotonic() - state.plan_subagent_completed_at
                         if elapsed > PLAN_WRITE_GRACE_SECONDS:
                             state.plan_write_timeout = True
@@ -744,7 +960,9 @@ class SubprocessExecutor(ProcessExecutorBase):
                             stop_after_result = True
                             await client.interrupt()
                         elif state.plan_subagent_completed_at is not None:
-                            elapsed = time.monotonic() - state.plan_subagent_completed_at
+                            elapsed = (
+                                time.monotonic() - state.plan_subagent_completed_at
+                            )
                             if elapsed > PLAN_WRITE_GRACE_SECONDS:
                                 state.plan_write_timeout = True
                                 stop_after_result = True
@@ -789,7 +1007,8 @@ class SubprocessExecutor(ProcessExecutorBase):
             if (
                 not success
                 and resume_session_id
-                and "No conversation found with session ID" in (accumulator.error_message or "")
+                and "No conversation found with session ID"
+                in (accumulator.error_message or "")
             ):
                 return await self.execute(
                     prompt=prompt,
@@ -798,6 +1017,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                     resume_session_id=None,
                     execution_id=execution_id,
                     on_chunk=on_chunk,
+                    on_tool_permission_request=on_tool_permission_request,
                     permission_mode=permission_mode,
                     db_session_id=db_session_id,
                     model=model,
@@ -807,7 +1027,10 @@ class SubprocessExecutor(ProcessExecutorBase):
                     _is_retry_after_exit_plan_error=_is_retry_after_exit_plan_error,
                 )
 
-            if state.exit_plan_mode_error_detected and not _is_retry_after_exit_plan_error:
+            if (
+                state.exit_plan_mode_error_detected
+                and not _is_retry_after_exit_plan_error
+            ):
                 return await self.execute(
                     prompt=prompt,
                     working_directory=working_directory,
@@ -815,6 +1038,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                     resume_session_id=resume_session_id,
                     execution_id=execution_id,
                     on_chunk=on_chunk,
+                    on_tool_permission_request=on_tool_permission_request,
                     permission_mode=config.DEFAULT_BYPASS_MODE,
                     db_session_id=db_session_id,
                     model=model,
@@ -844,7 +1068,9 @@ class SubprocessExecutor(ProcessExecutorBase):
             except Exception:
                 pass
             return ExecutionResult(
-                **accumulator.result_fields(success=False, error="Cancelled", was_cancelled=True),
+                **accumulator.result_fields(
+                    success=False, error="Cancelled", was_cancelled=True
+                ),
                 has_pending_question=False,
                 has_pending_plan_approval=False,
                 plan_subagent_result=state.plan_subagent_result,

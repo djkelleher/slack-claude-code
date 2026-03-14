@@ -25,12 +25,18 @@ class TestCommandRouter:
             db=SimpleNamespace(
                 update_session_claude_id=AsyncMock(),
                 update_session_codex_id=AsyncMock(),
-                get_or_create_session=AsyncMock(return_value=Session(codex_session_id=None)),
+                get_or_create_session=AsyncMock(
+                    return_value=Session(codex_session_id=None)
+                ),
             ),
             executor=SimpleNamespace(execute=AsyncMock()),
-            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+            codex_executor=SimpleNamespace(
+                execute=AsyncMock(), thread_fork=AsyncMock()
+            ),
         )
-        deps.executor.execute.return_value = SimpleNamespace(session_id="claude-new", success=True)
+        deps.executor.execute.return_value = SimpleNamespace(
+            session_id="claude-new", success=True
+        )
 
         session = Session(
             id=7,
@@ -51,7 +57,9 @@ class TestCommandRouter:
         assert routed.backend == "claude"
         deps.executor.execute.assert_awaited_once()
         deps.codex_executor.execute.assert_not_called()
-        deps.db.update_session_claude_id.assert_awaited_once_with("C123", None, "claude-new")
+        deps.db.update_session_claude_id.assert_awaited_once_with(
+            "C123", None, "claude-new"
+        )
         deps.db.update_session_codex_id.assert_not_called()
 
     @pytest.mark.asyncio
@@ -61,10 +69,14 @@ class TestCommandRouter:
             db=SimpleNamespace(
                 update_session_claude_id=AsyncMock(),
                 update_session_codex_id=AsyncMock(),
-                get_or_create_session=AsyncMock(return_value=Session(codex_session_id=None)),
+                get_or_create_session=AsyncMock(
+                    return_value=Session(codex_session_id=None)
+                ),
             ),
             executor=SimpleNamespace(execute=AsyncMock()),
-            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+            codex_executor=SimpleNamespace(
+                execute=AsyncMock(), thread_fork=AsyncMock()
+            ),
         )
         deps.codex_executor.execute.return_value = SimpleNamespace(
             session_id="codex-new",
@@ -93,7 +105,9 @@ class TestCommandRouter:
         assert routed.backend == "codex"
         deps.codex_executor.execute.assert_awaited_once()
         deps.executor.execute.assert_not_called()
-        deps.db.update_session_codex_id.assert_awaited_once_with("C123", "123.4", "codex-new")
+        deps.db.update_session_codex_id.assert_awaited_once_with(
+            "C123", "123.4", "codex-new"
+        )
         deps.db.update_session_claude_id.assert_not_called()
 
     @pytest.mark.asyncio
@@ -103,12 +117,18 @@ class TestCommandRouter:
             db=SimpleNamespace(
                 update_session_claude_id=AsyncMock(),
                 update_session_codex_id=AsyncMock(),
-                get_or_create_session=AsyncMock(return_value=Session(codex_session_id=None)),
+                get_or_create_session=AsyncMock(
+                    return_value=Session(codex_session_id=None)
+                ),
             ),
             executor=SimpleNamespace(execute=AsyncMock()),
-            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+            codex_executor=SimpleNamespace(
+                execute=AsyncMock(), thread_fork=AsyncMock()
+            ),
         )
-        deps.executor.execute.return_value = SimpleNamespace(session_id="claude-new", success=True)
+        deps.executor.execute.return_value = SimpleNamespace(
+            session_id="claude-new", success=True
+        )
 
         session = Session(
             id=7, model="opus", working_directory="/tmp", claude_session_id="claude-old"
@@ -134,10 +154,14 @@ class TestCommandRouter:
             db=SimpleNamespace(
                 update_session_claude_id=AsyncMock(),
                 update_session_codex_id=AsyncMock(),
-                get_or_create_session=AsyncMock(return_value=Session(codex_session_id=None)),
+                get_or_create_session=AsyncMock(
+                    return_value=Session(codex_session_id=None)
+                ),
             ),
             executor=SimpleNamespace(execute=AsyncMock()),
-            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+            codex_executor=SimpleNamespace(
+                execute=AsyncMock(), thread_fork=AsyncMock()
+            ),
         )
         deps.codex_executor.execute.return_value = SimpleNamespace(
             session_id="codex-new",
@@ -172,7 +196,8 @@ class TestCommandRouter:
         """Codex routing fails fast when no Codex executor is configured."""
         deps = SimpleNamespace(
             db=SimpleNamespace(
-                update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
             ),
             executor=SimpleNamespace(execute=AsyncMock()),
             codex_executor=None,
@@ -194,7 +219,8 @@ class TestCommandRouter:
         """Codex plan mode augments prompt format guidance and forwards permission mode."""
         deps = SimpleNamespace(
             db=SimpleNamespace(
-                update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
             ),
             executor=SimpleNamespace(execute=AsyncMock()),
             codex_executor=SimpleNamespace(execute=AsyncMock()),
@@ -279,7 +305,9 @@ class TestCommandRouter:
         mock_request_approval.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_codex_plan_mode_retries_with_canonical_format_and_requests_approval(self):
+    async def test_codex_plan_mode_retries_with_canonical_format_and_requests_approval(
+        self,
+    ):
         """Non-detected plan responses should trigger one canonical-format retry."""
         deps = SimpleNamespace(
             db=SimpleNamespace(
@@ -315,7 +343,9 @@ class TestCommandRouter:
                 "- Run unit tests\n"
             ),
         )
-        deps.codex_executor.execute = AsyncMock(side_effect=[first_response, second_response])
+        deps.codex_executor.execute = AsyncMock(
+            side_effect=[first_response, second_response]
+        )
 
         session = Session(
             id=16,
@@ -538,7 +568,9 @@ class TestCommandRouter:
         assert replacement_on_chunk.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_execute_for_session_codex_thread_forks_inherited_channel_thread(self):
+    async def test_execute_for_session_codex_thread_forks_inherited_channel_thread(
+        self,
+    ):
         """Thread-scoped Codex sessions should fork inherited channel thread IDs."""
         deps = SimpleNamespace(
             db=SimpleNamespace(
@@ -551,7 +583,9 @@ class TestCommandRouter:
             executor=SimpleNamespace(execute=AsyncMock()),
             codex_executor=SimpleNamespace(
                 execute=AsyncMock(
-                    return_value=SimpleNamespace(session_id="codex-forked", success=True, output="")
+                    return_value=SimpleNamespace(
+                        session_id="codex-forked", success=True, output=""
+                    )
                 ),
                 thread_fork=AsyncMock(return_value={"thread": {"id": "codex-forked"}}),
             ),
@@ -579,7 +613,10 @@ class TestCommandRouter:
             thread_id="codex-shared",
             working_directory="/tmp",
         )
-        assert deps.codex_executor.execute.await_args.kwargs["resume_session_id"] == "codex-forked"
+        assert (
+            deps.codex_executor.execute.await_args.kwargs["resume_session_id"]
+            == "codex-forked"
+        )
         assert deps.db.update_session_codex_id.await_args_list[0].args == (
             "C123",
             "123.4",
@@ -588,7 +625,9 @@ class TestCommandRouter:
         assert session.codex_session_id == "codex-forked"
 
     @pytest.mark.asyncio
-    async def test_execute_for_session_codex_thread_fork_failure_uses_inherited_thread(self):
+    async def test_execute_for_session_codex_thread_fork_failure_uses_inherited_thread(
+        self,
+    ):
         """Fork failures should not block execution for thread-scoped Codex sessions."""
         deps = SimpleNamespace(
             db=SimpleNamespace(
@@ -601,7 +640,9 @@ class TestCommandRouter:
             executor=SimpleNamespace(execute=AsyncMock()),
             codex_executor=SimpleNamespace(
                 execute=AsyncMock(
-                    return_value=SimpleNamespace(session_id="codex-shared", success=True, output="")
+                    return_value=SimpleNamespace(
+                        session_id="codex-shared", success=True, output=""
+                    )
                 ),
                 thread_fork=AsyncMock(side_effect=RuntimeError("fork unavailable")),
             ),
@@ -627,7 +668,10 @@ class TestCommandRouter:
             logger=logger,
         )
 
-        assert deps.codex_executor.execute.await_args.kwargs["resume_session_id"] == "codex-shared"
+        assert (
+            deps.codex_executor.execute.await_args.kwargs["resume_session_id"]
+            == "codex-shared"
+        )
 
     @pytest.mark.asyncio
     async def test_codex_question_limit_does_not_fail_on_exact_limit(self):
@@ -672,7 +716,9 @@ class TestCommandRouter:
         )
         pending_question = SimpleNamespace(question_id="pq1", tool_use_id="item_1")
 
-        with patch.object(config.timeouts.execution, "max_questions_per_conversation", 1):
+        with patch.object(
+            config.timeouts.execution, "max_questions_per_conversation", 1
+        ):
             with patch(
                 "src.handlers.command_router.QuestionManager.create_pending_question",
                 new=AsyncMock(return_value=pending_question),
@@ -727,7 +773,10 @@ class TestCommandRouter:
                             "header": "Confirm",
                             "options": [
                                 {"label": "No", "description": "Stop"},
-                                {"label": "Yes (Recommended)", "description": "Continue"},
+                                {
+                                    "label": "Yes (Recommended)",
+                                    "description": "Continue",
+                                },
                             ],
                         }
                     ]
@@ -845,7 +894,9 @@ class TestCommandRouter:
 
         async def _fake_codex_execute(**kwargs):
             await kwargs["on_chunk"](
-                SimpleNamespace(type="assistant", content="First turn.", tool_activities=[])
+                SimpleNamespace(
+                    type="assistant", content="First turn.", tool_activities=[]
+                )
             )
             payload = await kwargs["on_user_input_request"](
                 "item_1",
@@ -862,9 +913,13 @@ class TestCommandRouter:
             )
             assert payload == {"answers": {"q_1": {"answers": ["Yes"]}}}
             await kwargs["on_chunk"](
-                SimpleNamespace(type="assistant", content="After answer.", tool_activities=[])
+                SimpleNamespace(
+                    type="assistant", content="After answer.", tool_activities=[]
+                )
             )
-            return SimpleNamespace(session_id="codex-new", success=True, output="After answer.")
+            return SimpleNamespace(
+                session_id="codex-new", success=True, output="After answer."
+            )
 
         deps.codex_executor.execute = AsyncMock(side_effect=_fake_codex_execute)
         session = Session(
@@ -919,10 +974,14 @@ class TestCommandRouter:
                 update_session_claude_id=AsyncMock(),
                 update_session_codex_id=AsyncMock(),
                 update_session_mode=AsyncMock(),
-                get_or_create_session=AsyncMock(return_value=Session(codex_session_id=None)),
+                get_or_create_session=AsyncMock(
+                    return_value=Session(codex_session_id=None)
+                ),
             ),
             executor=SimpleNamespace(execute=AsyncMock()),
-            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+            codex_executor=SimpleNamespace(
+                execute=AsyncMock(), thread_fork=AsyncMock()
+            ),
         )
 
         prompts: list[str] = []
@@ -948,7 +1007,9 @@ class TestCommandRouter:
                                             "header": "Decision",
                                             "options": [
                                                 {"label": "Do nothing"},
-                                                {"label": "Use fast path (Recommended)"},
+                                                {
+                                                    "label": "Use fast path (Recommended)"
+                                                },
                                             ],
                                             "multiSelect": False,
                                         }
@@ -1009,6 +1070,141 @@ class TestCommandRouter:
         assert routed.result.output == "Done."
 
     @pytest.mark.asyncio
+    async def test_claude_auto_approves_permissions_for_queue_execution(self):
+        """Auto-approve mode should bypass Slack permission UI for Claude prompts."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+                get_or_create_session=AsyncMock(
+                    return_value=Session(codex_session_id=None)
+                ),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(
+                execute=AsyncMock(), thread_fork=AsyncMock()
+            ),
+        )
+
+        async def _fake_claude_execute(**kwargs):
+            approved = await kwargs["on_tool_permission_request"](
+                "Bash", {"command": "ls"}
+            )
+            assert approved is True
+            return SimpleNamespace(
+                session_id="claude-new",
+                success=True,
+                output="Done.",
+                has_pending_question=False,
+                has_pending_plan_approval=False,
+            )
+
+        deps.executor.execute = AsyncMock(side_effect=_fake_claude_execute)
+        session = Session(
+            id=23,
+            model="opus",
+            working_directory="/tmp",
+            claude_session_id="claude-old",
+        )
+
+        with patch(
+            "src.handlers.command_router.PermissionManager.request_approval",
+            new=AsyncMock(),
+        ) as request_approval:
+            routed = await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="hello",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-9-auto-claude-approval",
+                slack_client=SimpleNamespace(),
+                user_id="U123",
+                auto_approve_permissions=True,
+            )
+
+        request_approval.assert_not_awaited()
+        assert routed.result.success is True
+        assert routed.result.output == "Done."
+
+    @pytest.mark.asyncio
+    async def test_claude_approval_resume_can_swap_streaming_callback(self):
+        """Claude approvals should allow streaming to move to a new Slack message."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+                get_or_create_session=AsyncMock(
+                    return_value=Session(codex_session_id=None)
+                ),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(
+                execute=AsyncMock(), thread_fork=AsyncMock()
+            ),
+        )
+
+        initial_on_chunk = AsyncMock()
+        replacement_on_chunk = AsyncMock()
+
+        async def _fake_claude_execute(**kwargs):
+            await kwargs["on_chunk"](
+                SimpleNamespace(
+                    type="assistant", content="Before approval.", tool_activities=[]
+                )
+            )
+            approved = await kwargs["on_tool_permission_request"](
+                "Bash",
+                {"command": "ls", "cwd": "/tmp"},
+            )
+            assert approved is True
+            await kwargs["on_chunk"](
+                SimpleNamespace(
+                    type="assistant", content="After approval.", tool_activities=[]
+                )
+            )
+            return SimpleNamespace(
+                session_id="claude-new",
+                success=True,
+                output="After approval.",
+                has_pending_question=False,
+                has_pending_plan_approval=False,
+            )
+
+        deps.executor.execute = AsyncMock(side_effect=_fake_claude_execute)
+        session = Session(
+            id=24,
+            model="opus",
+            working_directory="/tmp",
+            claude_session_id="claude-old",
+        )
+        on_interaction_resumed = AsyncMock(return_value=replacement_on_chunk)
+
+        with patch(
+            "src.handlers.command_router.PermissionManager.request_approval",
+            new=AsyncMock(return_value=True),
+        ) as request_approval:
+            await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="hello",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-9d",
+                on_chunk=initial_on_chunk,
+                slack_client=SimpleNamespace(),
+                user_id="U123",
+                on_interaction_resumed=on_interaction_resumed,
+            )
+
+        request_approval.assert_awaited_once()
+        on_interaction_resumed.assert_awaited_once()
+        assert initial_on_chunk.await_count == 1
+        assert replacement_on_chunk.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_codex_approval_resume_can_swap_streaming_callback(self):
         """Approval decisions should allow Codex streaming to move to a new Slack message."""
         deps = SimpleNamespace(
@@ -1026,7 +1222,9 @@ class TestCommandRouter:
 
         async def _fake_codex_execute(**kwargs):
             await kwargs["on_chunk"](
-                SimpleNamespace(type="assistant", content="Before approval.", tool_activities=[])
+                SimpleNamespace(
+                    type="assistant", content="Before approval.", tool_activities=[]
+                )
             )
             payload = await kwargs["on_approval_request"](
                 "permissions.request",
@@ -1034,9 +1232,13 @@ class TestCommandRouter:
             )
             assert payload is not None
             await kwargs["on_chunk"](
-                SimpleNamespace(type="assistant", content="After approval.", tool_activities=[])
+                SimpleNamespace(
+                    type="assistant", content="After approval.", tool_activities=[]
+                )
             )
-            return SimpleNamespace(session_id="codex-new", success=True, output="After approval.")
+            return SimpleNamespace(
+                session_id="codex-new", success=True, output="After approval."
+            )
 
         deps.codex_executor.execute = AsyncMock(side_effect=_fake_codex_execute)
         session = Session(
@@ -1113,7 +1315,9 @@ class TestCommandRouter:
             )
             assert second_payload is None
             return SimpleNamespace(
-                session_id="codex-new", success=True, output="Should not be final success."
+                session_id="codex-new",
+                success=True,
+                output="Should not be final success.",
             )
 
         deps.codex_executor.execute = AsyncMock(side_effect=_fake_codex_execute)
@@ -1127,7 +1331,9 @@ class TestCommandRouter:
         )
         pending_question = SimpleNamespace(question_id="pq1", tool_use_id="item_1")
 
-        with patch.object(config.timeouts.execution, "max_questions_per_conversation", 1):
+        with patch.object(
+            config.timeouts.execution, "max_questions_per_conversation", 1
+        ):
             with patch(
                 "src.handlers.command_router.QuestionManager.create_pending_question",
                 new=AsyncMock(return_value=pending_question),
