@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from loguru import logger
 
-from ..claude.subprocess_executor import SubprocessExecutor
+from ..claude.sdk_executor import SubprocessExecutor
 from .models import (
     AgentConfig,
     AgentExecution,

@@ -10,14 +10,14 @@ import pytest
 
 from src.app import (
     _application_data_dir,
-    _route_claude_message_to_active_execution_or_queue,
     _event_dedupe_key,
     _extract_structured_queue_plan_from_uploaded_files,
     _is_duplicate_event,
-    _restore_pending_queue_processors,
-    _slack_uploads_dir,
     _queue_structured_plan_message,
+    _restore_pending_queue_processors,
+    _route_claude_message_to_active_execution_or_queue,
     _route_codex_message_to_active_turn_or_queue,
+    _slack_uploads_dir,
     _strip_leading_slack_mention,
     configure_logging,
     slack_api_with_retry,
@@ -303,10 +303,15 @@ class TestClaudeActiveExecutionRouting:
 
     @pytest.mark.asyncio
     async def test_queues_message_when_active_execution_exists(self):
-        """Active Claude execution should auto-queue follow-up messages."""
+        """Active Claude execution should consume follow-up messages via steer."""
         session = SimpleNamespace(id=1)
         deps = SimpleNamespace(
-            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=True)),
+            executor=SimpleNamespace(
+                has_active_execution=AsyncMock(return_value=True),
+                steer_active_execution=AsyncMock(
+                    return_value=SimpleNamespace(success=True, session_id="session-1", error=None)
+                ),
+            ),
             db=SimpleNamespace(
                 add_command=AsyncMock(return_value=SimpleNamespace(id=21)),
                 update_command_status=AsyncMock(),
@@ -327,21 +332,29 @@ class TestClaudeActiveExecutionRouting:
             )
 
         assert handled is True
-        deps.db.add_to_queue.assert_awaited_once()
-        mock_ensure_queue.assert_awaited_once()
+        deps.db.add_to_queue.assert_not_awaited()
+        mock_ensure_queue.assert_not_awaited()
         deps.db.update_command_status.assert_any_await(
             21,
             "completed",
-            output="Active Claude execution detected. Auto-queued item #88.",
+            output=(
+                "Routed to active Claude execution via SDK interrupt+streamed input."
+                " session_id=session-1"
+            ),
         )
         assert client.chat_postMessage.await_count >= 1
 
     @pytest.mark.asyncio
     async def test_reports_queue_failure_when_active_execution_exists(self):
-        """Queue fallback failures should update command status and notify user."""
+        """Queue fallback failures should update command status when steer fails first."""
         session = SimpleNamespace(id=1)
         deps = SimpleNamespace(
-            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=True)),
+            executor=SimpleNamespace(
+                has_active_execution=AsyncMock(return_value=True),
+                steer_active_execution=AsyncMock(
+                    return_value=SimpleNamespace(success=False, session_id=None, error="busy")
+                ),
+            ),
             db=SimpleNamespace(
                 add_command=AsyncMock(return_value=SimpleNamespace(id=22)),
                 update_command_status=AsyncMock(),
@@ -365,12 +378,51 @@ class TestClaudeActiveExecutionRouting:
             22,
             "failed",
             output=(
-                "Active Claude execution detected but queue fallback failed."
-                " queue_error=db insert failed"
+                "Claude steer failed and queue fallback failed."
+                " steer_error=busy queue_error=db insert failed"
             ),
             error_message="db insert failed",
         )
         assert client.chat_postMessage.await_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_queues_message_when_steer_fails(self):
+        """Steer failure should auto-queue and start queue processor."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            executor=SimpleNamespace(
+                has_active_execution=AsyncMock(return_value=True),
+                steer_active_execution=AsyncMock(
+                    return_value=SimpleNamespace(success=False, session_id=None, error="conflict")
+                ),
+            ),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=23)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(return_value=SimpleNamespace(id=99)),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure_queue:
+            handled = await _route_claude_message_to_active_execution_or_queue(
+                client=client,
+                deps=deps,
+                session=session,
+                channel_id="C123",
+                thread_ts="123.456",
+                prompt="follow up",
+                logger=MagicMock(),
+            )
+
+        assert handled is True
+        deps.db.add_to_queue.assert_awaited_once()
+        mock_ensure_queue.assert_awaited_once()
+        deps.db.update_command_status.assert_any_await(
+            23,
+            "completed",
+            output="Claude steer failed (conflict). Auto-queued item #99.",
+        )
 
 
 class TestStructuredQueuePlanRouting:
