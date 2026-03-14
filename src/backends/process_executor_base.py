@@ -156,3 +156,7 @@ class ProcessExecutorBase:
     async def shutdown(self) -> None:
         """Shutdown and cancel all active executions."""
         await self.cancel_all()
+
+    async def has_active_execution(self, session_scope: str) -> bool:
+        """Return True when at least one execution is active for the session scope."""
+        return await self._registry.count_for_scope(session_scope) > 0

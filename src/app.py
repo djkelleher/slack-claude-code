@@ -508,6 +508,98 @@ async def _route_codex_message_to_active_turn_or_queue(
     return True
 
 
+async def _route_claude_message_to_active_execution_or_queue(
+    client,
+    deps,
+    session,
+    channel_id: str,
+    thread_ts: str | None,
+    prompt: str,
+    logger,
+) -> bool:
+    """Route a Claude message to queue when an execution is already active in scope.
+
+    Returns
+    -------
+    bool
+        True when the message was handled by queue fallback, False when no
+        active execution exists and normal execution should continue.
+    """
+    session_scope = build_session_scope(channel_id, thread_ts)
+    if not await deps.executor.has_active_execution(session_scope):
+        return False
+
+    cmd_history = await deps.db.add_command(session.id, prompt)
+    await deps.db.update_command_status(cmd_history.id, "running")
+
+    try:
+        queued_item = await deps.db.add_to_queue(
+            session_id=session.id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            prompt=prompt,
+        )
+    except Exception as e:
+        queue_error = str(e)
+        logger.error(
+            f"Failed to queue message while Claude execution was active in scope "
+            f"{session_scope}: {queue_error}"
+        )
+        await deps.db.update_command_status(
+            cmd_history.id,
+            "failed",
+            output=(
+                "Active Claude execution detected but queue fallback failed."
+                f" queue_error={queue_error}"
+            ),
+            error_message=queue_error,
+        )
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text="Failed to queue message while Claude run is active.",
+            blocks=error_message(
+                "Active Claude execution is already running and auto-queue failed.\n"
+                f"queue_error: {queue_error}"
+            ),
+        )
+        return True
+
+    await deps.db.update_command_status(
+        cmd_history.id,
+        "completed",
+        output=(
+            "Active Claude execution detected."
+            f" Auto-queued item #{queued_item.id}."
+        ),
+    )
+    await ensure_queue_processor(
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        deps=deps,
+        client=client,
+        task_logger=logger,
+    )
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=f"Claude run active; queued message as item #{queued_item.id}.",
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        ":inbox_tray: A Claude run is already active in this session scope.\n"
+                        f"Queued as item *#{queued_item.id}*."
+                    ),
+                },
+            }
+        ],
+    )
+    return True
+
+
 async def _queue_structured_plan_message(
     client,
     deps,
@@ -1003,6 +1095,18 @@ async def main():
                 logger=logger,
             )
             if handled_active_turn:
+                return
+        elif backend == "claude":
+            handled_active_execution = await _route_claude_message_to_active_execution_or_queue(
+                client=client,
+                deps=deps,
+                session=session,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                prompt=prompt,
+                logger=logger,
+            )
+            if handled_active_execution:
                 return
 
         try:

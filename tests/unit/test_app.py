@@ -10,6 +10,7 @@ import pytest
 
 from src.app import (
     _application_data_dir,
+    _route_claude_message_to_active_execution_or_queue,
     _event_dedupe_key,
     _extract_structured_queue_plan_from_uploaded_files,
     _is_duplicate_event,
@@ -265,6 +266,110 @@ class TestCodexActiveTurnRouting:
             error_message="db insert failed",
         )
         deps.codex_executor.record_queue_fallback.assert_awaited_once_with(success=False)
+        assert client.chat_postMessage.await_count >= 1
+
+
+class TestClaudeActiveExecutionRouting:
+    """Tests for active Claude execution queue fallback behavior."""
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_no_active_execution(self):
+        """No active Claude execution should fall through to normal runtime execution."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=False)),
+            db=SimpleNamespace(
+                add_command=AsyncMock(),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        handled = await _route_claude_message_to_active_execution_or_queue(
+            client=client,
+            deps=deps,
+            session=session,
+            channel_id="C123",
+            thread_ts="123.456",
+            prompt="follow up",
+            logger=MagicMock(),
+        )
+
+        assert handled is False
+        deps.db.add_command.assert_not_awaited()
+        deps.db.add_to_queue.assert_not_awaited()
+        client.chat_postMessage.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_queues_message_when_active_execution_exists(self):
+        """Active Claude execution should auto-queue follow-up messages."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=True)),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=21)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(return_value=SimpleNamespace(id=88)),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure_queue:
+            handled = await _route_claude_message_to_active_execution_or_queue(
+                client=client,
+                deps=deps,
+                session=session,
+                channel_id="C123",
+                thread_ts="123.456",
+                prompt="follow up",
+                logger=MagicMock(),
+            )
+
+        assert handled is True
+        deps.db.add_to_queue.assert_awaited_once()
+        mock_ensure_queue.assert_awaited_once()
+        deps.db.update_command_status.assert_any_await(
+            21,
+            "completed",
+            output="Active Claude execution detected. Auto-queued item #88.",
+        )
+        assert client.chat_postMessage.await_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_reports_queue_failure_when_active_execution_exists(self):
+        """Queue fallback failures should update command status and notify user."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=True)),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=22)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(side_effect=RuntimeError("db insert failed")),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        handled = await _route_claude_message_to_active_execution_or_queue(
+            client=client,
+            deps=deps,
+            session=session,
+            channel_id="C123",
+            thread_ts="123.456",
+            prompt="follow up",
+            logger=MagicMock(),
+        )
+
+        assert handled is True
+        deps.db.update_command_status.assert_any_await(
+            22,
+            "failed",
+            output=(
+                "Active Claude execution detected but queue fallback failed."
+                " queue_error=db insert failed"
+            ),
+            error_message="db insert failed",
+        )
         assert client.chat_postMessage.await_count >= 1
 
 
