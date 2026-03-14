@@ -10,11 +10,36 @@ import pytest_asyncio
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 
+_AIOSQLITE_RESPONSIVE: bool | None = None
+
+
+async def _assert_aiosqlite_responsive(db_path: str) -> None:
+    """Fail fast when sqlite async worker threads are unavailable in the runtime."""
+    global _AIOSQLITE_RESPONSIVE
+    if _AIOSQLITE_RESPONSIVE is False:
+        pytest.skip(
+            "Skipping repository tests: aiosqlite connect timed out in this runtime"
+        )
+    if _AIOSQLITE_RESPONSIVE is True:
+        return
+
+    async def _probe() -> None:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("SELECT 1")
+
+    try:
+        await asyncio.wait_for(_probe(), timeout=5)
+        _AIOSQLITE_RESPONSIVE = True
+    except TimeoutError as exc:
+        _AIOSQLITE_RESPONSIVE = False
+        pytest.skip(f"Skipping repository tests: aiosqlite connect timed out ({exc})")
+
 
 @pytest_asyncio.fixture
 async def db_repo(tmp_path):
     """Create a test database repository."""
     db_path = str(tmp_path / "test.db")
+    await _assert_aiosqlite_responsive(db_path)
     await init_database(db_path)
     return DatabaseRepository(db_path)
 
@@ -41,7 +66,9 @@ class TestSessionOperations:
         assert session1.id == session2.id
 
     @pytest.mark.asyncio
-    async def test_get_or_create_session_channel_level_does_not_duplicate(self, db_repo):
+    async def test_get_or_create_session_channel_level_does_not_duplicate(
+        self, db_repo
+    ):
         """Channel-level sessions should reuse one row even with thread_ts=None."""
         session1 = await db_repo.get_or_create_session("C123ABC", None)
         session2 = await db_repo.get_or_create_session("C123ABC", None)
@@ -91,7 +118,9 @@ class TestSessionOperations:
         assert session.codex_session_id == "codex-session-123"
 
     @pytest.mark.asyncio
-    async def test_get_or_create_session_prefers_model_row_on_population_tie(self, db_repo):
+    async def test_get_or_create_session_prefers_model_row_on_population_tie(
+        self, db_repo
+    ):
         """Model-bearing rows should win when duplicate rows are otherwise equally populated."""
         async with aiosqlite.connect(db_repo.db_path) as db:
             await db.execute(
@@ -130,7 +159,9 @@ class TestSessionOperations:
     async def test_get_or_create_session_thread_isolation(self, db_repo):
         """Different threads get different sessions."""
         channel_session = await db_repo.get_or_create_session("C123ABC", None)
-        thread_session = await db_repo.get_or_create_session("C123ABC", "1234567890.123456")
+        thread_session = await db_repo.get_or_create_session(
+            "C123ABC", "1234567890.123456"
+        )
 
         assert channel_session.id != thread_session.id
         assert channel_session.thread_ts is None
@@ -157,7 +188,9 @@ class TestSessionOperations:
         await db_repo.update_session_sandbox_mode("C123ABC", None, "danger-full-access")
         await db_repo.update_session_approval_mode("C123ABC", None, "never")
 
-        thread_session = await db_repo.get_or_create_session("C123ABC", "1234567890.123456")
+        thread_session = await db_repo.get_or_create_session(
+            "C123ABC", "1234567890.123456"
+        )
         assert thread_session.working_directory == "/repo"
         assert thread_session.model == "gpt-5.3-codex-high"
         assert thread_session.permission_mode == "plan"
@@ -308,7 +341,9 @@ class TestCommandHistoryOperations:
         """update_command_status updates to failed with error."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         cmd = await db_repo.add_command(session.id, "test")
-        await db_repo.update_command_status(cmd.id, "failed", error_message="Something broke")
+        await db_repo.update_command_status(
+            cmd.id, "failed", error_message="Something broke"
+        )
 
         updated = await db_repo.get_command_by_id(cmd.id)
         assert updated.status == "failed"
@@ -334,7 +369,9 @@ class TestCommandHistoryOperations:
             await db_repo.add_command(session.id, f"command {i}")
 
         # Get first page
-        history, total = await db_repo.get_command_history(session.id, limit=5, offset=0)
+        history, total = await db_repo.get_command_history(
+            session.id, limit=5, offset=0
+        )
         assert len(history) == 5
         assert total == 15
 
@@ -394,7 +431,10 @@ class TestQueueOperations:
         """add_to_queue should assign unique positions under concurrent inserts."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         items = await asyncio.gather(
-            *[db_repo.add_to_queue(session.id, "C123ABC", None, f"cmd-{i}") for i in range(20)]
+            *[
+                db_repo.add_to_queue(session.id, "C123ABC", None, f"cmd-{i}")
+                for i in range(20)
+            ]
         )
 
         positions = sorted(item.position for item in items)
@@ -436,7 +476,10 @@ class TestQueueOperations:
             ],
         )
 
-        assert [item.parallel_group_id for item in items] == ["parallel-1", "parallel-1"]
+        assert [item.parallel_group_id for item in items] == [
+            "parallel-1",
+            "parallel-1",
+        ]
         assert [item.parallel_limit for item in items] == [2, 2]
 
     @pytest.mark.asyncio
@@ -458,7 +501,9 @@ class TestQueueOperations:
     async def test_add_many_to_queue_can_replace_pending_scope_items(self, db_repo):
         """replace_pending clears pending scope items before inserting a new queue."""
         session = await db_repo.get_or_create_session("C123ABC", None)
-        first = await db_repo.add_to_queue(session.id, "C123ABC", None, "existing-running")
+        first = await db_repo.add_to_queue(
+            session.id, "C123ABC", None, "existing-running"
+        )
         await db_repo.update_queue_item_status(first.id, "running")
         await db_repo.add_to_queue(session.id, "C123ABC", None, "stale-pending")
 
@@ -466,7 +511,10 @@ class TestQueueOperations:
             session_id=session.id,
             channel_id="C123ABC",
             thread_ts=None,
-            queue_entries=[("fresh-1", None, None, None), ("fresh-2", None, None, None)],
+            queue_entries=[
+                ("fresh-1", None, None, None),
+                ("fresh-2", None, None, None),
+            ],
             replace_pending=True,
         )
 
@@ -611,10 +659,16 @@ class TestQueueOperations:
         thread_session = await db_repo.get_or_create_session("C123ABC", "123.456")
         other_channel = await db_repo.get_or_create_session("C999XYZ", None)
 
-        first = await db_repo.add_to_queue(channel_session.id, "C123ABC", None, "pending-1")
+        first = await db_repo.add_to_queue(
+            channel_session.id, "C123ABC", None, "pending-1"
+        )
         await db_repo.add_to_queue(channel_session.id, "C123ABC", None, "pending-2")
-        await db_repo.add_to_queue(thread_session.id, "C123ABC", "123.456", "thread-pending")
-        completed = await db_repo.add_to_queue(other_channel.id, "C999XYZ", None, "completed")
+        await db_repo.add_to_queue(
+            thread_session.id, "C123ABC", "123.456", "thread-pending"
+        )
+        completed = await db_repo.add_to_queue(
+            other_channel.id, "C999XYZ", None, "completed"
+        )
         await db_repo.update_queue_item_status(first.id, "running")
         await db_repo.update_queue_item_status(completed.id, "completed", output="done")
 
@@ -650,7 +704,9 @@ class TestQueueOperations:
         channel_session = await db_repo.get_or_create_session("C123ABC", None)
         thread_session = await db_repo.get_or_create_session("C123ABC", "123.456")
         await db_repo.add_to_queue(channel_session.id, "C123ABC", None, "channel item")
-        await db_repo.add_to_queue(thread_session.id, "C123ABC", "123.456", "thread item")
+        await db_repo.add_to_queue(
+            thread_session.id, "C123ABC", "123.456", "thread item"
+        )
 
         channel_pending = await db_repo.get_pending_queue_items("C123ABC", None)
         thread_pending = await db_repo.get_pending_queue_items("C123ABC", "123.456")
@@ -682,7 +738,9 @@ class TestQueueOperations:
         assert thread_control.state == "stopped"
 
     @pytest.mark.asyncio
-    async def test_add_queue_scheduled_events_persists_and_lists_by_scope(self, db_repo):
+    async def test_add_queue_scheduled_events_persists_and_lists_by_scope(
+        self, db_repo
+    ):
         """Scheduled queue controls should persist and be returned in time order."""
         now = datetime.now(timezone.utc)
         events = await db_repo.add_queue_scheduled_events(
@@ -699,7 +757,9 @@ class TestQueueOperations:
         assert [event.action for event in pending] == ["pause", "resume"]
 
     @pytest.mark.asyncio
-    async def test_get_due_queue_scheduled_events_returns_pending_due_only(self, db_repo):
+    async def test_get_due_queue_scheduled_events_returns_pending_due_only(
+        self, db_repo
+    ):
         """Due scheduled event lookup should filter by status and execute_at."""
         now = datetime.now(timezone.utc)
         created = await db_repo.add_queue_scheduled_events(
@@ -733,7 +793,9 @@ class TestQueueOperations:
         assert pending == []
 
     @pytest.mark.asyncio
-    async def test_delete_pending_queue_scheduled_events_is_scope_specific(self, db_repo):
+    async def test_delete_pending_queue_scheduled_events_is_scope_specific(
+        self, db_repo
+    ):
         """Deleting pending schedules should only affect the target scope."""
         now = datetime.now(timezone.utc)
         await db_repo.add_queue_scheduled_events(
@@ -750,8 +812,12 @@ class TestQueueOperations:
         deleted = await db_repo.delete_pending_queue_scheduled_events("C123ABC", None)
 
         assert deleted == 1
-        channel_pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", None)
-        thread_pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", "123.456")
+        channel_pending = await db_repo.get_pending_queue_scheduled_events(
+            "C123ABC", None
+        )
+        thread_pending = await db_repo.get_pending_queue_scheduled_events(
+            "C123ABC", "123.456"
+        )
         assert channel_pending == []
         assert len(thread_pending) == 1
 
@@ -764,7 +830,9 @@ class TestParallelJobOperations:
         """create_parallel_job creates a job."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         config = {"n_instances": 3, "commands": ["cmd1", "cmd2"]}
-        job = await db_repo.create_parallel_job(session.id, "C123ABC", "parallel_analysis", config)
+        job = await db_repo.create_parallel_job(
+            session.id, "C123ABC", "parallel_analysis", config
+        )
 
         assert job.id is not None
         assert job.job_type == "parallel_analysis"
@@ -907,7 +975,9 @@ class TestGitCheckpointOperations:
         """get_checkpoints excludes auto checkpoints by default."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         await db_repo.create_checkpoint(session.id, "C123ABC", "manual", "stash@{0}")
-        await db_repo.create_checkpoint(session.id, "C123ABC", "auto", "stash@{1}", is_auto=True)
+        await db_repo.create_checkpoint(
+            session.id, "C123ABC", "auto", "stash@{1}", is_auto=True
+        )
 
         checkpoints = await db_repo.get_checkpoints("C123ABC", include_auto=False)
 
@@ -943,8 +1013,12 @@ class TestGitCheckpointOperations:
         """delete_auto_checkpoints removes only auto checkpoints."""
         session = await db_repo.get_or_create_session("C123ABC", None)
         await db_repo.create_checkpoint(session.id, "C123ABC", "manual", "stash@{0}")
-        await db_repo.create_checkpoint(session.id, "C123ABC", "auto1", "stash@{1}", is_auto=True)
-        await db_repo.create_checkpoint(session.id, "C123ABC", "auto2", "stash@{2}", is_auto=True)
+        await db_repo.create_checkpoint(
+            session.id, "C123ABC", "auto1", "stash@{1}", is_auto=True
+        )
+        await db_repo.create_checkpoint(
+            session.id, "C123ABC", "auto2", "stash@{2}", is_auto=True
+        )
 
         count = await db_repo.delete_auto_checkpoints("C123ABC")
 

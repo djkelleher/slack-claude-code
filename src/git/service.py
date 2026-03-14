@@ -66,7 +66,9 @@ class GitService:
         if len(message) > 10000:
             raise GitError("Commit message too long (max 10000 characters)")
 
-    async def _run_git_command(self, working_directory: str, *args: str) -> tuple[str, str, int]:
+    async def _run_git_command(
+        self, working_directory: str, *args: str
+    ) -> tuple[str, str, int]:
         """Run a git command and return (stdout, stderr, returncode)."""
         self._validate_working_directory(working_directory)
         process = None
@@ -190,7 +192,9 @@ class GitService:
         if staged:
             args.append("--staged")
 
-        stdout, stderr, returncode = await self._run_git_command(working_directory, *args)
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, *args
+        )
 
         if returncode != 0:
             raise GitError(f"Git diff failed: {stderr}")
@@ -200,7 +204,10 @@ class GitService:
 
         # Truncate if diff is too large
         if len(stdout) > max_size:
-            return stdout[:max_size] + f"\n\n... (diff truncated, {len(stdout)} bytes total)"
+            return (
+                stdout[:max_size]
+                + f"\n\n... (diff truncated, {len(stdout)} bytes total)"
+            )
 
         return stdout
 
@@ -228,7 +235,10 @@ class GitService:
         stash_ref = "stash@{0}"
 
         return Checkpoint(
-            name=name, stash_ref=stash_ref, message=stash_message, description=description
+            name=name,
+            stash_ref=stash_ref,
+            message=stash_message,
+            description=description,
         )
 
     async def restore_checkpoint(self, working_directory: str, stash_ref: str) -> bool:
@@ -245,7 +255,9 @@ class GitService:
 
         return True
 
-    async def undo_changes(self, working_directory: str, files: Optional[list[str]] = None) -> bool:
+    async def undo_changes(
+        self, working_directory: str, files: Optional[list[str]] = None
+    ) -> bool:
         """Undo uncommitted changes."""
         if not await self.validate_git_repo(working_directory):
             raise GitError("Not a git repository")
@@ -256,7 +268,9 @@ class GitService:
         else:
             args.append(".")
 
-        stdout, stderr, returncode = await self._run_git_command(working_directory, *args)
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, *args
+        )
 
         if returncode != 0:
             raise GitError(f"Failed to undo changes: {stderr}")
@@ -279,7 +293,9 @@ class GitService:
         # Stage files if specified
         if files:
             add_args = ["add"] + files
-            _, stderr, returncode = await self._run_git_command(working_directory, *add_args)
+            _, stderr, returncode = await self._run_git_command(
+                working_directory, *add_args
+            )
             if returncode != 0:
                 raise GitError(f"Failed to stage files: {stderr}")
 
@@ -313,7 +329,9 @@ class GitService:
         else:
             args = ["branch", branch_name]
 
-        stdout, stderr, returncode = await self._run_git_command(working_directory, *args)
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, *args
+        )
 
         if returncode != 0:
             raise GitError(f"Failed to create branch: {stderr}")
@@ -342,7 +360,9 @@ class GitService:
         if not await self.validate_git_repo(working_directory):
             raise GitError("Not a git repository")
 
-        stdout, stderr, returncode = await self._run_git_command(working_directory, "branch")
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "branch"
+        )
 
         if returncode != 0:
             raise GitError(f"Failed to get branches: {stderr}")
@@ -529,7 +549,7 @@ class GitService:
         str
             Absolute path to the new worktree directory.
         """
-        await self._validate_branch_name_with_git(working_directory, branch_name)
+        self._validate_branch_name(branch_name)
 
         main_root = await self.get_main_worktree(working_directory)
         worktree_base = main_root + "-worktrees"
@@ -537,6 +557,8 @@ class GitService:
 
         if Path(worktree_path).exists():
             raise GitError(f"Worktree directory already exists: {worktree_path}")
+
+        await self._validate_branch_name_with_git(working_directory, branch_name)
 
         # Create the worktrees base directory if needed
         Path(worktree_base).mkdir(parents=True, exist_ok=True)
@@ -554,7 +576,9 @@ class GitService:
             if from_ref:
                 args.append(from_ref)
 
-        stdout, stderr, returncode = await self._run_git_command(working_directory, *args)
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, *args
+        )
         if returncode != 0:
             raise GitError(f"Failed to create worktree: {stderr}")
 
@@ -586,13 +610,17 @@ class GitService:
         if force:
             args.append("--force")
 
-        stdout, stderr, returncode = await self._run_git_command(working_directory, *args)
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, *args
+        )
         if returncode != 0:
             raise GitError(f"Failed to remove worktree: {stderr}")
 
         return True
 
-    async def prune_worktrees(self, working_directory: str, dry_run: bool = False) -> str:
+    async def prune_worktrees(
+        self, working_directory: str, dry_run: bool = False
+    ) -> str:
         """Prune stale worktree administrative files."""
         if not await self.validate_git_repo(working_directory):
             raise GitError("Not a git repository")
@@ -601,7 +629,9 @@ class GitService:
         if dry_run:
             args.append("--dry-run")
 
-        stdout, stderr, returncode = await self._run_git_command(working_directory, *args)
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, *args
+        )
         if returncode != 0:
             raise GitError(f"Failed to prune worktrees: {stderr}")
         return stdout or "No stale worktrees found."
@@ -621,7 +651,9 @@ class GitService:
             raise GitError(f"Failed to delete branch: {stderr}")
         return True
 
-    async def merge_branch(self, working_directory: str, branch_name: str) -> tuple[bool, str]:
+    async def merge_branch(
+        self, working_directory: str, branch_name: str
+    ) -> tuple[bool, str]:
         """Merge a branch into the current branch.
 
         Parameters
