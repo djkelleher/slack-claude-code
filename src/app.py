@@ -24,17 +24,14 @@ from slack_bolt.async_app import AsyncApp
 from slack_sdk.errors import SlackApiError
 
 from src.approval.plan_manager import PlanApprovalManager
-from src.claude.sdk_executor import SubprocessExecutor as ClaudeExecutor
+from src.claude.subprocess_executor import SubprocessExecutor as ClaudeExecutor
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
 from src.config import config, get_backend_for_model
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
-from src.handlers.claude.queue import (
-    ensure_queue_processor,
-    ensure_queue_schedule_dispatcher,
-)
+from src.handlers.claude.queue import ensure_queue_processor, ensure_queue_schedule_dispatcher
 from src.handlers.execution_runtime import execute_prompt_with_runtime
 from src.question.manager import QuestionManager
 from src.tasks.queue_plan import (
@@ -520,12 +517,12 @@ async def _route_claude_message_to_active_execution_or_queue(
     prompt: str,
     logger,
 ) -> bool:
-    """Route a Claude message to an active execution, or queue on steer failure.
+    """Route a Claude message to queue when an execution is already active in scope.
 
     Returns
     -------
     bool
-        True when the message was handled by steer or queue fallback, False when no
+        True when the message was handled by queue fallback, False when no
         active execution exists and normal execution should continue.
     """
     session_scope = build_session_scope(channel_id, thread_ts)
@@ -535,48 +532,6 @@ async def _route_claude_message_to_active_execution_or_queue(
     cmd_history = await deps.db.add_command(session.id, prompt)
     await deps.db.update_command_status(cmd_history.id, "running")
 
-    steer_error: str | None = None
-    steer_result = None
-    try:
-        steer_result = await deps.executor.steer_active_execution(
-            session_scope=session_scope,
-            text=prompt,
-        )
-    except Exception as e:
-        steer_error = str(e)
-        logger.error(
-            f"Failed to steer active Claude execution in scope {session_scope}: {steer_error}"
-        )
-
-    if steer_result and steer_result.success:
-        await deps.db.update_command_status(
-            cmd_history.id,
-            "completed",
-            output=(
-                "Routed to active Claude execution via SDK interrupt+streamed input."
-                f" session_id={steer_result.session_id or 'unknown'}"
-            ),
-        )
-        await client.chat_postMessage(
-            channel=channel_id,
-            thread_ts=thread_ts,
-            text="Message merged into active Claude execution.",
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": (
-                            ":compass: Routed your message to the active Claude run "
-                            "using SDK `interrupt` + streamed follow-up input."
-                        ),
-                    },
-                }
-            ],
-        )
-        return True
-
-    steer_error = steer_error or (steer_result.error if steer_result else "unknown error")
     try:
         queued_item = await deps.db.add_to_queue(
             session_id=session.id,
@@ -594,18 +549,17 @@ async def _route_claude_message_to_active_execution_or_queue(
             cmd_history.id,
             "failed",
             output=(
-                "Claude steer failed and queue fallback failed."
-                f" steer_error={steer_error} queue_error={queue_error}"
+                "Active Claude execution detected but queue fallback failed."
+                f" queue_error={queue_error}"
             ),
             error_message=queue_error,
         )
         await client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
-            text="Failed to queue message after Claude steer failure.",
+            text="Failed to queue message while Claude run is active.",
             blocks=error_message(
-                "Active Claude run could not be steered and queue fallback failed.\n"
-                f"steer_error: {steer_error}\n"
+                "Active Claude execution is already running and auto-queue failed.\n"
                 f"queue_error: {queue_error}"
             ),
         )
@@ -614,7 +568,10 @@ async def _route_claude_message_to_active_execution_or_queue(
     await deps.db.update_command_status(
         cmd_history.id,
         "completed",
-        output=(f"Claude steer failed ({steer_error}). " f"Auto-queued item #{queued_item.id}."),
+        output=(
+            "Active Claude execution detected."
+            f" Auto-queued item #{queued_item.id}."
+        ),
     )
     await ensure_queue_processor(
         channel_id=channel_id,
@@ -626,15 +583,15 @@ async def _route_claude_message_to_active_execution_or_queue(
     await client.chat_postMessage(
         channel=channel_id,
         thread_ts=thread_ts,
-        text=f"Claude steer unavailable; queued message as item #{queued_item.id}.",
+        text=f"Claude run active; queued message as item #{queued_item.id}.",
         blocks=[
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        ":inbox_tray: Active Claude run is busy and steering failed.\n"
-                        f"Queued as item *#{queued_item.id}* in this session scope."
+                        ":inbox_tray: A Claude run is already active in this session scope.\n"
+                        f"Queued as item *#{queued_item.id}*."
                     ),
                 },
             }

@@ -2,7 +2,7 @@
 
 from slack_bolt.async_app import AsyncApp
 
-from src.claude.sdk_executor import SubprocessExecutor as ClaudeExecutor
+from src.claude.subprocess_executor import SubprocessExecutor as ClaudeExecutor
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
 from src.database.repository import DatabaseRepository
 

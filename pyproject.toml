@@ -24,7 +24,6 @@ aiofiles = "^24.1.0"
 loguru = "^0.7.0"
 cryptography = "^44.0.0"
 PyYAML = "^6.0"
-claude-code-sdk = "^0.0.25"
 
 
 [tool.poetry.group.dev.dependencies]
