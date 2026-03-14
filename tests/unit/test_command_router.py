@@ -191,7 +191,7 @@ class TestCommandRouter:
 
     @pytest.mark.asyncio
     async def test_execute_for_session_codex_plan_mode_passes_permission_mode(self):
-        """Codex plan mode keeps original prompt and forwards permission mode."""
+        """Codex plan mode augments prompt format guidance and forwards permission mode."""
         deps = SimpleNamespace(
             db=SimpleNamespace(
                 update_session_claude_id=AsyncMock(), update_session_codex_id=AsyncMock()
@@ -225,7 +225,8 @@ class TestCommandRouter:
         )
 
         kwargs = deps.codex_executor.execute.await_args.kwargs
-        assert kwargs["prompt"] == "Implement feature"
+        assert "Implement feature" in kwargs["prompt"]
+        assert "PLAN_STATUS: READY" in kwargs["prompt"]
         assert kwargs["permission_mode"] == "plan"
 
     @pytest.mark.asyncio
@@ -274,7 +275,77 @@ class TestCommandRouter:
                 user_id="U123",
             )
 
+        assert deps.codex_executor.execute.await_count == 2
         mock_request_approval.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_codex_plan_mode_retries_with_canonical_format_and_requests_approval(self):
+        """Non-detected plan responses should trigger one canonical-format retry."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock()),
+        )
+
+        first_response = SimpleNamespace(
+            session_id="codex-new",
+            success=True,
+            output=(
+                "I'm ready to implement it end-to-end, but I'm currently locked in Plan Mode. "
+                "Switch to default to proceed."
+            ),
+        )
+        second_response = SimpleNamespace(
+            session_id="codex-new",
+            success=True,
+            output=(
+                "PLAN_STATUS: READY\n"
+                "# Implementation Plan\n"
+                "## Steps\n"
+                "- Gather requirements\n"
+                "- Implement changes\n"
+                "- Validate behavior\n"
+                "## Risks\n"
+                "- Scope drift\n"
+                "## Test Plan\n"
+                "- Run unit tests\n"
+            ),
+        )
+        deps.codex_executor.execute = AsyncMock(side_effect=[first_response, second_response])
+
+        session = Session(
+            id=16,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            permission_mode="plan",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+
+        with patch(
+            "src.handlers.command_router.PlanApprovalManager.request_approval",
+            new=AsyncMock(return_value=False),
+        ) as mock_request_approval:
+            await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="Ship this",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-5b",
+                slack_client=SimpleNamespace(),
+                user_id="U123",
+            )
+
+        assert deps.codex_executor.execute.await_count == 2
+        mock_request_approval.assert_awaited_once()
+        approval_kwargs = mock_request_approval.await_args.kwargs
+        assert approval_kwargs["plan_content"].startswith("PLAN_STATUS: READY")
 
     @pytest.mark.asyncio
     async def test_codex_plan_mode_namespaces_tool_activity_ids_per_turn(self):

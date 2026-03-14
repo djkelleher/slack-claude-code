@@ -6,6 +6,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from loguru import logger as app_logger
+
 from src.approval.handler import PermissionManager
 from src.approval.plan_manager import PlanApprovalManager
 from src.codex.approval_bridge import (
@@ -145,6 +147,61 @@ def _build_claude_plan_prompt(
         "exactly:\n"
         "Created Plan: <full path to plan file>]"
     )
+
+
+def _build_codex_plan_prompt(prompt: str) -> str:
+    """Append deterministic output requirements for Codex plan mode."""
+    return (
+        f"{prompt}\n\n"
+        "[Plan mode requirements:\n"
+        "Respond with a concrete implementation plan only (no code changes).\n"
+        "Use this exact format:\n"
+        "PLAN_STATUS: READY\n"
+        "# Implementation Plan\n"
+        "## Steps\n"
+        "## Risks\n"
+        "## Test Plan\n"
+        "If required context is missing, ask clarifying questions first via request_user_input. "
+        "After answers are provided, return the plan in this exact format.]"
+    )
+
+
+def _extract_codex_plan_content(text: Optional[str]) -> Optional[str]:
+    """Extract/validate Codex plan output produced with deterministic markers."""
+    if not text:
+        return None
+
+    match = re.search(r"(?im)^\s*PLAN_STATUS:\s*READY\s*$", text)
+    if not match:
+        return None
+
+    plan_content = text[match.start() :].strip()
+    lowered = plan_content.lower()
+
+    required_sections = (
+        "# implementation plan",
+        "## steps",
+        "## risks",
+        "## test plan",
+    )
+    if not all(section in lowered for section in required_sections):
+        return None
+
+    step_count = len(re.findall(r"(?im)^\s*(?:\d+\.\s+|\d+\)\s+|[-*]\s+)", plan_content))
+    if step_count < 3:
+        return None
+
+    return plan_content
+
+
+def _detect_codex_plan_content(text: Optional[str]) -> tuple[Optional[str], str]:
+    """Detect Codex plan content with marker-first, heuristic-fallback strategy."""
+    marked_plan = _extract_codex_plan_content(text)
+    if marked_plan:
+        return marked_plan, "marker"
+    if is_likely_plan_content(text):
+        return (text or "").strip(), "heuristic"
+    return None, "none"
 
 
 async def _execute_codex_backend(
@@ -308,8 +365,7 @@ async def _execute_codex_backend(
         if auto_approve_permissions:
             if logger:
                 logger.info(
-                    f"Auto-approving Codex permission request {method} "
-                    "for queue-style execution"
+                    f"Auto-approving Codex permission request {method} " "for queue-style execution"
                 )
             return approval_payload_from_decision(method, True)
 
@@ -354,7 +410,11 @@ async def _execute_codex_backend(
         return result
 
     initial_resume_session_id = await resolve_initial_resume_session_id()
-    result = await run_codex_turn(prompt, initial_resume_session_id)
+    first_prompt = prompt
+    if session.permission_mode == "plan":
+        first_prompt = _build_codex_plan_prompt(prompt)
+
+    result = await run_codex_turn(first_prompt, initial_resume_session_id)
 
     if question_limit_reached:
         result.output = (
@@ -366,46 +426,78 @@ async def _execute_codex_backend(
         await QuestionManager.cancel(pending_question.question_id)
         pending_question = None
 
-    if (
-        session.permission_mode == "plan"
-        and result.success
-        and is_likely_plan_content(result.output)
-        and slack_client is not None
-    ):
-        if logger:
-            logger.info("Codex plan response ready, requesting user approval")
-        approved = await PlanApprovalManager.request_approval(
-            session_id=str(session.id),
-            channel_id=channel_id,
-            plan_content=result.output,
-            claude_session_id=result.session_id or "",
-            prompt=prompt,
-            user_id=user_id,
-            thread_ts=thread_ts,
-            slack_client=slack_client,
-            plan_file_path=None,
-        )
+    if session.permission_mode == "plan" and result.success and slack_client is not None:
+        plan_content, plan_detection_source = _detect_codex_plan_content(result.output)
 
-        if approved:
+        if not plan_content and result.session_id:
+            retry_log = "Codex plan response not detected; requesting canonical plan-format retry"
+            app_logger.info(retry_log)
+            if logger:
+                logger.info(retry_log)
             codex_turn_index += 1
             tool_id_namespace = f"turn{codex_turn_index}:"
-            await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
-            session.permission_mode = config.DEFAULT_BYPASS_MODE
-            if on_plan_approved:
-                replacement_on_chunk = await on_plan_approved()
-                if replacement_on_chunk is not None:
-                    on_chunk = replacement_on_chunk
-
-            result = await run_codex_turn(
-                "Plan approved. Please proceed with the implementation.",
-                result.session_id,
+            retry_prompt = (
+                "You are still in plan mode. Provide the implementation plan now in this exact "
+                "format:\n"
+                "PLAN_STATUS: READY\n"
+                "# Implementation Plan\n"
+                "## Steps\n"
+                "## Risks\n"
+                "## Test Plan\n"
+                "Return only the plan."
             )
+            result = await run_codex_turn(retry_prompt, result.session_id)
+            if result.success:
+                plan_content, plan_detection_source = _detect_codex_plan_content(result.output)
+
+        if plan_content and result.success:
+            approval_log = (
+                f"Codex plan response ready (source={plan_detection_source}); "
+                "requesting user approval"
+            )
+            app_logger.info(approval_log)
+            if logger:
+                logger.info(approval_log)
+            approved = await PlanApprovalManager.request_approval(
+                session_id=str(session.id),
+                channel_id=channel_id,
+                plan_content=plan_content,
+                claude_session_id=result.session_id or "",
+                prompt=prompt,
+                user_id=user_id,
+                thread_ts=thread_ts,
+                slack_client=slack_client,
+                plan_file_path=None,
+            )
+
+            if approved:
+                codex_turn_index += 1
+                tool_id_namespace = f"turn{codex_turn_index}:"
+                await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
+                session.permission_mode = config.DEFAULT_BYPASS_MODE
+                if on_plan_approved:
+                    replacement_on_chunk = await on_plan_approved()
+                    if replacement_on_chunk is not None:
+                        on_chunk = replacement_on_chunk
+
+                result = await run_codex_turn(
+                    "Plan approved. Please proceed with the implementation.",
+                    result.session_id,
+                )
+            else:
+                result.success = False
+                result.output = (
+                    result.output
+                    + "\n\n_Plan not approved. Staying in plan mode until you provide feedback._"
+                ).strip()
         else:
-            result.success = False
-            result.output = (
-                result.output
-                + "\n\n_Plan not approved. Staying in plan mode until you provide feedback._"
-            ).strip()
+            skipped_log = (
+                "Codex plan mode response did not produce a detectable plan after retry; "
+                "skipping approval prompt"
+            )
+            app_logger.warning(skipped_log)
+            if logger:
+                logger.warning(skipped_log)
 
     return result
 
