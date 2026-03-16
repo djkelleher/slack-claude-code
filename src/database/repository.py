@@ -33,6 +33,9 @@ class DatabaseRepository:
                        working_directory_override, parallel_group_id, parallel_limit,
                        status, output, error_message, position, message_ts,
                        created_at, started_at, completed_at"""
+    _SESSION_SELECT = """id, channel_id, thread_ts, working_directory,
+                      claude_session_id, permission_mode, created_at, last_active,
+                      model, added_dirs, codex_session_id, sandbox_mode, approval_mode"""
     _QUEUE_SCHEDULED_EVENT_SELECT = """id, channel_id, thread_ts, action, execute_at,
                                    status, error_message, created_at, executed_at"""
 
@@ -123,9 +126,7 @@ class DatabaseRepository:
             # Find best existing session for this channel/thread pair.
             # If duplicate NULL-thread rows exist, prefer the most populated one.
             cursor = await db.execute(
-                f"""SELECT id, channel_id, thread_ts, working_directory,
-                          claude_session_id, permission_mode, created_at, last_active,
-                          model, added_dirs, codex_session_id, sandbox_mode, approval_mode
+                f"""SELECT {self._SESSION_SELECT}
                    FROM sessions
                    WHERE {self._SESSION_SCOPE_WHERE}
                    ORDER BY
@@ -149,9 +150,7 @@ class DatabaseRepository:
                 )
                 # Refresh to return DB-normalized values.
                 cursor = await db.execute(
-                    """SELECT id, channel_id, thread_ts, working_directory,
-                              claude_session_id, permission_mode, created_at, last_active,
-                              model, added_dirs, codex_session_id, sandbox_mode, approval_mode
+                    f"""SELECT {self._SESSION_SELECT}
                        FROM sessions
                        WHERE id = ?""",
                     (row[0],),
@@ -221,9 +220,7 @@ class DatabaseRepository:
                 raise RuntimeError(f"Failed to create session for channel {channel_id}")
 
             cursor = await db.execute(
-                """SELECT id, channel_id, thread_ts, working_directory,
-                          claude_session_id, permission_mode, created_at, last_active,
-                          model, added_dirs, codex_session_id, sandbox_mode, approval_mode
+                f"""SELECT {self._SESSION_SELECT}
                    FROM sessions
                    WHERE id = ?""",
                 (session_id,),

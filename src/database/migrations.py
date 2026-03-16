@@ -166,6 +166,17 @@ async def init_database(db_path: str) -> None:
         await _run_migrations(db)
 
 
+async def _add_column_if_missing(
+    db: aiosqlite.Connection, column_names: list[str], column_name: str, ddl: str
+) -> None:
+    """Add a column and commit when it does not already exist."""
+    if column_name in column_names:
+        return
+    await db.execute(ddl)
+    await db.commit()
+    column_names.append(column_name)
+
+
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run any necessary migrations for schema updates."""
     await db.execute(
@@ -197,48 +208,62 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     columns = await cursor.fetchall()
     column_names = [col[1] for col in columns]
 
-    if "model" not in column_names:
-        await db.execute("ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT NULL")
-        await db.commit()
-
-    # Add added_dirs column if it doesn't exist
-    if "added_dirs" not in column_names:
-        await db.execute("ALTER TABLE sessions ADD COLUMN added_dirs TEXT DEFAULT NULL")
-        await db.commit()
-
-    # Add Codex-specific columns if they don't exist
-    if "codex_session_id" not in column_names:
-        await db.execute("ALTER TABLE sessions ADD COLUMN codex_session_id TEXT DEFAULT NULL")
-        await db.commit()
-
-    if "sandbox_mode" not in column_names:
-        await db.execute(
-            "ALTER TABLE sessions ADD COLUMN sandbox_mode TEXT DEFAULT 'workspace-write'"
-        )
-        await db.commit()
-
-    if "approval_mode" not in column_names:
-        await db.execute("ALTER TABLE sessions ADD COLUMN approval_mode TEXT DEFAULT 'on-request'")
-        await db.commit()
+    await _add_column_if_missing(
+        db, column_names, "model", "ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT NULL"
+    )
+    await _add_column_if_missing(
+        db,
+        column_names,
+        "added_dirs",
+        "ALTER TABLE sessions ADD COLUMN added_dirs TEXT DEFAULT NULL",
+    )
+    await _add_column_if_missing(
+        db,
+        column_names,
+        "codex_session_id",
+        "ALTER TABLE sessions ADD COLUMN codex_session_id TEXT DEFAULT NULL",
+    )
+    await _add_column_if_missing(
+        db,
+        column_names,
+        "sandbox_mode",
+        "ALTER TABLE sessions ADD COLUMN sandbox_mode TEXT DEFAULT 'workspace-write'",
+    )
+    await _add_column_if_missing(
+        db,
+        column_names,
+        "approval_mode",
+        "ALTER TABLE sessions ADD COLUMN approval_mode TEXT DEFAULT 'on-request'",
+    )
 
     # Add queue_items.thread_ts for thread-scoped queueing
     queue_cursor = await db.execute("PRAGMA table_info(queue_items)")
     queue_columns = await queue_cursor.fetchall()
     queue_column_names = [col[1] for col in queue_columns]
-    if "thread_ts" not in queue_column_names:
-        await db.execute("ALTER TABLE queue_items ADD COLUMN thread_ts TEXT DEFAULT NULL")
-        await db.commit()
-    if "working_directory_override" not in queue_column_names:
-        await db.execute(
-            "ALTER TABLE queue_items ADD COLUMN working_directory_override TEXT DEFAULT NULL"
-        )
-        await db.commit()
-    if "parallel_group_id" not in queue_column_names:
-        await db.execute("ALTER TABLE queue_items ADD COLUMN parallel_group_id TEXT DEFAULT NULL")
-        await db.commit()
-    if "parallel_limit" not in queue_column_names:
-        await db.execute("ALTER TABLE queue_items ADD COLUMN parallel_limit INTEGER DEFAULT NULL")
-        await db.commit()
+    await _add_column_if_missing(
+        db,
+        queue_column_names,
+        "thread_ts",
+        "ALTER TABLE queue_items ADD COLUMN thread_ts TEXT DEFAULT NULL",
+    )
+    await _add_column_if_missing(
+        db,
+        queue_column_names,
+        "working_directory_override",
+        "ALTER TABLE queue_items ADD COLUMN working_directory_override TEXT DEFAULT NULL",
+    )
+    await _add_column_if_missing(
+        db,
+        queue_column_names,
+        "parallel_group_id",
+        "ALTER TABLE queue_items ADD COLUMN parallel_group_id TEXT DEFAULT NULL",
+    )
+    await _add_column_if_missing(
+        db,
+        queue_column_names,
+        "parallel_limit",
+        "ALTER TABLE queue_items ADD COLUMN parallel_limit INTEGER DEFAULT NULL",
+    )
 
     # Ensure queue scope indexes exist for channel+thread isolation
     await db.execute(

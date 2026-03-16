@@ -1299,49 +1299,51 @@ async def test_q_add_structured_plan_persists_scheduled_controls():
     handler = app.handlers["/q"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
     scheduled_time = datetime.now(timezone.utc) + timedelta(minutes=30)
-    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
-        with patch(
+    with (
+        patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True),
+        patch(
             "src.handlers.claude.queue.parse_queue_plan_submission",
-                return_value=(
-                    SimpleNamespace(
-                        replace_pending=True,
-                        directive_explicit=False,
-                        scheduled_controls=[
-                            SimpleNamespace(action="pause", execute_at=scheduled_time),
-                        ],
-                    ),
-                    "next",
-            ),
-        ):
-            with patch(
-                "src.handlers.claude.queue.materialize_queue_plan_text",
-                new=AsyncMock(
-                    return_value=[
-                        SimpleNamespace(
-                            prompt="next",
-                            working_directory_override=None,
-                            parallel_group_id=None,
-                            parallel_limit=None,
-                        )
-                    ]
+            return_value=(
+                SimpleNamespace(
+                    replace_pending=True,
+                    directive_explicit=False,
+                    scheduled_controls=[
+                        SimpleNamespace(action="pause", execute_at=scheduled_time),
+                    ],
                 ),
-            ):
-                with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
-                    with patch(
-                        "src.handlers.claude.queue.ensure_queue_schedule_dispatcher",
-                        new=AsyncMock(),
-                    ) as mock_ensure_scheduler:
-                        await handler(
-                            ack=AsyncMock(),
-                            command={
-                                "channel_id": "C123",
-                                "user_id": "U123",
-                                "text": "***at 19:30 pause\nnext",
-                                "command": "/q",
-                            },
-                            client=client,
-                            logger=MagicMock(),
-                        )
+                "next",
+            ),
+        ),
+        patch(
+            "src.handlers.claude.queue.materialize_queue_plan_text",
+            new=AsyncMock(
+                return_value=[
+                    SimpleNamespace(
+                        prompt="next",
+                        working_directory_override=None,
+                        parallel_group_id=None,
+                        parallel_limit=None,
+                    )
+                ]
+            ),
+        ),
+        patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()),
+        patch(
+            "src.handlers.claude.queue.ensure_queue_schedule_dispatcher",
+            new=AsyncMock(),
+        ) as mock_ensure_scheduler,
+    ):
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "***at 19:30 pause\nnext",
+                "command": "/q",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
 
     deps.db.add_queue_scheduled_events.assert_awaited_once_with(
         channel_id="C123",
