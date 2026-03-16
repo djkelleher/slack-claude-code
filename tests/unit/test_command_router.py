@@ -331,7 +331,7 @@ class TestCommandRouter:
             "src.handlers.command_router.PlanApprovalManager.request_approval",
             new=AsyncMock(return_value=False),
         ) as mock_request_approval:
-            await execute_for_session(
+            routed = await execute_for_session(
                 deps=deps,
                 session=session,
                 prompt="Ship this",
@@ -346,6 +346,11 @@ class TestCommandRouter:
         mock_request_approval.assert_awaited_once()
         approval_kwargs = mock_request_approval.await_args.kwargs
         assert approval_kwargs["plan_content"].startswith("PLAN_STATUS: READY")
+        assert (
+            routed.result.output
+            == "_Plan not approved. Staying in plan mode until you provide feedback._"
+        )
+        assert "PLAN_STATUS: READY" not in routed.result.output
 
     @pytest.mark.asyncio
     async def test_codex_plan_mode_namespaces_tool_activity_ids_per_turn(self):
@@ -1007,6 +1012,65 @@ class TestCommandRouter:
         assert prompts[1] == "Use fast path (Recommended)"
         assert routed.result.success is True
         assert routed.result.output == "Done."
+
+    @pytest.mark.asyncio
+    async def test_claude_plan_rejection_does_not_replay_plan_output(self):
+        """Rejected Claude plans should return a concise status without duplicating plan text."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+                get_or_create_session=AsyncMock(return_value=Session(codex_session_id=None)),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+        )
+        deps.executor.execute.return_value = SimpleNamespace(
+            session_id="claude-new",
+            success=True,
+            output=(
+                "# Implementation Plan\n"
+                "1. Scope work.\n"
+                "2. Implement update.\n"
+                "3. Run tests.\n\n"
+                "## Test Plan\n"
+                "- pytest\n"
+            ),
+            has_pending_question=False,
+            has_pending_plan_approval=True,
+            plan_subagent_result="",
+        )
+
+        session = Session(
+            id=23,
+            model="opus",
+            working_directory="/tmp",
+            claude_session_id="claude-old",
+            permission_mode="plan",
+        )
+
+        with patch(
+            "src.handlers.command_router.PlanApprovalManager.request_approval",
+            new=AsyncMock(return_value=False),
+        ):
+            routed = await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="Ship this",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-claude-plan-reject",
+                slack_client=SimpleNamespace(),
+                user_id="U123",
+            )
+
+        assert routed.result.success is False
+        assert (
+            routed.result.output
+            == "_Plan not approved. Staying in plan mode until you provide feedback._"
+        )
+        assert "# Implementation Plan" not in routed.result.output
 
     @pytest.mark.asyncio
     async def test_codex_approval_resume_can_swap_streaming_callback(self):

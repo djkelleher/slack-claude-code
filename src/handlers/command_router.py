@@ -486,10 +486,7 @@ async def _execute_codex_backend(
                 )
             else:
                 result.success = False
-                result.output = (
-                    result.output
-                    + "\n\n_Plan not approved. Staying in plan mode until you provide feedback._"
-                ).strip()
+                result.output = "_Plan not approved. Staying in plan mode until you provide feedback._"
         else:
             skipped_log = (
                 "Codex plan mode response did not produce a detectable plan after retry; "
@@ -694,10 +691,7 @@ async def _execute_claude_backend(
             )
         else:
             result.success = False
-            result.output = (
-                (result.output or accumulated_context)
-                + "\n\n_Plan not approved. Staying in plan mode until you provide feedback._"
-            ).strip()
+            result.output = "_Plan not approved. Staying in plan mode until you provide feedback._"
 
     return result
 
