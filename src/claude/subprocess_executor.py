@@ -185,15 +185,17 @@ class SubprocessExecutor(ProcessExecutorBase):
             logger.info(f"{log_prefix}Using --model {effective_model}")
 
         # Determine permission mode: explicit > config default
-        mode = permission_mode or config.CLAUDE_PERMISSION_MODE
-        if mode in config.VALID_PERMISSION_MODES:
-            cmd.extend(["--permission-mode", mode])
-            logger.info(f"{log_prefix}Using --permission-mode {mode}")
+        requested_mode = permission_mode or config.CLAUDE_PERMISSION_MODE
+        if requested_mode in config.VALID_PERMISSION_MODES:
+            effective_mode = requested_mode
+            cmd.extend(["--permission-mode", effective_mode])
+            logger.info(f"{log_prefix}Using --permission-mode {effective_mode}")
         else:
             logger.warning(
-                f"{log_prefix}Invalid permission mode: {mode}, using {config.DEFAULT_BYPASS_MODE}"
+                f"{log_prefix}Invalid permission mode: {requested_mode}, using {config.DEFAULT_BYPASS_MODE}"
             )
-            cmd.extend(["--permission-mode", config.DEFAULT_BYPASS_MODE])
+            effective_mode = config.DEFAULT_BYPASS_MODE
+            cmd.extend(["--permission-mode", effective_mode])
 
         # Add allowed tools restriction if configured
         if config.ALLOWED_TOOLS:
@@ -374,18 +376,19 @@ class SubprocessExecutor(ProcessExecutorBase):
                                         f"{log_prefix}AskUserQuestion detected - will terminate for Slack handling"
                                     )
                                 elif tool_name == "ExitPlanMode":
-                                    state.exit_plan_mode_tool_id = block.get("id")
-                                    # Always set exit_plan_mode_detected when Claude calls
-                                    # ExitPlanMode. Claude calling this tool is definitive
-                                    # evidence that plan mode is active, regardless of what
-                                    # the DB says. The DB mode can be stale after a
-                                    # question-answer cycle resumes the session.
-                                    state.exit_plan_mode_detected = True
-                                    if state.exit_plan_mode_detected_at is None:
-                                        state.exit_plan_mode_detected_at = time.monotonic()
-                                    logger.info(
-                                        f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval"
-                                    )
+                                    if effective_mode == "plan":
+                                        state.exit_plan_mode_tool_id = block.get("id")
+                                        state.exit_plan_mode_detected = True
+                                        if state.exit_plan_mode_detected_at is None:
+                                            state.exit_plan_mode_detected_at = time.monotonic()
+                                        logger.info(
+                                            f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval"
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"{log_prefix}Tool: ExitPlanMode received in non-plan mode "
+                                            f"({effective_mode}); ignoring"
+                                        )
                                 elif tool_name == "Task":
                                     subagent_type = tool_input.get("subagent_type", "")
                                     desc = tool_input.get("description", "")[:50]
