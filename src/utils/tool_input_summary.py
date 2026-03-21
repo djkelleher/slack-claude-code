@@ -32,6 +32,15 @@ def _truncate_text(value: Any, max_len: int) -> str:
     return f"{text[:max_len]}{'...' if len(text) > max_len else ''}"
 
 
+_TRUNCATION_FORMATTERS = {
+    "path": ("truncate_path_length", truncate_path),
+    "cmd": ("truncate_cmd_length", truncate_cmd),
+    "pattern": ("truncate_pattern_length", _truncate_text),
+    "text": ("truncate_text_length", _truncate_text),
+    "url": ("truncate_url_length", _truncate_text),
+}
+
+
 def format_tool_input_summary(
     name: str,
     input_dict: Mapping[str, Any],
@@ -46,25 +55,12 @@ def format_tool_input_summary(
     rule_type = rule["type"]
     keys = rule.get("keys", [])
 
-    if rule_type == "path":
+    if rule_type in _TRUNCATION_FORMATTERS:
+        display_attr, formatter = _TRUNCATION_FORMATTERS[rule_type]
         value = _first_present(input_dict, keys, "?")
-        return f"`{truncate_path(str(value), display.truncate_path_length)}`"
-
-    if rule_type == "cmd":
-        value = _first_present(input_dict, keys, "?")
-        return f"`{truncate_cmd(str(value), display.truncate_cmd_length)}`"
-
-    if rule_type == "pattern":
-        value = _first_present(input_dict, keys, "?")
-        return f"`{_truncate_text(value, display.truncate_pattern_length)}`"
-
-    if rule_type == "text":
-        value = _first_present(input_dict, keys, "?")
-        return f"`{_truncate_text(value, display.truncate_text_length)}`"
-
-    if rule_type == "url":
-        value = _first_present(input_dict, keys, "?")
-        return f"`{_truncate_text(value, display.truncate_url_length)}`"
+        max_len = getattr(display, display_attr)
+        formatted = formatter(str(value), max_len) if formatter is truncate_cmd else formatter(value, max_len)
+        return f"`{formatted}`"
 
     if rule_type == "count":
         value = _first_present(input_dict, keys, [])
