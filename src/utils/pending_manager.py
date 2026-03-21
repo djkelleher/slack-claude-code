@@ -90,17 +90,22 @@ class PendingManager(Generic[T]):
         finally:
             await self.pop(item_id)
 
+    def _cancel_and_remove(self, item_id: str) -> bool:
+        """Cancel an item future if needed and remove it from storage."""
+        item = self._pending.get(item_id)
+        if not item:
+            return False
+
+        future = self._require_future(item)
+        if not future.done():
+            future.cancel()
+        self._pending.pop(item_id, None)
+        return True
+
     async def cancel(self, item_id: str) -> bool:
         """Cancel and remove a pending item by ID."""
         async with self._get_lock():
-            item = self._pending.get(item_id)
-            if not item:
-                return False
-            future = self._require_future(item)
-            if not future.done():
-                future.cancel()
-            self._pending.pop(item_id, None)
-            return True
+            return self._cancel_and_remove(item_id)
 
     async def cancel_for_session(self, session_id: str) -> int:
         """Cancel all pending items for a given session ID."""
@@ -109,12 +114,7 @@ class PendingManager(Generic[T]):
                 item_id for item_id, item in self._pending.items() if item.session_id == session_id
             ]
             for item_id in ids:
-                item = self._pending.get(item_id)
-                if item:
-                    future = self._require_future(item)
-                    if not future.done():
-                        future.cancel()
-                self._pending.pop(item_id, None)
+                self._cancel_and_remove(item_id)
             return len(ids)
 
     async def list(self, session_id: Optional[str] = None) -> list[T]:
