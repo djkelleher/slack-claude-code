@@ -428,6 +428,7 @@ class TestStructuredQueuePlanRouting:
                 ),
                 get_running_queue_items=AsyncMock(return_value=[]),
                 get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="running")),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -472,11 +473,13 @@ class TestStructuredQueuePlanRouting:
                 ("first", None, None, None),
                 ("second", "/repo-worktrees/feature-x", None, None),
             ],
-            replace_pending=True,
+            replace_pending=False,
+            insertion_mode="append",
+            insert_at=None,
         )
         mock_ensure.assert_awaited_once()
         assert (
-            "Queued 2 item(s) from structured plan."
+            "Added 2 item(s) from structured plan."
             in client.chat_postMessage.await_args.kwargs["text"]
         )
 
@@ -524,6 +527,8 @@ class TestStructuredQueuePlanRouting:
             thread_ts="123.456",
             queue_entries=[("next", None, None, None)],
             replace_pending=False,
+            insertion_mode="append",
+            insert_at=None,
         )
 
     @pytest.mark.asyncio
@@ -570,6 +575,8 @@ class TestStructuredQueuePlanRouting:
             thread_ts="123.456",
             queue_entries=[("first", None, None, None)],
             replace_pending=True,
+            insertion_mode="append",
+            insert_at=None,
         )
         assert mock_materialize.await_args.kwargs["text"] == "first"
 
@@ -583,6 +590,7 @@ class TestStructuredQueuePlanRouting:
                 add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=900)]),
                 get_running_queue_items=AsyncMock(return_value=[]),
                 get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="paused")),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -593,6 +601,8 @@ class TestStructuredQueuePlanRouting:
                 return_value=(
                     SimpleNamespace(
                         replace_pending=True,
+                        insertion_mode="append",
+                        insert_at=None,
                         scheduled_controls=[
                             SimpleNamespace(action="pause", execute_at=scheduled_time),
                         ],
@@ -628,6 +638,7 @@ class TestStructuredQueuePlanRouting:
                             )
 
         assert handled is True
+        deps.db.update_queue_control_state.assert_awaited_once_with("C123", "123.456", "paused")
         deps.db.add_queue_scheduled_events.assert_awaited_once_with(
             channel_id="C123",
             thread_ts="123.456",
@@ -644,7 +655,7 @@ class TestStructuredQueuePlanRouting:
                 add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=10, position=10)]),
                 get_running_queue_items=AsyncMock(return_value=[]),
                 get_queue_control=AsyncMock(return_value=SimpleNamespace(state="paused")),
-                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="running")),
+                update_queue_control_state=AsyncMock(),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -675,10 +686,10 @@ class TestStructuredQueuePlanRouting:
                     )
 
         assert handled is True
-        deps.db.update_queue_control_state.assert_awaited_once_with("C123", "123.456", "running")
-        mock_ensure.assert_awaited_once()
+        deps.db.update_queue_control_state.assert_not_awaited()
+        mock_ensure.assert_not_awaited()
         kwargs = client.chat_postMessage.await_args.kwargs
-        assert "Queue is paused" not in kwargs["text"]
+        assert "Queue is paused" in kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_reports_invalid_structured_plan(self):

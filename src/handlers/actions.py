@@ -1232,3 +1232,29 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             display_name=display_name,
             log_prefix="Model",
         )
+
+    @app.action("select_model_menu")
+    async def handle_model_menu_selection(ack, action, body, client, logger):
+        """Handle model selection from static select menu."""
+        await ack()
+
+        selected = action.get("selected_option") or {}
+        model_name = selected.get("value", "")
+        if not model_name:
+            return
+
+        channel_id = body["channel"]["id"]
+        message = body.get("message", {})
+        thread_ts = message.get("thread_ts")
+
+        model_value, display_name = resolve_model_selection_action(model_name)
+        await _set_session_model_and_notify(
+            deps=deps,
+            client=client,
+            logger=logger,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            model_value=model_value,
+            display_name=display_name,
+            log_prefix="Model",
+        )

@@ -103,7 +103,7 @@ async def test_usage_for_codex_session_uses_codex_status_snapshot():
 
 
 @pytest.mark.asyncio
-async def test_usage_for_claude_session_runs_claude_usage_only():
+async def test_usage_for_claude_session_returns_app_native_claude_status():
     app = _FakeApp()
     session = Session(model="sonnet", working_directory="/repo", claude_session_id="claude-1")
     deps = SimpleNamespace(
@@ -157,6 +157,8 @@ async def test_usage_for_claude_session_runs_claude_usage_only():
         logger=MagicMock(),
     )
 
-    deps.executor.execute.assert_awaited_once()
-    assert deps.executor.execute.await_args.kwargs["prompt"] == "/usage"
+    deps.executor.execute.assert_not_awaited()
     deps.codex_executor.account_rate_limits_read.assert_not_awaited()
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Claude usage"
+    assert "Claude Session Status" in kwargs["blocks"][0]["text"]["text"]

@@ -44,6 +44,8 @@ _CLAUDE_MODEL_ALIASES: dict[str, str | None] = {
     "haiku": "haiku",
     "haiku-4.5": "haiku",
     "claude-haiku-4-5": "haiku",
+    "co45m": "claude-opus-4-5-medium",
+    "co46h": "claude-opus-4-6-high",
 }
 
 _CODEX_MODEL_ALIASES: dict[str, str] = {
@@ -55,6 +57,7 @@ _CODEX_MODEL_ALIASES: dict[str, str] = {
     "gpt-5.1-codex-max": "gpt-5.1-codex-max",
     "gpt-5.2": "gpt-5.2",
     "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
+    "g34h": "gpt-3.4-high",
 }
 
 _CLAUDE_DEFAULT_ALIASES: set[str] = {"default", "opus", "claude-opus-4-6"}

@@ -614,9 +614,15 @@ async def _queue_structured_plan_message(
         return False
 
     scheduled_controls: list[QueueScheduledControl] = []
+    replace_pending = False
+    insertion_mode = "append"
+    insert_at = None
     try:
         submission_options, plan_text = parse_queue_plan_submission(prompt)
-        scheduled_controls = submission_options.scheduled_controls
+        replace_pending = bool(getattr(submission_options, "replace_pending", False))
+        insertion_mode = str(getattr(submission_options, "insertion_mode", "append"))
+        insert_at = getattr(submission_options, "insert_at", None)
+        scheduled_controls = list(getattr(submission_options, "scheduled_controls", []))
         materialized_prompts = await materialize_queue_plan_text(
             text=plan_text,
             working_directory=session.working_directory,
@@ -654,8 +660,12 @@ async def _queue_structured_plan_message(
             channel_id=channel_id,
             thread_ts=thread_ts,
             queue_entries=queue_entries,
-            replace_pending=submission_options.replace_pending,
+            replace_pending=replace_pending,
+            insertion_mode=insertion_mode,
+            insert_at=insert_at,
         )
+        if scheduled_controls:
+            await deps.db.update_queue_control_state(channel_id, thread_ts, "paused")
         if scheduled_controls:
             await deps.db.add_queue_scheduled_events(
                 channel_id=channel_id,
@@ -668,11 +678,15 @@ async def _queue_structured_plan_message(
             deps,
             channel_id,
             thread_ts,
-            replace_pending=submission_options.replace_pending,
+            replace_pending=replace_pending and not scheduled_controls,
         )
-        position_offset = len(running)
-        start_position = queued_items[0].position + position_offset
-        end_position = queued_items[-1].position + position_offset
+        if insertion_mode == "prepend":
+            start_position = len(running) + 1
+        elif insertion_mode == "insert" and insert_at is not None:
+            start_position = len(running) + max(1, insert_at)
+        else:
+            start_position = len(running) + 1
+        end_position = start_position + len(queued_items) - 1
 
         if queue_state == "running":
             await ensure_queue_processor(
@@ -706,7 +720,14 @@ async def _queue_structured_plan_message(
     item_count = len(queued_items)
     paused_notice = _queue_state_notice(queue_state)
     scheduled_summary = _scheduled_controls_summary(scheduled_controls)
-    action_verb = "Queued" if submission_options.replace_pending else "Added"
+    if replace_pending:
+        action_verb = "Queued"
+    elif insertion_mode == "prepend":
+        action_verb = "Prepended"
+    elif insertion_mode == "insert":
+        action_verb = "Inserted"
+    else:
+        action_verb = "Added"
     confirmation_text = f"{action_verb} {item_count} item(s) from structured plan."
     if paused_notice:
         confirmation_text = f"{confirmation_text} {paused_notice}"
@@ -968,6 +989,7 @@ async def main():
 
             uploads_dir = _slack_uploads_dir()
             uploads_dir.mkdir(parents=True, exist_ok=True)
+            await deps.db.add_session_dir(channel_id, thread_ts, str(uploads_dir))
 
             for file_info in files:
                 try:

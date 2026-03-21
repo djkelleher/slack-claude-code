@@ -445,7 +445,27 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 )
             return
 
-        await _send_claude_command(ctx, "/usage", deps)
+        added_dirs = await deps.db.get_session_dirs(ctx.channel_id, ctx.thread_ts)
+        current_mode = session.permission_mode or config.CLAUDE_PERMISSION_MODE
+        model_name = model_display_name(normalize_current_model(session.model))
+        summary_lines = [
+            "*Claude Session Status*",
+            f"*Model:* {model_name}",
+            f"*Working directory:* `{session.working_directory}`",
+            f"*Permission mode:* `{current_mode}`",
+            f"*Added directories:* {len(added_dirs)}",
+        ]
+        if session.claude_session_id:
+            summary_lines.append(f"*Session ID:* `{session.claude_session_id}`")
+        summary_lines.append(
+            "_Claude CLI does not currently expose a reliable `/usage` response here, so this view shows the current session/runtime state instead._"
+        )
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text="Claude usage",
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(summary_lines)}}],
+        )
 
     @app.command("/context")
     @slack_command()
@@ -501,13 +521,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 ],
             )
         else:
-            # Show current model and allow selection via buttons
+            # Show current model and allow selection via dropdown
             normalized_current_model = normalize_current_model(session.model)
             current_backend = backend_label_for_model(normalized_current_model)
-
-            # Available models (organized by backend)
-            claude_models = get_claude_model_options()
-            codex_models = get_codex_model_options()
 
             # Get display name for current model
             all_models = get_all_model_options()
@@ -515,8 +531,20 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 (m["display"] for m in all_models if m["value"] == normalized_current_model),
                 model_display_name(normalized_current_model),
             )
+            current_model_id = normalized_current_model or "default"
 
-            # Build button blocks
+            select_options = []
+            initial_option = None
+            for model in all_models:
+                option = {
+                    "text": {"type": "plain_text", "text": model["display"], "emoji": True},
+                    "value": model["name"],
+                    "description": {"type": "plain_text", "text": model["desc"][:75]},
+                }
+                select_options.append(option)
+                if model["value"] == normalized_current_model:
+                    initial_option = option
+
             blocks = [
                 {
                     "type": "section",
@@ -524,89 +552,24 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                         "type": "mrkdwn",
                         "text": (
                             f"*Current Model:* {current_display}\n"
-                            f"*Backend:* {current_backend}\n\nSelect a model:"
+                            f"*Backend:* {current_backend}\n"
+                            f"*Model ID:* `{current_model_id}`\n\nSelect a model:"
                         ),
+                    },
+                    "accessory": {
+                        "type": "static_select",
+                        "action_id": "select_model_menu",
+                        "placeholder": {
+                            "type": "plain_text",
+                            "text": "Choose a model",
+                            "emoji": True,
+                        },
+                        "options": select_options,
+                        **({"initial_option": initial_option} if initial_option else {}),
                     },
                 },
                 {"type": "divider"},
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": "*Claude Code Models*"},
-                },
             ]
-
-            for model in claude_models:
-                is_current = model["value"] == normalized_current_model
-                button_text = f"{'✓ ' if is_current else ''}{model['display']}"
-
-                # Build button accessory
-                button_accessory = {
-                    "type": "button",
-                    "text": {
-                        "type": "plain_text",
-                        "text": button_text,
-                        "emoji": True,
-                    },
-                    "action_id": f"select_model_{model['name']}",
-                    "value": f"{ctx.channel_id}|{ctx.thread_ts or ''}",
-                }
-
-                # Only add style if it's the current model
-                if is_current:
-                    button_accessory["style"] = "primary"
-
-                blocks.append(
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*{model['display']}*\n{model['desc']}",
-                        },
-                        "accessory": button_accessory,
-                    }
-                )
-
-            blocks.append({"type": "divider"})
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": "*OpenAI Codex Models*"},
-                }
-            )
-
-            for model in codex_models:
-                is_current = model["value"] == normalized_current_model
-                button_text = f"{'✓ ' if is_current else ''}{model['display']}"
-
-                # Build button accessory
-                button_accessory = {
-                    "type": "button",
-                    "text": {
-                        "type": "plain_text",
-                        "text": button_text,
-                        "emoji": True,
-                    },
-                    "action_id": f"select_model_{model['name']}",
-                    "value": f"{ctx.channel_id}|{ctx.thread_ts or ''}",
-                }
-
-                # Only add style if it's the current model
-                if is_current:
-                    button_accessory["style"] = "primary"
-
-                blocks.append(
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*{model['display']}*\n{model['desc']}",
-                        },
-                        "accessory": button_accessory,
-                    }
-                )
-
-            # Add custom model option
-            blocks.append({"type": "divider"})
 
             # Check if current model is a custom one (not in predefined lists)
             predefined_models = {m["value"] for m in all_models}

@@ -164,9 +164,9 @@ def test_parse_queue_plan_enforces_expansion_cap() -> None:
         parse_queue_plan_text("***loop-4\nrun\n***loop-4-end", max_expanded_items=3)
 
 
-def test_parse_queue_plan_submission_defaults_to_replace_pending() -> None:
+def test_parse_queue_plan_submission_defaults_to_append_pending() -> None:
     options, body = parse_queue_plan_submission("first task\n***\nsecond task")
-    assert options.replace_pending is True
+    assert options.replace_pending is False
     assert options.directive_explicit is False
     assert body == "first task\n***\nsecond task"
 

@@ -97,7 +97,11 @@ class PlanApprovalManager:
             # Post the plan as an inline message (avoids binary file issues)
             if plan_content:
                 try:
-                    filename = os.path.basename(plan_file_path) if plan_file_path else "plan.md"
+                    filename = (
+                        os.path.basename(plan_file_path)
+                        if plan_file_path
+                        else f"plan-{approval_id}.md"
+                    )
                     await post_text_snippet(
                         client=slack_client,
                         channel_id=channel_id,

@@ -18,6 +18,7 @@ from typing import Optional
 from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
+from ..config import config
 from ..database.repository import DatabaseRepository
 from ..utils.pending_manager import PendingManager
 
@@ -187,7 +188,7 @@ class QuestionManager:
             channel=pending.channel_id,
             thread_ts=pending.thread_ts,
             blocks=blocks,
-            text="Assistant has a question for you",
+            text=f"{cls._question_mention_prefix()}Assistant has a question for you".strip(),
         )
 
         pending.message_ts = result.get("ts")
@@ -217,9 +218,14 @@ class QuestionManager:
                 thread_link = (
                     f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
                 )
-                message = f":question: Assistant has a question • <{thread_link}|Answer in thread>"
+                message = (
+                    f"{cls._question_mention_prefix()}:question: Assistant has a question • "
+                    f"<{thread_link}|Answer in thread>"
+                ).strip()
             else:
-                message = ":question: Assistant has a question"
+                message = (
+                    f"{cls._question_mention_prefix()}:question: Assistant has a question"
+                ).strip()
 
             # Post to channel (NOT thread) - triggers sound + unread badge
             await slack_client.chat_postMessage(
@@ -230,6 +236,14 @@ class QuestionManager:
 
         except Exception as e:
             logger.warning(f"Failed to post question notification: {e}")
+
+    @staticmethod
+    def _question_mention_prefix() -> str:
+        """Return the configured mention prefix for agent questions."""
+        mention = (config.SLACK_QUESTION_MENTION or "").strip()
+        if not mention:
+            return ""
+        return f"{mention} "
 
     @classmethod
     async def set_answer(

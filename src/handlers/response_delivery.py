@@ -8,8 +8,6 @@ from src.utils.formatters.command import (
     command_response_with_tables,
     should_attach_file,
 )
-from src.utils.slack_helpers import post_text_snippet
-
 
 async def deliver_command_response(
     *,
@@ -57,17 +55,9 @@ async def deliver_command_response(
             )
         )
         try:
-            await post_text_snippet(
-                client=client,
-                channel_id=channel_id,
-                content=file_content,
-                title="📄 Response summary",
-                thread_ts=response_thread_ts,
-                format_as_text=True,
-                render_tables=True,
-            )
-            if post_detail_button and detailed_output and detailed_output != output:
-                DetailCache.store(command_id, detailed_output)
+            detail_content = detailed_output or file_content
+            DetailCache.store(command_id, detail_content)
+            if post_detail_button:
                 await client.chat_postMessage(
                     channel=channel_id,
                     thread_ts=response_thread_ts,
@@ -77,7 +67,10 @@ async def deliver_command_response(
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"📋 *Detailed output* ({len(detailed_output):,} chars)",
+                                "text": (
+                                    f"📋 *Detailed output* "
+                                    f"({len(detail_content):,} chars)"
+                                ),
                             },
                             "accessory": {
                                 "type": "button",
@@ -93,7 +86,7 @@ async def deliver_command_response(
                     ],
                 )
         except Exception as post_error:
-            logger.error(f"Failed to post snippet: {post_error}")
+            logger.error(f"Failed to post detailed output button: {post_error}")
             if notify_on_snippet_failure:
                 await client.chat_postMessage(
                     channel=channel_id,

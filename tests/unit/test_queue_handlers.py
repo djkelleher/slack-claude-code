@@ -1114,9 +1114,11 @@ async def test_q_parses_structured_plan_and_queues_all_items():
             ("second", "/repo-worktrees/feature", None, None),
             ("third", None, None, None),
         ],
-        replace_pending=True,
+        replace_pending=False,
+        insertion_mode="append",
+        insert_at=None,
     )
-    assert "Queued 3 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
+    assert "Added 3 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
     mock_ensure.assert_awaited_once()
 
 
@@ -1169,6 +1171,8 @@ async def test_q_add_structured_plan_can_append_with_explicit_directive():
         thread_ts=None,
         queue_entries=[("next", None, None, None)],
         replace_pending=False,
+        insertion_mode="append",
+        insert_at=None,
     )
     assert "Added 1 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
 
@@ -1224,6 +1228,8 @@ async def test_q_add_structured_plan_defaults_to_append_when_queue_is_running():
         thread_ts=None,
         queue_entries=[("next", None, None, None)],
         replace_pending=False,
+        insertion_mode="append",
+        insert_at=None,
     )
     assert "Added 1 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
 
@@ -1277,6 +1283,8 @@ async def test_q_add_structured_plan_supports_clear_slash_directive():
         thread_ts=None,
         queue_entries=[("next", None, None, None)],
         replace_pending=True,
+        insertion_mode="append",
+        insert_at=None,
     )
     assert mock_materialize.await_args.kwargs["text"] == "next"
 
@@ -1292,6 +1300,7 @@ async def test_q_add_structured_plan_persists_scheduled_controls():
             add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=501)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
         )
     )
     register_queue_commands(app, deps)
@@ -1307,6 +1316,8 @@ async def test_q_add_structured_plan_persists_scheduled_controls():
                 SimpleNamespace(
                     replace_pending=True,
                     directive_explicit=False,
+                    insertion_mode="append",
+                    insert_at=None,
                     scheduled_controls=[
                         SimpleNamespace(action="pause", execute_at=scheduled_time),
                     ],
@@ -1350,6 +1361,7 @@ async def test_q_add_structured_plan_persists_scheduled_controls():
         thread_ts=None,
         events=[("pause", scheduled_time)],
     )
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
     mock_ensure_scheduler.assert_awaited_once()
     assert "Scheduled controls:" in client.chat_postMessage.await_args.kwargs["text"]
 
@@ -1388,8 +1400,8 @@ async def test_q_add_does_not_restart_when_queue_is_paused():
 
 
 @pytest.mark.asyncio
-async def test_q_structured_plan_restarts_when_replacing_paused_queue():
-    """Structured `/q` replacements should start a fresh queue generation."""
+async def test_q_structured_plan_stays_paused_by_default():
+    """Structured `/q` submissions should keep paused queues paused by default."""
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
@@ -1397,7 +1409,7 @@ async def test_q_structured_plan_restarts_when_replacing_paused_queue():
             add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control("paused")),
-            update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
+            update_queue_control_state=AsyncMock(),
         )
     )
     register_queue_commands(app, deps)
@@ -1415,11 +1427,11 @@ async def test_q_structured_plan_restarts_when_replacing_paused_queue():
             },
             client=client,
             logger=MagicMock(),
-        )
+    )
 
-    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "running")
-    mock_ensure.assert_awaited_once()
-    assert "Queue is paused" not in client.chat_postMessage.await_args.kwargs["text"]
+    deps.db.update_queue_control_state.assert_not_awaited()
+    mock_ensure.assert_not_awaited()
+    assert "Queue is paused" in client.chat_postMessage.await_args.kwargs["text"]
 
 
 @pytest.mark.asyncio

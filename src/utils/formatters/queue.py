@@ -21,13 +21,13 @@ def _running_item_label(item: Any) -> str:
     return label
 
 
-def _pending_item_text(item: Any) -> str:
+def _pending_item_text(item: Any, displayed_position: int) -> str:
     """Render one pending queue line."""
     parallel_suffix = ""
     if item.parallel_group_id:
         parallel_suffix = f", parallel max {item.parallel_limit or 'all'}"
     return (
-        f"*#{item.id}* (pos {item.position}{parallel_suffix})\n> "
+        f"*#{item.id}* (pos {displayed_position}{parallel_suffix})\n> "
         f"{_escaped_preview(item.prompt, 100)}"
     )
 
@@ -99,11 +99,11 @@ def queue_status(pending: list, running: Any, scheduled_events: list | None = No
             }
         )
     else:
-        for item in pending[:10]:
+        for index, item in enumerate(pending[:10], start=1):
             blocks.append(
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": _pending_item_text(item)},
+                    "text": {"type": "mrkdwn", "text": _pending_item_text(item, index)},
                 }
             )
 

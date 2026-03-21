@@ -669,6 +669,7 @@ class DatabaseRepository:
         working_directory_override: Optional[str] = None,
         parallel_group_id: Optional[str] = None,
         parallel_limit: Optional[int] = None,
+        insert_at: Optional[int] = None,
     ) -> QueueItem:
         """Add a command to the FIFO queue."""
         normalized_thread_ts = self._normalize_thread_ts(thread_ts)
@@ -683,13 +684,12 @@ class DatabaseRepository:
                 # cannot compute the same MAX(position) value.
                 await db.execute("BEGIN IMMEDIATE")
 
-                cursor = await db.execute(
-                    """SELECT COALESCE(MAX(position), 0) + 1
-                       FROM queue_items WHERE """
-                    + self._QUEUE_SCOPE_WHERE,
-                    self._queue_scope_params(channel_id, normalized_thread_ts),
+                position = await self._next_queue_insert_position(
+                    db=db,
+                    channel_id=channel_id,
+                    thread_ts=normalized_thread_ts,
+                    insert_at=insert_at,
                 )
-                position = (await cursor.fetchone())[0]
 
                 cursor = await db.execute(
                     """INSERT INTO queue_items
@@ -734,6 +734,8 @@ class DatabaseRepository:
         thread_ts: Optional[str],
         queue_entries: list[tuple[str, Optional[str], Optional[str], Optional[int]]],
         replace_pending: bool = False,
+        insertion_mode: str = "append",
+        insert_at: Optional[int] = None,
     ) -> list[QueueItem]:
         """Add multiple commands to the FIFO queue atomically.
 
@@ -750,6 +752,10 @@ class DatabaseRepository:
             parallel_limit) entries in queue order.
         replace_pending : bool
             When True, replace pending items in the current scope before inserting.
+        insertion_mode : str
+            One of ``append``, ``prepend``, or ``insert``.
+        insert_at : int | None
+            One-based pending-queue index used when ``insertion_mode == "insert"``.
         """
         if not queue_entries:
             return []
@@ -778,21 +784,15 @@ class DatabaseRepository:
                         + " AND status = 'pending'",
                         scope_params,
                     )
-                    cursor = await db.execute(
-                        """SELECT COALESCE(MAX(position), 0)
-                           FROM queue_items WHERE """
-                        + self._QUEUE_SCOPE_WHERE
-                        + " AND status = 'running'",
-                        scope_params,
-                    )
-                else:
-                    cursor = await db.execute(
-                        """SELECT COALESCE(MAX(position), 0)
-                           FROM queue_items WHERE """
-                        + self._QUEUE_SCOPE_WHERE,
-                        scope_params,
-                    )
-                base_position = (await cursor.fetchone())[0]
+                    insertion_mode = "append"
+                    insert_at = None
+
+                first_position = await self._next_queue_insert_position(
+                    db=db,
+                    channel_id=channel_id,
+                    thread_ts=normalized_thread_ts,
+                    insert_at=self._resolve_queue_insert_at(insertion_mode, insert_at),
+                )
 
                 created_item_ids: list[int] = []
                 for offset, (
@@ -814,7 +814,7 @@ class DatabaseRepository:
                             working_directory_override,
                             parallel_group_id,
                             parallel_limit,
-                            base_position + offset,
+                            first_position + offset - 1,
                         ),
                     )
                     item_id = cursor.lastrowid
@@ -843,6 +843,66 @@ class DatabaseRepository:
             except Exception:
                 await db.rollback()
                 raise
+
+    def _resolve_queue_insert_at(self, insertion_mode: str, insert_at: Optional[int]) -> Optional[int]:
+        """Normalize queue insertion mode into a concrete one-based insert index."""
+        normalized_mode = (insertion_mode or "append").strip().lower()
+        if normalized_mode == "append":
+            return None
+        if normalized_mode == "prepend":
+            return 1
+        if normalized_mode == "insert":
+            if insert_at is None:
+                raise ValueError("insert_at is required when insertion_mode is 'insert'")
+            return max(1, int(insert_at))
+        raise ValueError(f"Unsupported queue insertion mode: {insertion_mode}")
+
+    async def _next_queue_insert_position(
+        self,
+        *,
+        db,
+        channel_id: str,
+        thread_ts: Optional[str],
+        insert_at: Optional[int],
+    ) -> int:
+        """Return the DB position to use for a newly inserted pending queue item."""
+        scope_params = self._queue_scope_params(channel_id, thread_ts)
+        if insert_at is None:
+            cursor = await db.execute(
+                """SELECT COALESCE(MAX(position), 0) + 1
+                   FROM queue_items WHERE """
+                + self._QUEUE_SCOPE_WHERE,
+                scope_params,
+            )
+            return int((await cursor.fetchone())[0])
+
+        cursor = await db.execute(
+            f"""SELECT position
+                FROM queue_items
+                WHERE {self._QUEUE_SCOPE_WHERE} AND status = 'pending'
+                ORDER BY position ASC, id ASC""",
+            scope_params,
+        )
+        pending_rows = await cursor.fetchall()
+        pending_positions = [int(row[0]) for row in pending_rows]
+        if not pending_positions:
+            cursor = await db.execute(
+                """SELECT COALESCE(MAX(position), 0) + 1
+                   FROM queue_items WHERE """
+                + self._QUEUE_SCOPE_WHERE,
+                scope_params,
+            )
+            return int((await cursor.fetchone())[0])
+
+        zero_based_index = min(max(insert_at - 1, 0), len(pending_positions) - 1)
+        target_position = pending_positions[zero_based_index]
+        await db.execute(
+            "UPDATE queue_items SET position = position + 1 WHERE "
+            + self._QUEUE_SCOPE_WHERE
+            + " AND status = 'pending' AND position >= ?",
+            (*scope_params, target_position),
+        )
+        return target_position
 
     async def get_pending_queue_items(
         self, channel_id: str, thread_ts: Optional[str]
@@ -1007,6 +1067,26 @@ class DatabaseRepository:
                 + self._QUEUE_SCOPE_WHERE
                 + " AND status = 'running' ORDER BY position ASC, id ASC",
                 self._queue_scope_params(channel_id, thread_ts),
+            )
+            rows = await cursor.fetchall()
+            return [QueueItem.from_row(row) for row in rows]
+
+    async def get_completed_queue_items_before_position(
+        self,
+        channel_id: str,
+        thread_ts: Optional[str],
+        position: int,
+    ) -> list[QueueItem]:
+        """Return completed queue items before a given position in scope order."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._QUEUE_ITEM_SELECT}
+                    FROM queue_items
+                    WHERE {self._QUEUE_SCOPE_WHERE}
+                      AND status = 'completed'
+                      AND position < ?
+                    ORDER BY position ASC, id ASC""",
+                (*self._queue_scope_params(channel_id, thread_ts), position),
             )
             rows = await cursor.fetchall()
             return [QueueItem.from_row(row) for row in rows]

@@ -3,7 +3,6 @@
 from .agents_command import register_agents_command as register_agents_command
 from .cancel import register_cancel_commands as register_cancel_commands
 from .claude_cli import register_claude_cli_commands as register_claude_cli_commands
-from .git import register_git_commands as register_git_commands
 from .mode import register_mode_command as register_mode_command
 from .parallel import register_parallel_commands as register_parallel_commands
 from .queue import register_queue_commands as register_queue_commands

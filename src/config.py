@@ -7,8 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.config_storage import get_storage
 
-# Global constant for Claude plans directory
-PLANS_DIR = str(Path.home() / ".claude" / "plans")
+# Global constant for application plan directory
+PLANS_DIR = str(Path.home() / ".slack-claude-code" / "plans")
 
 # Model-to-backend mapping
 CLAUDE_MODELS: set[str] = {
@@ -246,6 +246,7 @@ class Config(BaseSettings):
     SLACK_BOT_TOKEN: str = ""
     SLACK_APP_TOKEN: str = ""
     SLACK_SIGNING_SECRET: str = ""
+    SLACK_QUESTION_MENTION: str = ""
 
     # Database - defaults to ~/.slack-claude-code/
     DATABASE_PATH: str = Field(

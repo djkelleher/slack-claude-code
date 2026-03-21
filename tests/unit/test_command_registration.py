@@ -48,7 +48,8 @@ def test_register_commands_excludes_codex_slash_commands():
 
     assert "/usage" in app.handlers
     assert "/clear" in app.handlers
-    assert "/git" in app.handlers
+    assert "/!" in app.handlers
+    assert "/git" not in app.handlers
     assert "/claude-help" not in app.handlers
     assert "/doctor" not in app.handlers
     assert "/claude-config" not in app.handlers

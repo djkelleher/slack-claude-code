@@ -14,7 +14,6 @@ from .claude import (
     register_agents_command,
     register_cancel_commands,
     register_claude_cli_commands,
-    register_git_commands,
     register_mode_command,
     register_parallel_commands,
     register_queue_commands,
@@ -64,7 +63,6 @@ def register_commands(
     register_claude_cli_commands(app, deps)
     register_agents_command(app, deps)
     register_mode_command(app, deps)
-    register_git_commands(app, deps)
     register_worktree_commands(app, deps)
     register_cancel_commands(app, deps)
     deps.slash_command_router = build_slash_command_router(app)

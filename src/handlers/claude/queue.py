@@ -16,8 +16,8 @@ from src.database.models import Session
 from src.git.service import GitService
 from src.tasks.manager import TaskManager
 from src.tasks.queue_plan import (
-    QueueScheduledControl,
     QueuePlanError,
+    QueueScheduledControl,
     contains_queue_plan_markers,
     materialize_queue_plan_text,
     parse_queue_plan_submission,
@@ -31,6 +31,7 @@ from src.utils.formatters.queue import (
     queue_status,
 )
 from src.utils.formatters.streaming import processing_message
+from src.utils.model_selection import normalize_model_name
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from ..base import CommandContext, HandlerDependencies, slack_command
@@ -47,6 +48,8 @@ _PARALLEL_HISTORY_COMMAND_LIMIT = 10
 _PARALLEL_HISTORY_OUTPUT_LIMIT = 1000
 _PARALLEL_HISTORY_TOTAL_LIMIT = 12000
 _THREAD_TS_PATTERN = re.compile(r"^\d+\.\d+$")
+_QUEUE_OUTPUT_REFERENCE_RE = re.compile(r"\(\(\s*prev(\d+)output\s*\)\)", re.IGNORECASE)
+_QUEUE_DIRECTIVE_LINE_RE = re.compile(r"^\(\((.+)\)\)$")
 _QUEUE_COMMAND_USER_ID_PREFIX = "queue-item"
 _QUEUE_SCHEDULE_DISPATCHER_TASK_ID = "queue_schedule_dispatcher"
 _QUEUE_SCHEDULE_DISPATCHER_POLL_SECONDS = 1.0
@@ -135,7 +138,7 @@ async def _cleanup_queue_start_lock(task_id: str) -> None:
             _QUEUE_START_LOCKS.pop(task_id, None)
 
 
-def _prompt_preview(prompt: str, limit: int = 180) -> str:
+def _prompt_preview(prompt: str, limit: int = 320) -> str:
     """Return a compact, single-line prompt preview for status text."""
     flattened = " ".join(prompt.split())
     if len(flattened) <= limit:
@@ -215,6 +218,90 @@ def _scheduled_controls_summary(controls: list[QueueScheduledControl]) -> str:
     if len(controls) > 3:
         summary = f"{summary}, and {len(controls) - 3} more"
     return f"Scheduled controls: {summary}."
+
+
+def _strip_runtime_directive_lines(prompt: str) -> tuple[str, Optional[str]]:
+    """Strip leading prompt-local directives and return prompt + optional model override."""
+    lines = prompt.splitlines()
+    stripped_lines = list(lines)
+    model_override: Optional[str] = None
+
+    while stripped_lines:
+        match = _QUEUE_DIRECTIVE_LINE_RE.match(stripped_lines[0].strip())
+        if not match:
+            break
+        directive_body = match.group(1).strip()
+        normalized_model = normalize_model_name(directive_body)
+        lowered = directive_body.lower()
+        if normalized_model and lowered not in {
+            "append",
+            "prepend",
+            "replace",
+            "clear",
+            "parallel",
+            "endparallel",
+        } and not lowered.startswith(("loop", "endloop", "insert", "at ")):
+            model_override = normalized_model
+            stripped_lines.pop(0)
+            continue
+        break
+
+    return "\n".join(stripped_lines).strip(), model_override
+
+
+async def _resolve_queue_runtime_prompt(
+    deps: HandlerDependencies,
+    *,
+    item,
+    channel_id: str,
+    thread_ts: Optional[str],
+    prompt: str,
+) -> tuple[str, Optional[str]]:
+    """Resolve prompt-local runtime substitutions and model overrides for a queue item."""
+    stripped_prompt, model_override = _strip_runtime_directive_lines(prompt)
+    try:
+        completed_items = await deps.db.get_completed_queue_items_before_position(
+            channel_id,
+            thread_ts,
+            item.position,
+        )
+    except AttributeError:
+        completed_items = []
+    prior_outputs = list(reversed([queued.output or "" for queued in completed_items]))
+
+    def replace_output_reference(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if index < 1 or index > len(prior_outputs):
+            return ""
+        return prior_outputs[index - 1]
+
+    resolved_prompt = _QUEUE_OUTPUT_REFERENCE_RE.sub(replace_output_reference, stripped_prompt)
+    return resolved_prompt.strip(), model_override
+
+
+def _displayed_queue_range(
+    *,
+    running_count: int,
+    item_count: int,
+    insertion_mode: str,
+    insert_at: Optional[int],
+) -> str:
+    """Build a user-facing queue position range from logical insertion semantics."""
+    if item_count < 1:
+        return "position #0"
+
+    normalized_mode = (insertion_mode or "append").strip().lower()
+    if normalized_mode == "prepend":
+        start_position = running_count + 1
+    elif normalized_mode == "insert" and insert_at is not None:
+        start_position = running_count + max(1, insert_at)
+    else:
+        start_position = running_count + 1
+
+    end_position = start_position + item_count - 1
+    if start_position == end_position:
+        return f"position #{start_position}"
+    return f"positions #{start_position}-#{end_position}"
 
 
 async def _queue_state_for_submission(
@@ -502,6 +589,17 @@ async def _execute_queue_item(
                 codex_session_id=resume_state.get("codex"),
             )
             persist_session_ids = False
+
+        resolved_prompt, model_override = await _resolve_queue_runtime_prompt(
+            deps,
+            item=item,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            prompt=effective_prompt,
+        )
+        effective_prompt = resolved_prompt or effective_prompt
+        if model_override:
+            effective_session = replace(effective_session, model=model_override)
 
         route = await execute_for_session(
             deps=deps,
@@ -875,6 +973,8 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         queue_entries: list[tuple[str, Optional[str], Optional[str], Optional[int]]]
         replace_pending = False
+        insertion_mode = "append"
+        insert_at: Optional[int] = None
         is_structured_submission = False
         has_explicit_submission_directive = False
         scheduled_controls: list[QueueScheduledControl] = []
@@ -882,9 +982,13 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             is_structured_submission = True
             try:
                 submission_options, plan_text = parse_queue_plan_submission(ctx.text)
-                replace_pending = submission_options.replace_pending
-                has_explicit_submission_directive = submission_options.directive_explicit
-                scheduled_controls = submission_options.scheduled_controls
+                replace_pending = bool(getattr(submission_options, "replace_pending", False))
+                insertion_mode = str(getattr(submission_options, "insertion_mode", "append"))
+                insert_at = getattr(submission_options, "insert_at", None)
+                has_explicit_submission_directive = bool(
+                    getattr(submission_options, "directive_explicit", False)
+                )
+                scheduled_controls = list(getattr(submission_options, "scheduled_controls", []))
                 materialized_prompts = await materialize_queue_plan_text(
                     text=plan_text,
                     working_directory=session.working_directory,
@@ -928,7 +1032,11 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             thread_ts=ctx.thread_ts,
             queue_entries=queue_entries,
             replace_pending=replace_pending,
+            insertion_mode=insertion_mode,
+            insert_at=insert_at,
         )
+        if scheduled_controls:
+            await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "paused")
         if scheduled_controls:
             await deps.db.add_queue_scheduled_events(
                 channel_id=ctx.channel_id,
@@ -937,22 +1045,28 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             )
 
         running_items = await deps.db.get_running_queue_items(ctx.channel_id, ctx.thread_ts)
-        position_offset = len(running_items)
-        start_position = queued_items[0].position + position_offset
-        end_position = queued_items[-1].position + position_offset
         item_count = len(queued_items)
-        if start_position == end_position:
-            position_text = f"position #{start_position}"
-        else:
-            position_text = f"positions #{start_position}-#{end_position}"
+        position_text = _displayed_queue_range(
+            running_count=len(running_items),
+            item_count=item_count,
+            insertion_mode=insertion_mode,
+            insert_at=insert_at,
+        )
         queue_state = await _queue_state_for_submission(
             deps,
             ctx.channel_id,
             ctx.thread_ts,
-            replace_pending=replace_pending,
+            replace_pending=replace_pending and not scheduled_controls,
         )
         paused_notice = _queue_state_notice(queue_state)
-        action_verb = "Queued" if replace_pending else "Added"
+        if replace_pending:
+            action_verb = "Queued"
+        elif insertion_mode == "prepend":
+            action_verb = "Prepended"
+        elif insertion_mode == "insert":
+            action_verb = "Inserted"
+        else:
+            action_verb = "Added"
         confirmation_text = f"{action_verb} {item_count} item(s) to queue ({position_text})."
         if paused_notice:
             confirmation_text = f"{confirmation_text} {paused_notice}"

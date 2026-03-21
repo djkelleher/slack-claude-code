@@ -112,6 +112,16 @@ class SubprocessExecutor(ProcessExecutorBase):
 
         return fallback_mode or config.CLAUDE_PERMISSION_MODE
 
+    async def _get_session_added_dirs(self, db_session_id: Optional[int]) -> list[str]:
+        """Return session-added directories from the database."""
+        if not self.db or not db_session_id:
+            return []
+
+        session = await self.db.get_session_by_id(db_session_id)
+        if not session:
+            return []
+        return [str(path).strip() for path in session.added_dirs if str(path).strip()]
+
     async def execute(
         self,
         prompt: str,
@@ -201,6 +211,12 @@ class SubprocessExecutor(ProcessExecutorBase):
         if config.ALLOWED_TOOLS:
             cmd.extend(["--allowed-tools", config.ALLOWED_TOOLS])
             logger.info(f"{log_prefix}Using --allowed-tools {config.ALLOWED_TOOLS}")
+
+        added_dirs = await self._get_session_added_dirs(db_session_id)
+        for added_dir in added_dirs:
+            cmd.extend(["--add-dir", added_dir])
+        if added_dirs:
+            logger.info(f"{log_prefix}Using {len(added_dirs)} added directory override(s)")
 
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):

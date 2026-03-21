@@ -8,7 +8,7 @@ from typing import Optional
 
 from src.git.service import GitError, GitService
 
-MAX_EXPANDED_QUEUE_PLAN_ITEMS = 500
+MAX_EXPANDED_QUEUE_PLAN_ITEMS: int | None = None
 
 _ANY_MARKER_RE = re.compile(r"^\*\*\*.+$")
 _BRANCH_START_RE = re.compile(r"^\*\*\*branch-(.+)$")
@@ -23,6 +23,7 @@ _QUEUE_SUBMISSION_DIRECTIVE_RE = re.compile(
 _QUEUE_TIMER_DIRECTIVE_RE = re.compile(
     r"^\*\*\*at\s+(.+?)\s+(start|pause|resume|stop)$", re.IGNORECASE
 )
+_DIRECTIVE_RE = re.compile(r"^\(\((.+)\)\)$")
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
@@ -54,9 +55,11 @@ class MaterializedQueuePlanPrompt:
 class QueuePlanSubmissionOptions:
     """Submission-time queue behavior for a structured queue plan."""
 
-    replace_pending: bool = True
+    replace_pending: bool = False
     directive_explicit: bool = False
     scheduled_controls: list["QueueScheduledControl"] = field(default_factory=list)
+    insertion_mode: str = "append"
+    insert_at: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,8 @@ def contains_queue_plan_markers(text: str) -> bool:
             return True
         if stripped.startswith("***"):
             return True
+        if stripped.startswith("((") and stripped.endswith("))"):
+            return True
     return False
 
 
@@ -125,7 +130,7 @@ def parse_queue_plan_text(
     text: str, max_expanded_items: int = MAX_EXPANDED_QUEUE_PLAN_ITEMS
 ) -> list[QueuePlanPrompt]:
     """Parse queue-plan DSL text into expanded prompt entries."""
-    if max_expanded_items < 1:
+    if max_expanded_items is not None and max_expanded_items < 1:
         raise QueuePlanError("max_expanded_items must be at least 1")
 
     root = _parse_to_ast(text)
@@ -161,9 +166,11 @@ def parse_queue_plan_submission(
     if current_now_utc.tzinfo is None or current_now_utc.tzinfo.utcoffset(current_now_utc) is None:
         raise QueuePlanError("now_utc must be timezone-aware")
     current_now_utc = current_now_utc.astimezone(timezone.utc)
-    replace_pending = True
+    replace_pending = False
     seen_directive: str | None = None
     scheduled_controls: list[QueueScheduledControl] = []
+    insertion_mode = "append"
+    insert_at: Optional[int] = None
     body_start_index = 0
     lines = text.splitlines()
 
@@ -187,6 +194,42 @@ def parse_queue_plan_submission(
                 )
             seen_directive = directive
             replace_pending = directive != "append"
+            insertion_mode = "append"
+            insert_at = None
+            body_start_index = index + 1
+            continue
+
+        directive = _parse_double_paren_submission_directive(stripped)
+        if directive:
+            directive_name, directive_value = directive
+            if directive_name == "append":
+                seen_directive = "append"
+                replace_pending = False
+                insertion_mode = "append"
+                insert_at = None
+            elif directive_name == "prepend":
+                seen_directive = "prepend"
+                replace_pending = False
+                insertion_mode = "prepend"
+                insert_at = 1
+            elif directive_name == "replace":
+                seen_directive = "replace"
+                replace_pending = True
+                insertion_mode = "append"
+                insert_at = None
+            elif directive_name == "insert":
+                seen_directive = "insert"
+                replace_pending = False
+                insertion_mode = "insert"
+                insert_at = int(directive_value)
+            elif directive_name == "at":
+                scheduled_controls.append(
+                    _parse_queue_timer_directive(
+                        time_text=str(directive_value),
+                        action="resume",
+                        now_utc=current_now_utc,
+                    )
+                )
             body_start_index = index + 1
             continue
 
@@ -210,6 +253,8 @@ def parse_queue_plan_submission(
             replace_pending=replace_pending,
             directive_explicit=seen_directive is not None,
             scheduled_controls=scheduled_controls,
+            insertion_mode=insertion_mode,
+            insert_at=insert_at,
         ),
         remaining_text,
     )
@@ -507,7 +552,7 @@ def _expand_nodes(
 ) -> None:
     for node in nodes:
         if isinstance(node, _PromptNode):
-            if len(out) >= max_items:
+            if max_items is not None and len(out) >= max_items:
                 raise QueuePlanError(
                     f"Structured queue plan expands to more than {max_items} items."
                 )
@@ -596,6 +641,10 @@ def _parse_marker(line: str) -> tuple[str, str | int] | tuple[str] | None:
     if line == "***":
         return ("separator",)
 
+    double_paren_marker = _parse_double_paren_block_marker(line)
+    if double_paren_marker is not None:
+        return double_paren_marker
+
     parallel_end = _PARALLEL_END_RE.match(line)
     if parallel_end:
         return ("parallel_end",)
@@ -620,6 +669,60 @@ def _parse_marker(line: str) -> tuple[str, str | int] | tuple[str] | None:
     if branch_start:
         return _parse_branch_marker_value(branch_start.group(1), marker_type="branch_start")
 
+    return None
+
+
+def _parse_double_paren_submission_directive(line: str) -> tuple[str, str | int] | None:
+    """Parse queue submission directives using ``((...))`` syntax."""
+    match = _DIRECTIVE_RE.match(line)
+    if not match:
+        return None
+
+    body = match.group(1).strip()
+    if not body:
+        return None
+
+    lowered = body.lower()
+    if lowered in {"append", "prepend", "replace", "clear"}:
+        normalized = "replace" if lowered == "clear" else lowered
+        return normalized, normalized
+    if lowered.startswith("insert"):
+        index_text = lowered[len("insert") :].strip()
+        if not index_text.isdigit() or int(index_text) < 1:
+            raise QueuePlanError("Insert directives must be like `((insert1))`.")
+        return "insert", int(index_text)
+    if lowered.startswith("at "):
+        time_text = body[3:].strip()
+        if not time_text:
+            raise QueuePlanError("Timer directives must be like `((at 18:30))`.")
+        return "at", time_text
+    return None
+
+
+def _parse_double_paren_block_marker(line: str) -> tuple[str, str | int] | tuple[str] | None:
+    """Parse block markers using ``((...))`` syntax."""
+    match = _DIRECTIVE_RE.match(line)
+    if not match:
+        return None
+
+    body = match.group(1).strip()
+    lowered = body.lower()
+    if lowered == "parallel":
+        return ("parallel_start", None)
+    if lowered == "endparallel":
+        return ("parallel_end",)
+    if lowered.startswith("parallel"):
+        limit_text = lowered[len("parallel") :].strip()
+        if limit_text.isdigit():
+            return _parse_parallel_marker_value(limit_text, line)
+    if lowered.startswith("loop"):
+        count_text = lowered[len("loop") :].strip()
+        if count_text.isdigit():
+            return _parse_loop_marker_value(count_text, line, marker_type="loop_start")
+    if lowered.startswith("endloop"):
+        count_text = lowered[len("endloop") :].strip()
+        if count_text.isdigit():
+            return _parse_loop_marker_value(count_text, line, marker_type="loop_end")
     return None
 
 
