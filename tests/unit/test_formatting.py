@@ -224,6 +224,23 @@ class TestTextToRichTextBlocks:
         assert elems[1]["type"] == "rich_text_section"
         assert elems[2]["type"] == "rich_text_section"
 
+    def test_long_output_splits_into_multiple_rich_text_blocks(self):
+        text = "\n\n".join(
+            [
+                "Paragraph one " + ("A" * 120),
+                "Paragraph two " + ("B" * 120),
+                "Paragraph three " + ("C" * 120),
+            ]
+        )
+        blocks = text_to_rich_text_blocks(text, max_length=180)
+
+        assert len(blocks) >= 2
+        assert all(block["type"] == "rich_text" for block in blocks)
+        assert "Paragraph one" in "".join(
+            element.get("text", "")
+            for element in blocks[0]["elements"][0]["elements"]
+        )
+
 
 class TestRichTextToPlainText:
     """Tests for _rich_text_to_plain_text fallback."""

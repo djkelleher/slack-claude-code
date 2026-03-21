@@ -414,6 +414,81 @@ def split_text_into_blocks(
     return blocks
 
 
+def _estimate_rich_text_size(value) -> int:
+    """Estimate serialized text size for a rich_text node."""
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, list):
+        return sum(_estimate_rich_text_size(item) for item in value)
+    if isinstance(value, dict):
+        return sum(_estimate_rich_text_size(item) for item in value.values())
+    return 0
+
+
+def _split_preformatted_element(element: dict, max_length: int) -> list[dict]:
+    """Split oversized preformatted blocks on line boundaries when possible."""
+    if element.get("type") != "rich_text_preformatted":
+        return [element]
+
+    text_chunks = []
+    for child in element.get("elements", []):
+        if child.get("type") == "text":
+            text_chunks.append(child.get("text", ""))
+    code_text = "".join(text_chunks)
+    if len(code_text) <= max_length:
+        return [element]
+
+    chunks: list[dict] = []
+    current_lines: list[str] = []
+    current_length = 0
+    for line in code_text.splitlines(keepends=True):
+        line_length = len(line)
+        if current_lines and current_length + line_length > max_length:
+            chunks.append(
+                {
+                    "type": "rich_text_preformatted",
+                    "elements": [{"type": "text", "text": "".join(current_lines)}],
+                }
+            )
+            current_lines = []
+            current_length = 0
+        current_lines.append(line)
+        current_length += line_length
+
+    if current_lines:
+        chunks.append(
+            {
+                "type": "rich_text_preformatted",
+                "elements": [{"type": "text", "text": "".join(current_lines)}],
+            }
+        )
+    return chunks
+
+
+def _chunk_rich_text_elements(elements: list[dict], max_length: int) -> list[list[dict]]:
+    """Chunk rich_text elements into multiple Slack blocks at semantic boundaries."""
+    if not elements:
+        return [[]]
+
+    chunks: list[list[dict]] = []
+    current_chunk: list[dict] = []
+    current_length = 0
+
+    for element in elements:
+        for semantic_element in _split_preformatted_element(element, max_length):
+            element_length = _estimate_rich_text_size(semantic_element)
+            if current_chunk and current_length + element_length > max_length:
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_length = 0
+            current_chunk.append(semantic_element)
+            current_length += element_length
+
+    if current_chunk:
+        chunks.append(current_chunk)
+    return chunks or [[]]
+
+
 def _parse_inline_elements(text: str) -> list[dict]:
     """Parse inline markdown formatting into rich_text elements.
 
@@ -740,4 +815,4 @@ def text_to_rich_text_blocks(
     if not elements:
         return [{"type": "rich_text", "elements": []}]
 
-    return [{"type": "rich_text", "elements": elements}]
+    return [{"type": "rich_text", "elements": chunk} for chunk in _chunk_rich_text_elements(elements, max_length)]
