@@ -170,7 +170,9 @@ def _prompt_preview(prompt: str, limit: int = 320) -> str:
     flattened = " ".join(prompt.split())
     if len(flattened) <= limit:
         return flattened
-    return f"{flattened[:limit]}..."
+    head = max(1, int(limit * 0.65))
+    tail = max(1, limit - head - 3)
+    return f"{flattened[:head]}...{flattened[-tail:]}"
 
 
 def _queue_processing_log_line(sequence_number: int, prompt: str) -> str:

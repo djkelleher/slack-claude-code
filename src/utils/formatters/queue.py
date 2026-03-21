@@ -8,8 +8,11 @@ from .base import escape_markdown
 
 def _escaped_preview(text: str, limit: int) -> str:
     """Escape and truncate text for compact queue previews."""
-    suffix = "..." if len(text) > limit else ""
-    return f"{escape_markdown(text[:limit])}{suffix}"
+    if len(text) <= limit:
+        return escape_markdown(text)
+    head = max(1, int(limit * 0.65))
+    tail = max(1, limit - head - 3)
+    return escape_markdown(f"{text[:head]}...{text[-tail:]}")
 
 
 def _running_item_label(item: Any) -> str:

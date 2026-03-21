@@ -14,6 +14,7 @@ from src.handlers.claude.queue import (
     _execute_queue_item,
     _process_queue,
     _process_queue_scheduled_events,
+    _queue_processing_log_line,
     _queue_task_id,
     ensure_queue_processor,
     register_queue_commands,
@@ -116,6 +117,20 @@ async def test_process_queue_marks_failed_when_initial_notification_fails():
     )
     mock_execute.assert_not_awaited()
     client.chat_update.assert_not_called()
+
+
+def test_queue_processing_log_line_preserves_prompt_tail() -> None:
+    """Long processing previews should retain the tail of path-heavy prompts."""
+    prompt = (
+        ("how can we improve the logic, algorithmic edge, mathematical edge of this module " * 8)
+        + "/home/dan/dev-repos/slack-claude-code/src/handlers/claude/queue.py"
+    )
+
+    line = _queue_processing_log_line(7, prompt)
+
+    assert line.startswith("Processing queue item 7: how can we improve")
+    assert line.endswith("/src/handlers/claude/queue.py")
+    assert "..." in line
 
 
 @pytest.mark.asyncio
