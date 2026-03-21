@@ -147,7 +147,9 @@ def _extract_codex_plan_content(text: Optional[str]) -> Optional[str]:
     if not all(section in lowered for section in required_sections):
         return None
 
-    step_count = len(re.findall(r"(?im)^\s*(?:\d+\.\s+|\d+\)\s+|[-*]\s+)", plan_content))
+    step_count = len(
+        re.findall(r"(?im)^\s*(?:\d+\.\s+|\d+\)\s+|[-*]\s+)", plan_content)
+    )
     if step_count < 3:
         return None
 
@@ -201,7 +203,9 @@ async def _post_or_auto_answer_question(
         )
         response = QuestionManager.format_answer(pending_question, backend=backend)
         if backend == "claude" and isinstance(response, str):
-            response = response.strip() or "Use your recommended/default option and continue."
+            response = (
+                response.strip() or "Use your recommended/default option and continue."
+            )
         if logger:
             logger.info(
                 f"Auto-answering {log_prefix} question {pending_question.tool_use_id} "
@@ -317,7 +321,9 @@ async def _execute_codex_backend(
             return session.codex_session_id
 
         if persist_session_ids:
-            await deps.db.update_session_codex_id(channel_id, thread_ts, forked_thread_id)
+            await deps.db.update_session_codex_id(
+                channel_id, thread_ts, forked_thread_id
+            )
             session.codex_session_id = forked_thread_id
         if logger:
             logger.info(
@@ -354,7 +360,9 @@ async def _execute_codex_backend(
         )
 
         if auto_answer_questions:
-            questions = QuestionManager.parse_ask_user_question_input(normalized_tool_input)
+            questions = QuestionManager.parse_ask_user_question_input(
+                normalized_tool_input
+            )
             auto_answers = QuestionManager.select_recommended_answers(questions)
             state.question_count += 1
             if logger:
@@ -372,12 +380,18 @@ async def _execute_codex_backend(
             return response
 
         if slack_client is None:
-            if state.pending_question and state.pending_question.tool_use_id == tool_use_id:
+            if (
+                state.pending_question
+                and state.pending_question.tool_use_id == tool_use_id
+            ):
                 await QuestionManager.cancel(state.pending_question.question_id)
                 state.pending_question = None
             return None
 
-        if not state.pending_question or state.pending_question.tool_use_id != tool_use_id:
+        if (
+            not state.pending_question
+            or state.pending_question.tool_use_id != tool_use_id
+        ):
             state.pending_question = await QuestionManager.create_pending_question(
                 session_id=str(session.id),
                 channel_id=channel_id,
@@ -402,7 +416,9 @@ async def _execute_codex_backend(
             return None
 
         state.pending_question = None
-        on_chunk = await _maybe_swap_on_chunk_after_interaction(on_interaction_resumed, on_chunk)
+        on_chunk = await _maybe_swap_on_chunk_after_interaction(
+            on_interaction_resumed, on_chunk
+        )
         return response_payload
 
     async def on_approval_request(method: str, approval_input: dict) -> dict | None:
@@ -410,14 +426,17 @@ async def _execute_codex_backend(
         if auto_approve_permissions:
             if logger:
                 logger.info(
-                    f"Auto-approving Codex permission request {method} " "for queue-style execution"
+                    f"Auto-approving Codex permission request {method} "
+                    "for queue-style execution"
                 )
             return approval_payload_from_decision(method, True)
 
         if slack_client is None:
             return None
 
-        tool_name, tool_input = format_approval_request_for_slack(method, approval_input)
+        tool_name, tool_input = format_approval_request_for_slack(
+            method, approval_input
+        )
         approved = await PermissionManager.request_approval(
             session_id=str(session.id),
             channel_id=channel_id,
@@ -429,7 +448,9 @@ async def _execute_codex_backend(
             db=deps.db,
             auto_approve_tools=config.AUTO_APPROVE_TOOLS,
         )
-        on_chunk = await _maybe_swap_on_chunk_after_interaction(on_interaction_resumed, on_chunk)
+        on_chunk = await _maybe_swap_on_chunk_after_interaction(
+            on_interaction_resumed, on_chunk
+        )
         return approval_payload_from_decision(method, approved)
 
     async def run_codex_turn(turn_prompt: str, resume_session_id: Optional[str]) -> Any:
@@ -451,7 +472,9 @@ async def _execute_codex_backend(
             thread_ts=thread_ts,
         )
         if result.session_id and persist_session_ids:
-            await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
+            await deps.db.update_session_codex_id(
+                channel_id, thread_ts, result.session_id
+            )
         return result
 
     initial_resume_session_id = await resolve_initial_resume_session_id()
@@ -471,7 +494,11 @@ async def _execute_codex_backend(
         await QuestionManager.cancel(state.pending_question.question_id)
         state.pending_question = None
 
-    if session.permission_mode == "plan" and result.success and slack_client is not None:
+    if (
+        session.permission_mode == "plan"
+        and result.success
+        and slack_client is not None
+    ):
         plan_content, plan_detection_source = _detect_codex_plan_content(result.output)
 
         if not plan_content and result.session_id:
@@ -493,7 +520,9 @@ async def _execute_codex_backend(
             )
             result = await run_codex_turn(retry_prompt, result.session_id)
             if result.success:
-                plan_content, plan_detection_source = _detect_codex_plan_content(result.output)
+                plan_content, plan_detection_source = _detect_codex_plan_content(
+                    result.output
+                )
 
         if plan_content and result.success:
             approval_log = (
@@ -518,7 +547,9 @@ async def _execute_codex_backend(
             if approved:
                 codex_turn_index += 1
                 tool_id_namespace = f"turn{codex_turn_index}:"
-                await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
+                await deps.db.update_session_mode(
+                    channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
+                )
                 session.permission_mode = config.DEFAULT_BYPASS_MODE
                 if on_plan_approved:
                     on_chunk = await _maybe_swap_on_chunk_after_interaction(
@@ -569,21 +600,25 @@ async def _execute_claude_backend(
     max_questions = config.timeouts.execution.max_questions_per_conversation
 
     async def wrapped_on_chunk(msg: Any) -> None:
-        nonlocal on_chunk
         if msg.tool_activities and (slack_client is not None or auto_answer_questions):
             for tool in msg.tool_activities:
                 if tool.name != "AskUserQuestion":
                     continue
                 if tool.result is not None:
                     continue
-                if state.pending_question and state.pending_question.tool_use_id == tool.id:
+                if (
+                    state.pending_question
+                    and state.pending_question.tool_use_id == tool.id
+                ):
                     continue
                 state.pending_question = await QuestionManager.create_pending_question(
                     session_id=str(session.id),
                     channel_id=channel_id,
                     thread_ts=thread_ts,
                     tool_use_id=tool.id,
-                    tool_input=QuestionManager.normalize_question_tool_input(tool.input),
+                    tool_input=QuestionManager.normalize_question_tool_input(
+                        tool.input
+                    ),
                 )
         if on_chunk:
             await on_chunk(msg)
@@ -610,7 +645,9 @@ async def _execute_claude_backend(
             thread_ts=thread_ts,
         )
         if result.session_id and persist_session_ids:
-            await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
+            await deps.db.update_session_claude_id(
+                channel_id, thread_ts, result.session_id
+            )
         return result
 
     first_prompt = prompt
@@ -648,11 +685,15 @@ async def _execute_claude_backend(
         )
         if not isinstance(answer_text, str):
             state.pending_question = None
-            result.output = (state.accumulated_context + "\n\n_Question was cancelled._").strip()
+            result.output = (
+                state.accumulated_context + "\n\n_Question was cancelled._"
+            ).strip()
             result.success = False
             break
         if not auto_answer_questions:
-            on_chunk = await _maybe_swap_on_chunk_after_interaction(on_interaction_resumed, on_chunk)
+            on_chunk = await _maybe_swap_on_chunk_after_interaction(
+                on_interaction_resumed, on_chunk
+            )
         state.pending_question = None
         result = await run_claude_turn(
             answer_text,
@@ -672,8 +713,13 @@ async def _execute_claude_backend(
         await QuestionManager.cancel(state.pending_question.question_id)
         state.pending_question = None
 
-    if _result_field(result, "has_pending_plan_approval", False) and slack_client is not None:
-        plan_text = _result_field(result, "plan_subagent_result", "") or result.output or ""
+    if (
+        _result_field(result, "has_pending_plan_approval", False)
+        and slack_client is not None
+    ):
+        plan_text = (
+            _result_field(result, "plan_subagent_result", "") or result.output or ""
+        )
         plan_file_path = _extract_plan_file_path(plan_text) or _extract_plan_file_path(
             result.output or ""
         )
@@ -701,7 +747,9 @@ async def _execute_claude_backend(
             plan_file_path=plan_file_path,
         )
         if approved:
-            await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
+            await deps.db.update_session_mode(
+                channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
+            )
             session.permission_mode = config.DEFAULT_BYPASS_MODE
             if on_plan_approved:
                 on_chunk = await _maybe_swap_on_chunk_after_interaction(
@@ -716,7 +764,9 @@ async def _execute_claude_backend(
             )
         else:
             result.success = False
-            result.output = "_Plan not approved. Staying in plan mode until you provide feedback._"
+            result.output = (
+                "_Plan not approved. Staying in plan mode until you provide feedback._"
+            )
 
     return result
 

@@ -13,46 +13,26 @@ class Session:
     thread_ts: Optional[str] = None  # Thread timestamp for thread-based sessions
     working_directory: str = "~"
     claude_session_id: Optional[str] = None  # For Claude --resume flag
-    permission_mode: Optional[str] = None  # Per-session permission mode override (Claude)
+    permission_mode: Optional[str] = (
+        None  # Per-session permission mode override (Claude)
+    )
     model: Optional[str] = (
         None  # Model to use (e.g., "sonnet", "claude-opus-4-6[1m]", "gpt-5.3-codex")
     )
-    added_dirs: list = field(default_factory=list)  # Directories added via /add-dir
+    added_dirs: list[str] = field(
+        default_factory=list
+    )  # Directories added via /add-dir
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
     # Codex-specific fields
     codex_session_id: Optional[str] = None  # For Codex resume
-    sandbox_mode: str = "workspace-write"  # read-only, workspace-write, danger-full-access
+    sandbox_mode: str = (
+        "workspace-write"  # read-only, workspace-write, danger-full-access
+    )
     approval_mode: str = "on-request"  # untrusted, on-request, never
 
     @classmethod
     def from_row(cls, row: tuple) -> "Session":
-        # Handle schema evolution with ALTER TABLE ADD COLUMN
-        # Columns are appended at the end in order:
-        # - model (pos 8)
-        # - added_dirs (pos 9)
-        # - codex_session_id (pos 10)
-        # - sandbox_mode (pos 11)
-        # - approval_mode (pos 12)
-        # Original 8 columns: id, channel_id, thread_ts, working_directory,
-        #                     claude_session_id, permission_mode, created_at, last_active
-        model = None
-        added_dirs = []
-        codex_session_id = None
-        sandbox_mode = "workspace-write"
-        approval_mode = "on-request"
-
-        if len(row) > 8:
-            model = row[8]
-        if len(row) > 9:
-            added_dirs = json.loads(row[9]) if row[9] else []
-        if len(row) > 10:
-            codex_session_id = row[10]
-        if len(row) > 11:
-            sandbox_mode = row[11] or "workspace-write"
-        if len(row) > 12:
-            approval_mode = row[12] or "on-request"
-
         return cls(
             id=row[0],
             channel_id=row[1],
@@ -60,13 +40,13 @@ class Session:
             working_directory=row[3],
             claude_session_id=row[4],
             permission_mode=row[5],
-            model=model,
-            added_dirs=added_dirs,
+            model=row[8],
+            added_dirs=json.loads(row[9]) if row[9] else [],
             created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
             last_active=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
-            codex_session_id=codex_session_id,
-            sandbox_mode=sandbox_mode,
-            approval_mode=approval_mode,
+            codex_session_id=row[10],
+            sandbox_mode=row[11] or "workspace-write",
+            approval_mode=row[12] or "on-request",
         )
 
     def is_thread_session(self) -> bool:
@@ -169,78 +149,23 @@ class QueueItem:
 
     @classmethod
     def from_row(cls, row: tuple) -> "QueueItem":
-        # Handle schema evolution:
-        # - thread_ts added first
-        # - working_directory_override added later
-        # - parallel_group_id/parallel_limit added later
-        if len(row) >= 16:
-            return cls(
-                id=row[0],
-                session_id=row[1],
-                channel_id=row[2],
-                thread_ts=row[3],
-                prompt=row[4],
-                working_directory_override=row[5],
-                parallel_group_id=row[6],
-                parallel_limit=row[7],
-                status=row[8],
-                output=row[9],
-                error_message=row[10],
-                position=row[11],
-                message_ts=row[12],
-                created_at=(datetime.fromisoformat(row[13]) if row[13] else datetime.now()),
-                started_at=datetime.fromisoformat(row[14]) if row[14] else None,
-                completed_at=datetime.fromisoformat(row[15]) if row[15] else None,
-            )
-        if len(row) >= 14:
-            return cls(
-                id=row[0],
-                session_id=row[1],
-                channel_id=row[2],
-                thread_ts=row[3],
-                prompt=row[4],
-                working_directory_override=row[5],
-                status=row[6],
-                output=row[7],
-                error_message=row[8],
-                position=row[9],
-                message_ts=row[10],
-                created_at=(datetime.fromisoformat(row[11]) if row[11] else datetime.now()),
-                started_at=datetime.fromisoformat(row[12]) if row[12] else None,
-                completed_at=datetime.fromisoformat(row[13]) if row[13] else None,
-            )
-        if len(row) >= 13:
-            return cls(
-                id=row[0],
-                session_id=row[1],
-                channel_id=row[2],
-                thread_ts=row[3],
-                prompt=row[4],
-                working_directory_override=None,
-                status=row[5],
-                output=row[6],
-                error_message=row[7],
-                position=row[8],
-                message_ts=row[9],
-                created_at=(datetime.fromisoformat(row[10]) if row[10] else datetime.now()),
-                started_at=datetime.fromisoformat(row[11]) if row[11] else None,
-                completed_at=datetime.fromisoformat(row[12]) if row[12] else None,
-            )
         return cls(
             id=row[0],
             session_id=row[1],
             channel_id=row[2],
-            thread_ts=None,
-            prompt=row[3],
-            working_directory_override=None,
-            status=row[4],
-            output=row[5],
-            error_message=row[6],
-            position=row[7],
-            message_ts=row[8],
-            created_at=datetime.fromisoformat(row[9]) if row[9] else datetime.now(),
-            started_at=datetime.fromisoformat(row[10]) if row[10] else None,
-            completed_at=datetime.fromisoformat(row[11]) if row[11] else None,
+            thread_ts=row[3],
+            prompt=row[4],
+            working_directory_override=row[5],
+            parallel_group_id=row[6],
+            parallel_limit=row[7],
+            status=row[8],
+            output=row[9],
+            error_message=row[10],
+            position=row[11],
+            message_ts=row[12],
+            created_at=datetime.fromisoformat(row[13]) if row[13] else datetime.now(),
+            started_at=datetime.fromisoformat(row[14]) if row[14] else None,
+            completed_at=datetime.fromisoformat(row[15]) if row[15] else None,
         )
 
 

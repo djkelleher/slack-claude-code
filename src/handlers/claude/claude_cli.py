@@ -25,8 +25,6 @@ from src.utils.model_selection import (
     backend_label_for_model,
     codex_model_validation_error,
     get_all_model_options,
-    get_claude_model_options,
-    get_codex_model_options,
     model_display_name,
     normalize_current_model,
     normalize_model_name,
@@ -89,7 +87,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             default_cwd=config.DEFAULT_WORKING_DIR,
         )
         command_name = claude_command.strip().split(" ", 1)[0]
-        unsupported_hint = unsupported_claude_slash_command_message(session, command_name)
+        unsupported_hint = unsupported_claude_slash_command_message(
+            session, command_name
+        )
         if unsupported_hint:
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
@@ -206,7 +206,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         if cancelled_count > 0:
             message = f"Cancelled {cancelled_count} active process(es) and cleared conversation."
         else:
-            message = "Conversation cleared. Your next message will start a fresh session."
+            message = (
+                "Conversation cleared. Your next message will start a fresh session."
+            )
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
@@ -269,7 +271,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
         )
 
         # Add resolved directory to session's added_dirs list
-        added_dirs = await deps.db.add_session_dir(ctx.channel_id, ctx.thread_ts, str(resolved_dir))
+        added_dirs = await deps.db.add_session_dir(
+            ctx.channel_id, ctx.thread_ts, str(resolved_dir)
+        )
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
@@ -326,7 +330,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             return
 
         # Remove directory from session's added_dirs list
-        remaining_dirs = await deps.db.remove_session_dir(ctx.channel_id, ctx.thread_ts, directory)
+        remaining_dirs = await deps.db.remove_session_dir(
+            ctx.channel_id, ctx.thread_ts, directory
+        )
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
@@ -434,7 +440,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text="Codex usage",
-                    blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": summary}}],
+                    blocks=[
+                        {"type": "section", "text": {"type": "mrkdwn", "text": summary}}
+                    ],
                 )
             except Exception as e:
                 await ctx.client.chat_postMessage(
@@ -464,7 +472,12 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             channel=ctx.channel_id,
             thread_ts=ctx.thread_ts,
             text="Claude usage",
-            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(summary_lines)}}],
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "\n".join(summary_lines)},
+                }
+            ],
         )
 
     @app.command("/context")
@@ -497,7 +510,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 )
                 return
 
-            await deps.db.update_session_model(ctx.channel_id, ctx.thread_ts, normalized)
+            await deps.db.update_session_model(
+                ctx.channel_id, ctx.thread_ts, normalized
+            )
 
             backend_label = backend_label_for_model(normalized)
             selected_display = model_display_name(normalized)
@@ -528,7 +543,11 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             # Get display name for current model
             all_models = get_all_model_options()
             current_display = next(
-                (m["display"] for m in all_models if m["value"] == normalized_current_model),
+                (
+                    m["display"]
+                    for m in all_models
+                    if m["value"] == normalized_current_model
+                ),
                 model_display_name(normalized_current_model),
             )
             current_model_id = normalized_current_model or "default"
@@ -537,7 +556,11 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             initial_option = None
             for model in all_models:
                 option = {
-                    "text": {"type": "plain_text", "text": model["display"], "emoji": True},
+                    "text": {
+                        "type": "plain_text",
+                        "text": model["display"],
+                        "emoji": True,
+                    },
                     "value": model["name"],
                     "description": {"type": "plain_text", "text": model["desc"][:75]},
                 }
@@ -565,7 +588,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                             "emoji": True,
                         },
                         "options": select_options,
-                        **({"initial_option": initial_option} if initial_option else {}),
+                        **(
+                            {"initial_option": initial_option} if initial_option else {}
+                        ),
                     },
                 },
                 {"type": "divider"},
@@ -661,7 +686,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             if tokens and tokens[0].lower() in {"status", "read"}:
                 thread_arg = tokens[1] if len(tokens) > 1 else "current"
                 thread_id = (
-                    session.codex_session_id if thread_arg == "current" else thread_arg.strip()
+                    session.codex_session_id
+                    if thread_arg == "current"
+                    else thread_arg.strip()
                 )
                 if not thread_id:
                     await ctx.client.chat_postMessage(
@@ -722,11 +749,11 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 )
                 if review_thread_id:
                     review_summary += f"\nReview thread: `{review_thread_id}`"
-                    review_summary += (
-                        f"\nUse `/review status {review_thread_id}` to inspect progress."
-                    )
+                    review_summary += f"\nUse `/review status {review_thread_id}` to inspect progress."
                 else:
-                    review_summary += "\nUse `/review status` to inspect latest turn status."
+                    review_summary += (
+                        "\nUse `/review status` to inspect latest turn status."
+                    )
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
@@ -841,7 +868,9 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text="Codex MCP status",
-                    blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": summary}}],
+                    blocks=[
+                        {"type": "section", "text": {"type": "mrkdwn", "text": summary}}
+                    ],
                 )
             except Exception as e:
                 await ctx.client.chat_postMessage(

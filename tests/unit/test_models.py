@@ -18,8 +18,8 @@ from src.database.models import (
 class TestSession:
     """Tests for Session model."""
 
-    def test_from_row_new_schema(self):
-        """from_row handles new schema with model column."""
+    def test_from_row_current_schema(self):
+        """from_row handles the current session schema."""
         row = (
             1,  # id
             "C123ABC",  # channel_id
@@ -29,7 +29,11 @@ class TestSession:
             "plan",  # permission_mode
             "2024-01-15T10:30:00",  # created_at
             "2024-01-15T11:00:00",  # last_active
-            "opus",  # model (at position 8)
+            "opus",  # model
+            "[]",  # added_dirs
+            None,  # codex_session_id
+            "workspace-write",  # sandbox_mode
+            "on-request",  # approval_mode
         )
 
         session = Session.from_row(row)
@@ -120,29 +124,23 @@ class TestSession:
         session = Session(channel_id="C123", model=None)
         assert session.get_backend() == "claude"
 
-    def test_from_row_old_schema(self):
-        """from_row handles old schema without model column."""
-        row = (
-            1,  # id
-            "C123ABC",  # channel_id
-            None,  # thread_ts
-            "~",  # working_directory
-            None,  # claude_session_id
-            None,  # permission_mode
-            "2024-01-15T10:30:00",  # created_at
-            "2024-01-15T11:00:00",  # last_active
-        )
-
-        session = Session.from_row(row)
-
-        assert session.id == 1
-        assert session.channel_id == "C123ABC"
-        assert session.thread_ts is None
-        assert session.model is None
-
     def test_from_row_handles_null_dates(self):
         """from_row handles null date values."""
-        row = (1, "C123", None, "~", None, None, None, None, None)
+        row = (
+            1,
+            "C123",
+            None,
+            "~",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
         session = Session.from_row(row)
 
@@ -348,6 +346,8 @@ class TestQueueItem:
             "123.456",  # thread_ts
             "analyze this code",  # prompt
             "/repo-worktrees/feature-x",  # working_directory_override
+            "parallel-1",  # parallel_group_id
+            2,  # parallel_limit
             "running",  # status
             "partial output",  # output
             None,  # error_message
@@ -364,6 +364,8 @@ class TestQueueItem:
         assert item.thread_ts == "123.456"
         assert item.prompt == "analyze this code"
         assert item.working_directory_override == "/repo-worktrees/feature-x"
+        assert item.parallel_group_id == "parallel-1"
+        assert item.parallel_limit == 2
         assert item.status == "running"
         assert item.position == 5
         assert item.started_at == datetime.fromisoformat("2024-01-15T10:31:00")

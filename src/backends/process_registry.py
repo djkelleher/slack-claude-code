@@ -202,6 +202,11 @@ class ProcessRegistry:
                 if tracked_channel == channel_id
             )
 
+    async def count_all(self) -> int:
+        """Count all tracked processes."""
+        async with self.lock:
+            return len(self.active_processes)
+
     async def scopes_for_channel(self, channel_id: str) -> set[str]:
         """Return all session scopes currently tracked for a channel."""
         async with self.lock:

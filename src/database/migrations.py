@@ -135,7 +135,8 @@ CREATE TABLE IF NOT EXISTS queue_scheduled_events (
 
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread ON sessions(channel_id, thread_ts);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread
+ON sessions(channel_id, COALESCE(thread_ts, ''));
 CREATE INDEX IF NOT EXISTS idx_sessions_thread ON sessions(thread_ts) WHERE thread_ts IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_history_session ON command_history(session_id);
 CREATE INDEX IF NOT EXISTS idx_history_created ON command_history(created_at DESC);
@@ -209,7 +210,10 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     column_names = [col[1] for col in columns]
 
     await _add_column_if_missing(
-        db, column_names, "model", "ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT NULL"
+        db,
+        column_names,
+        "model",
+        "ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT NULL",
     )
     await _add_column_if_missing(
         db,
@@ -276,6 +280,38 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     # Normalize historical blank thread scopes to NULL so scope matching is stable.
     await db.execute(
         "UPDATE sessions SET thread_ts = NULL WHERE TRIM(COALESCE(thread_ts, '')) = ''"
+    )
+    await db.execute(
+        """
+        DELETE FROM sessions
+        WHERE id IN (
+            SELECT id
+            FROM (
+                SELECT
+                    id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY channel_id, COALESCE(thread_ts, '')
+                        ORDER BY
+                            (CASE WHEN model IS NOT NULL THEN 1 ELSE 0 END) DESC,
+                            (
+                                (CASE WHEN model IS NOT NULL THEN 1 ELSE 0 END) +
+                                (CASE WHEN codex_session_id IS NOT NULL THEN 1 ELSE 0 END) +
+                                (CASE WHEN claude_session_id IS NOT NULL THEN 1 ELSE 0 END) +
+                                (CASE WHEN permission_mode IS NOT NULL THEN 1 ELSE 0 END)
+                            ) DESC,
+                            last_active DESC,
+                            id DESC
+                    ) AS row_num
+                FROM sessions
+            ) ranked_sessions
+            WHERE row_num > 1
+        )
+        """
+    )
+    await db.execute("DROP INDEX IF EXISTS idx_sessions_channel_thread")
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread "
+        "ON sessions(channel_id, COALESCE(thread_ts, ''))"
     )
     await db.execute(
         "UPDATE queue_items SET thread_ts = NULL WHERE TRIM(COALESCE(thread_ts, '')) = ''"

@@ -28,11 +28,6 @@ class ProcessExecutorBase:
 
     def __init__(self) -> None:
         self._registry = ProcessRegistry()
-        # Backwards-compatible aliases retained for tests/integration points.
-        self._active_processes = self._registry.active_processes
-        self._process_channels = self._registry.process_channels
-        self._process_scopes = self._registry.process_scopes
-        self._execution_track_ids = self._registry.execution_track_ids
         self._lock = self._registry.lock
 
     @staticmethod
@@ -67,7 +62,9 @@ class ProcessExecutorBase:
         effective_max_depth = max_depth or cls.DEFAULT_MAX_RECURSION_DEPTH
         if recursion_depth < effective_max_depth:
             return None
-        logger.error(f"{log_prefix}Max recursion depth ({effective_max_depth}) reached, aborting")
+        logger.error(
+            f"{log_prefix}Max recursion depth ({effective_max_depth}) reached, aborting"
+        )
         return f"Max retry depth ({effective_max_depth}) exceeded"
 
     async def start_subprocess(

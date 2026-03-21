@@ -17,12 +17,6 @@ _LOOP_START_RE = re.compile(r"^\*\*\*loop-(-?\d+)$")
 _LOOP_END_RE = re.compile(r"^\*\*\*loop-(-?\d+)-end$")
 _PARALLEL_START_RE = re.compile(r"^\*\*\*parallel(?:-(-?\d+))?$")
 _PARALLEL_END_RE = re.compile(r"^\*\*\*parallel-end$")
-_QUEUE_SUBMISSION_DIRECTIVE_RE = re.compile(
-    r"^(?:\*\*\*queue-(append|new|replace)|/(append|new|replace|clear))$"
-)
-_QUEUE_TIMER_DIRECTIVE_RE = re.compile(
-    r"^\*\*\*at\s+(.+?)\s+(start|pause|resume|stop)$", re.IGNORECASE
-)
 _DIRECTIVE_RE = re.compile(r"^\(\((.+)\)\)$")
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -161,15 +155,12 @@ def parse_queue_plan_submission(
     - ``((insertN))``: insert at one-based pending queue index ``N``
     - ``((replace))`` or ``((clear))``: replace pending items in scope
     - ``((at <time>))``: schedule an implicit resume/start at the given time
-
-    Backward-compatible legacy directives are also accepted:
-    - ``***queue-new`` or ``***queue-replace``
-    - ``***queue-append``
-    - ``***at <time> <action>``
-    - ``/new``, ``/replace``, ``/clear``, ``/append``
     """
     current_now_utc = now_utc or datetime.now(timezone.utc)
-    if current_now_utc.tzinfo is None or current_now_utc.tzinfo.utcoffset(current_now_utc) is None:
+    if (
+        current_now_utc.tzinfo is None
+        or current_now_utc.tzinfo.utcoffset(current_now_utc) is None
+    ):
         raise QueuePlanError("now_utc must be timezone-aware")
     current_now_utc = current_now_utc.astimezone(timezone.utc)
     replace_pending = False
@@ -186,28 +177,14 @@ def parse_queue_plan_submission(
             body_start_index = index + 1
             continue
 
-        directive_match = _QUEUE_SUBMISSION_DIRECTIVE_RE.match(stripped)
-        if directive_match:
-            marker_directive, slash_directive = directive_match.groups()
-            directive = marker_directive or slash_directive
-            if directive == "clear":
-                directive = "replace"
-            if seen_directive is not None and seen_directive != directive:
-                raise QueuePlanError(
-                    "Queue submission directives conflict. Use only one of "
-                    "`((append))`, `((prepend))`, `((insertN))`, `((replace))`, "
-                    "`((clear))`, or one legacy directive such as `***queue-append`."
-                )
-            seen_directive = directive
-            replace_pending = directive != "append"
-            insertion_mode = "append"
-            insert_at = None
-            body_start_index = index + 1
-            continue
-
         directive = _parse_double_paren_submission_directive(stripped)
         if directive:
             directive_name, directive_value = directive
+            if seen_directive is not None and seen_directive != directive_name:
+                raise QueuePlanError(
+                    "Queue submission directives conflict. Use only one of "
+                    "`((append))`, `((prepend))`, `((insertN))`, `((replace))`, or `((clear))`."
+                )
             if directive_name == "append":
                 seen_directive = "append"
                 replace_pending = False
@@ -229,25 +206,14 @@ def parse_queue_plan_submission(
                 insertion_mode = "insert"
                 insert_at = int(directive_value)
             elif directive_name == "at":
+                time_text, action = directive_value
                 scheduled_controls.append(
                     _parse_queue_timer_directive(
-                        time_text=str(directive_value),
-                        action="resume",
+                        time_text=time_text,
+                        action=action,
                         now_utc=current_now_utc,
                     )
                 )
-            body_start_index = index + 1
-            continue
-
-        timer_match = _QUEUE_TIMER_DIRECTIVE_RE.match(stripped)
-        if timer_match:
-            scheduled_controls.append(
-                _parse_queue_timer_directive(
-                    time_text=timer_match.group(1),
-                    action=timer_match.group(2).lower(),
-                    now_utc=current_now_utc,
-                )
-            )
             body_start_index = index + 1
             continue
 
@@ -273,7 +239,8 @@ def _parse_queue_timer_directive(
     execute_at_utc = _parse_queue_timer_time(time_text, now_utc)
     if execute_at_utc <= now_utc:
         raise QueuePlanError(
-            f"Scheduled queue control time `{time_text}` is in the past. " "Use a future timestamp."
+            f"Scheduled queue control time `{time_text}` is in the past. "
+            "Use a future timestamp."
         )
     return QueueScheduledControl(action=action, execute_at=execute_at_utc)
 
@@ -299,7 +266,9 @@ def _parse_queue_timer_time(time_text: str, now_utc: datetime) -> datetime:
         hours = int(hhmm_match.group(1))
         minutes = int(hhmm_match.group(2))
         local_now = now_utc.astimezone()
-        local_dt = local_now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
+        local_dt = local_now.replace(
+            hour=hours, minute=minutes, second=0, microsecond=0
+        )
         return local_dt.astimezone(timezone.utc)
 
     raise QueuePlanError(
@@ -355,7 +324,9 @@ async def materialize_queue_plan_prompts(
     current_worktree_path = _find_containing_worktree_path(working_directory, worktrees)
     if current_worktree_path is None:
         current_worktree_path = str(Path(working_directory).resolve())
-    current_subdirectory = _relative_subdirectory(working_directory, current_worktree_path)
+    current_subdirectory = _relative_subdirectory(
+        working_directory, current_worktree_path
+    )
 
     worktree_paths_by_branch: dict[str, str] = {
         worktree.branch: worktree.path for worktree in worktrees if worktree.branch
@@ -396,7 +367,9 @@ def _parse_to_ast(text: str) -> list[_Node]:
     stack: list[_Frame] = [_Frame(kind="root", start_line=0)]
 
     for line_number, line in enumerate(text.splitlines(), start=1):
-        marker, inline_prompt = _parse_marker_with_inline_prompt(line.strip(), strict=True)
+        marker, inline_prompt = _parse_marker_with_inline_prompt(
+            line.strip(), strict=True
+        )
         current = stack[-1]
 
         if marker is None:
@@ -418,7 +391,11 @@ def _parse_to_ast(text: str) -> list[_Node]:
             if current.kind == "branch" and current.branch_name == branch_name:
                 _close_frame(stack)
             else:
-                stack.append(_Frame(kind="branch", start_line=line_number, branch_name=branch_name))
+                stack.append(
+                    _Frame(
+                        kind="branch", start_line=line_number, branch_name=branch_name
+                    )
+                )
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
@@ -444,7 +421,9 @@ def _parse_to_ast(text: str) -> list[_Node]:
             continue
 
         if marker_type == "loop_start":
-            stack.append(_Frame(kind="loop", start_line=line_number, loop_count=marker[1]))
+            stack.append(
+                _Frame(kind="loop", start_line=line_number, loop_count=marker[1])
+            )
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
@@ -474,7 +453,11 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 raise QueuePlanError(
                     f"Line {line_number}: nested parallel blocks are not supported."
                 )
-            stack.append(_Frame(kind="parallel", start_line=line_number, parallel_limit=marker[1]))
+            stack.append(
+                _Frame(
+                    kind="parallel", start_line=line_number, parallel_limit=marker[1]
+                )
+            )
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
@@ -512,7 +495,9 @@ def _close_frame(stack: list[_Frame]) -> None:
         )
         return
     if finished.kind == "loop":
-        stack[-1].nodes.append(_LoopNode(count=finished.loop_count or 1, children=finished.nodes))
+        stack[-1].nodes.append(
+            _LoopNode(count=finished.loop_count or 1, children=finished.nodes)
+        )
         return
     if finished.kind == "parallel":
         stack[-1].nodes.append(
@@ -538,12 +523,12 @@ def _unexpected_block_close_detail(current: _Frame) -> str:
         return (
             f"You are currently inside loop `{loop_count}` opened on line "
             f"{current.start_line}. Close it first with `((endloop{loop_count}))` "
-            f"or legacy `***loop-{loop_count}-end`."
+            f"or `***loop-{loop_count}-end`."
         )
     if current.kind == "parallel":
         return (
             f"You are currently inside parallel block opened on line {current.start_line}. "
-            "Close it first with `((endparallel))` or legacy `***parallel-end`."
+            "Close it first with `((endparallel))` or `***parallel-end`."
         )
     return "A different block is currently open."
 
@@ -666,7 +651,9 @@ def _parse_marker(line: str) -> tuple[str, str | int] | tuple[str] | None:
 
     loop_start = _LOOP_START_RE.match(line)
     if loop_start:
-        return _parse_loop_marker_value(loop_start.group(1), line, marker_type="loop_start")
+        return _parse_loop_marker_value(
+            loop_start.group(1), line, marker_type="loop_start"
+        )
 
     branch_end = _BRANCH_END_RE.match(line)
     if branch_end:
@@ -674,12 +661,16 @@ def _parse_marker(line: str) -> tuple[str, str | int] | tuple[str] | None:
 
     branch_start = _BRANCH_START_RE.match(line)
     if branch_start:
-        return _parse_branch_marker_value(branch_start.group(1), marker_type="branch_start")
+        return _parse_branch_marker_value(
+            branch_start.group(1), marker_type="branch_start"
+        )
 
     return None
 
 
-def _parse_double_paren_submission_directive(line: str) -> tuple[str, str | int] | None:
+def _parse_double_paren_submission_directive(
+    line: str,
+) -> tuple[str, str | int | tuple[str, str]] | None:
     """Parse queue submission directives using ``((...))`` syntax."""
     match = _DIRECTIVE_RE.match(line)
     if not match:
@@ -699,14 +690,21 @@ def _parse_double_paren_submission_directive(line: str) -> tuple[str, str | int]
             raise QueuePlanError("Insert directives must be like `((insert1))`.")
         return "insert", int(index_text)
     if lowered.startswith("at "):
-        time_text = body[3:].strip()
-        if not time_text:
-            raise QueuePlanError("Timer directives must be like `((at 18:30))`.")
-        return "at", time_text
+        schedule_body = body[3:].strip()
+        if not schedule_body:
+            raise QueuePlanError(
+                "Timer directives must be like `((at 18:30))` or `((at 18:30 pause))`."
+            )
+        parts = schedule_body.rsplit(" ", 1)
+        if len(parts) == 2 and parts[1].lower() in {"start", "pause", "resume", "stop"}:
+            return "at", (parts[0].strip(), parts[1].lower())
+        return "at", (schedule_body, "resume")
     return None
 
 
-def _parse_double_paren_block_marker(line: str) -> tuple[str, str | int] | tuple[str] | None:
+def _parse_double_paren_block_marker(
+    line: str,
+) -> tuple[str, str | int] | tuple[str] | None:
     """Parse block markers using ``((...))`` syntax."""
     match = _DIRECTIVE_RE.match(line)
     if not match:
@@ -733,7 +731,9 @@ def _parse_double_paren_block_marker(line: str) -> tuple[str, str | int] | tuple
     return None
 
 
-def _parse_loop_marker_value(count_text: str, line: str, marker_type: str) -> tuple[str, int]:
+def _parse_loop_marker_value(
+    count_text: str, line: str, marker_type: str
+) -> tuple[str, int]:
     """Parse and validate loop marker payload."""
     count = int(count_text)
     if count < 1:
@@ -753,7 +753,9 @@ def _parse_branch_marker_value(branch_text: str, marker_type: str) -> tuple[str,
     return marker_type, branch_name
 
 
-def _parse_parallel_marker_value(limit_text: Optional[str], line: str) -> tuple[str, Optional[int]]:
+def _parse_parallel_marker_value(
+    limit_text: Optional[str], line: str
+) -> tuple[str, Optional[int]]:
     """Parse and validate parallel marker payload."""
     if limit_text is None:
         return "parallel_start", None
@@ -766,7 +768,9 @@ def _parse_parallel_marker_value(limit_text: Optional[str], line: str) -> tuple[
     return "parallel_start", limit
 
 
-def _find_containing_worktree_path(working_directory: str, worktrees: list) -> Optional[str]:
+def _find_containing_worktree_path(
+    working_directory: str, worktrees: list
+) -> Optional[str]:
     """Return the worktree root containing the current working directory."""
     cwd_path = Path(working_directory).resolve()
     containing_paths = []

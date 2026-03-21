@@ -29,7 +29,7 @@ def apply_aiosqlite_compatibility_patch() -> None:
     async def _patched_connect(self: core.Connection) -> core.Connection:
         if self._connection is None:
             try:
-                future: asyncio.Future[Any] = asyncio.get_event_loop().create_future()
+                future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
                 self._tx.put_nowait((future, self._connector))
                 self._connection = await _await_with_polling(future)
             except BaseException:
@@ -46,7 +46,7 @@ def apply_aiosqlite_compatibility_patch() -> None:
             raise ValueError("Connection closed")
 
         function = partial(fn, *args, **kwargs)
-        future: asyncio.Future[ResultT] = asyncio.get_event_loop().create_future()
+        future: asyncio.Future[ResultT] = asyncio.get_running_loop().create_future()
         self._tx.put_nowait((future, function))
 
         return await _await_with_polling(future)

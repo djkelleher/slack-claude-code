@@ -4,16 +4,6 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-# Alias surface users expect from Claude-mode `/mode`.
-COMPAT_MODE_ALIASES: tuple[str, ...] = (
-    "bypass",
-    "ask",
-    "default",
-    "plan",
-    "accept",
-    "delegate",
-)
-
 # `/mode` aliases that Codex actually supports.
 SUPPORTED_COMPAT_MODE_ALIASES: tuple[str, ...] = (
     "bypass",
@@ -44,7 +34,9 @@ _COMPAT_TO_APPROVAL: dict[str, str] = {
 }
 
 _UNSUPPORTED_COMPAT_MODE_MESSAGES: dict[str, str] = {
-    "accept": ("`/mode accept` maps to Claude file-edit approvals and has no Codex equivalent."),
+    "accept": (
+        "`/mode accept` maps to Claude file-edit approvals and has no Codex equivalent."
+    ),
     "delegate": ("`/mode delegate` is Claude-specific and has no Codex equivalent."),
 }
 

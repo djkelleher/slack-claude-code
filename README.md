@@ -205,8 +205,8 @@ Queue control behavior:
 `/q` also supports a structured DSL so one command can enqueue many prompts.
 
 Queue submission directives supported before the first content block:
-- `/clear` or `((replace))` or `***queue-new` replace pending items before adding the new plan
-- `/append` or `((append))` or `***queue-append` append to pending items
+- `((clear))` or `((replace))` replace pending items before adding the new plan
+- `((append))` append to pending items
 - `((prepend))` prepends the expanded plan
 - `((insert<n>))` inserts the expanded plan at 1-based position `n`
 
@@ -217,7 +217,7 @@ Queue submission directives supported before the first content block:
 | `***loop-<n>` ... `***loop-<n>-end` | Repeat enclosed prompts `n` times (`n >= 1`, `-end` optional at EOF) |
 | `***parallel` ... `***parallel-end` | Run all enclosed prompts concurrently as one barriered queue group |
 | `***parallel-<n>` ... `***parallel-end` | Keep up to `<n>` enclosed prompts running concurrently until the block is drained |
-| `***at <time> <action>` | Schedule queue control action (`start`, `pause`, `resume`, `stop`) for this queue scope |
+| `((at <time> [action]))` | Schedule queue control action (`start`, `pause`, `resume`, `stop`) for this queue scope; default action is `resume` |
 
 Rules:
 - Markers normally appear on their own line.
