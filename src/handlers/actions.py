@@ -1153,7 +1153,11 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                         "label": {"type": "plain_text", "text": "Model ID"},
                         "hint": {
                             "type": "plain_text",
-                            "text": "Enter a model ID (or `default`; Codex supports -low/-medium/-high/-extra-high)",
+                            "text": (
+                                "Enter a model ID (or `default`; Codex supports "
+                                "-low/-medium/-high/-extra-high, Claude supports "
+                                "-low/-medium/-high/-max/-auto)"
+                            ),
                         },
                     }
                 ],

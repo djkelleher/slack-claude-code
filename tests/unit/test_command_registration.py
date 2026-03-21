@@ -1,7 +1,9 @@
 """Unit tests for top-level command registration."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from slack_bolt.async_app import AsyncApp
 
 from src.handlers import register_commands
@@ -103,3 +105,30 @@ def test_register_actions_includes_worktree_buttons():
     assert "worktree_switch" in app.actions
     assert "worktree_merge_current" in app.actions
     assert "worktree_remove" in app.actions
+
+
+@pytest.mark.asyncio
+async def test_custom_model_action_modal_mentions_claude_and_codex_effort_suffixes():
+    app = _FakeApp()
+    db = SimpleNamespace()
+    claude_executor = SimpleNamespace()
+    codex_executor = SimpleNamespace()
+
+    deps = register_commands(app, db, claude_executor, codex_executor=codex_executor)
+    register_actions(app, deps)
+
+    handler = app.actions["select_model_custom"]
+    client = SimpleNamespace(views_open=AsyncMock())
+
+    await handler(
+        ack=AsyncMock(),
+        action={"value": "C123|123.456"},
+        body={"trigger_id": "trigger-123"},
+        client=client,
+        logger=MagicMock(),
+    )
+
+    client.views_open.assert_awaited_once()
+    hint_text = client.views_open.await_args.kwargs["view"]["blocks"][0]["hint"]["text"]
+    assert "Codex supports -low/-medium/-high/-extra-high" in hint_text
+    assert "Claude supports -low/-medium/-high/-max/-auto" in hint_text
