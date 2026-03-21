@@ -13,6 +13,7 @@ from src.app import (
     _route_claude_message_to_active_execution_or_queue,
     _event_dedupe_key,
     _extract_structured_queue_plan_from_uploaded_files,
+    _handle_typed_model_command,
     _is_duplicate_event,
     _restore_pending_queue_processors,
     _slack_uploads_dir,
@@ -144,6 +145,27 @@ class TestUploadedStructuredQueuePlanDetection:
         )
 
         assert extracted is None
+
+
+class TestTypedModelCommand:
+    """Tests for redirecting typed /model messages to the slash command."""
+
+    @pytest.mark.asyncio
+    async def test_typed_model_command_points_to_selector(self):
+        """Typed /model guidance should describe the current select-based UI."""
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        await _handle_typed_model_command(
+            client,
+            channel_id="C123",
+            thread_ts="123.456",
+            message_ts="123.456",
+        )
+
+        client.chat_postMessage.assert_awaited_once()
+        kwargs = client.chat_postMessage.await_args.kwargs
+        assert kwargs["text"] == "Use `/model` slash command to open the model selector."
+        assert "open the model selector" in kwargs["blocks"][0]["text"]["text"]
 
 
 class TestCodexActiveTurnRouting:

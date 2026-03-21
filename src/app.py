@@ -361,7 +361,7 @@ async def _handle_typed_model_command(
     await client.chat_postMessage(
         channel=channel_id,
         thread_ts=thread_ts or message_ts,
-        text="Use `/model` slash command to open model picker buttons.",
+        text="Use `/model` slash command to open the model selector.",
         blocks=[
             {
                 "type": "section",
@@ -370,7 +370,7 @@ async def _handle_typed_model_command(
                     "text": (
                         ":information_source: `/model` was sent as regular message text, "
                         "so it was treated like a normal prompt.\n"
-                        "Run the Slack slash command `/model` to open the model buttons."
+                        "Run the Slack slash command `/model` to open the model selector."
                     ),
                 },
             }
