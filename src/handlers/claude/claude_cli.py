@@ -601,6 +601,20 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     },
                 }
             )
+            blocks.append(
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"Current model: *{current_display}*"
+                                f" (`{current_model_id}`) · backend `{current_backend}`"
+                            ),
+                        }
+                    ],
+                }
+            )
 
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,

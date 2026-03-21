@@ -110,10 +110,10 @@ class TestSession:
         session = Session(channel_id="C123", model="gpt-5.3-codex-extra-high")
         assert session.get_backend() == "codex"
 
-    def test_get_backend_unknown_gpt_defaults_to_claude(self):
-        """Unsupported gpt-* model IDs should not route to codex."""
+    def test_get_backend_unknown_gpt_routes_to_codex(self):
+        """GPT-prefixed model IDs should route to Codex backend selection."""
         session = Session(channel_id="C123", model="gpt-5")
-        assert session.get_backend() == "claude"
+        assert session.get_backend() == "codex"
 
     def test_get_backend_default(self):
         """get_backend returns 'claude' for None model."""

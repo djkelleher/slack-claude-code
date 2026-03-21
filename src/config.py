@@ -35,6 +35,7 @@ CODEX_MODELS: set[str] = {
 
 
 EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh")
+CLAUDE_EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "max", "auto")
 
 
 def parse_model_effort(model: str) -> tuple[str, Optional[str]]:
@@ -61,6 +62,29 @@ def parse_model_effort(model: str) -> tuple[str, Optional[str]]:
         "-medium": "medium",
         "-high": "high",
         "-low": "low",
+    }
+    for suffix, level in suffix_map.items():
+        if model_lower.endswith(suffix):
+            return model_clean[: -len(suffix)], level
+    return model_clean, None
+
+
+def parse_claude_model_effort(model: str) -> tuple[str, Optional[str]]:
+    """Parse Claude effort suffix embedded in a model string.
+
+    Examples
+    --------
+    ``claude-opus-4-6-high`` -> (``claude-opus-4-6``, ``high``)
+    ``claude-opus-4-6-max`` -> (``claude-opus-4-6``, ``max``)
+    """
+    model_clean = model.strip()
+    model_lower = model_clean.lower()
+    suffix_map = {
+        "-medium": "medium",
+        "-high": "high",
+        "-low": "low",
+        "-max": "max",
+        "-auto": "auto",
     }
     for suffix, level in suffix_map.items():
         if model_lower.endswith(suffix):
@@ -108,6 +132,8 @@ def get_backend_for_model(model: Optional[str]) -> str:
     # Check prefixes for extended model names
     if model_lower.startswith("claude"):
         return "claude"
+    if looks_like_codex_model(model_lower):
+        return "codex"
     # Default to Claude for unknown models
     return "claude"
 

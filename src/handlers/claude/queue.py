@@ -4,7 +4,7 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +14,7 @@ from slack_bolt.async_app import AsyncApp
 from src.config import config
 from src.database.models import Session
 from src.git.service import GitService
+from src.handlers.backend_command_adapter import _extract_rate_limits_from_rpc
 from src.tasks.manager import TaskManager
 from src.tasks.queue_plan import (
     QueuePlanError,
@@ -56,6 +57,20 @@ _QUEUE_SCHEDULE_DISPATCHER_POLL_SECONDS = 1.0
 _QUEUE_SCHEDULE_DISPATCHER_BATCH_SIZE = 50
 _QUEUE_SCHEDULE_DISPATCHER_LOCK: Optional[asyncio.Lock] = None
 _QUEUE_SCHEDULE_DISPATCHER_LOCK_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_USAGE_LIMIT_RE = re.compile(
+    r"(usage limit|rate limit|too many requests|try again later|quota exceeded)",
+    re.IGNORECASE,
+)
+_RESUME_TIME_PATTERNS = (
+    re.compile(
+        r"\b(?:try again|retry|resumes?|reset(?:s)?|available again)\s+(?:at|after)\s+"
+        r"(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?P<time>\d{4}-\d{2}-\d{2}[tT]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)\b"
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +78,14 @@ class _ParallelExecutionConfig:
     group_id: str
     claude_preamble: str
     codex_base_thread_id: Optional[str]
+
+
+@dataclass(frozen=True)
+class _QueueUsageLimitState:
+    """Resolved backend usage-limit pause metadata."""
+
+    resume_at: Optional[datetime]
+    detail: str
 
 
 def _queue_task_id(channel_id: str, thread_ts: Optional[str]) -> str:
@@ -204,6 +227,164 @@ def _format_scheduled_event_timestamp(event_time: datetime) -> str:
     if event_time.tzinfo is None or event_time.tzinfo.utcoffset(event_time) is None:
         event_time = event_time.replace(tzinfo=timezone.utc)
     return event_time.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _normalize_resume_at(resume_at: datetime) -> datetime:
+    """Normalize parsed resume times to timezone-aware UTC datetimes."""
+    if resume_at.tzinfo is None or resume_at.tzinfo.utcoffset(resume_at) is None:
+        local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+        resume_at = resume_at.replace(tzinfo=local_tz)
+    return resume_at.astimezone(timezone.utc)
+
+
+def _parse_resume_time_from_text(text: str) -> Optional[datetime]:
+    """Best-effort parser for backend reset times embedded in plain text."""
+    if not text:
+        return None
+
+    for pattern in _RESUME_TIME_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        value = match.group("time").strip()
+        try:
+            if "T" in value or "t" in value:
+                return _normalize_resume_at(datetime.fromisoformat(value.replace("Z", "+00:00")))
+            parsed = datetime.strptime(value.lower(), "%I:%M %p")
+        except ValueError:
+            try:
+                parsed = datetime.strptime(value.lower(), "%I %p")
+            except ValueError:
+                try:
+                    parsed = datetime.strptime(value, "%H:%M")
+                except ValueError:
+                    continue
+
+        now_local = datetime.now().astimezone()
+        candidate = now_local.replace(
+            hour=parsed.hour,
+            minute=parsed.minute,
+            second=0,
+            microsecond=0,
+        )
+        if candidate <= now_local:
+            candidate += timedelta(days=1)
+        return candidate.astimezone(timezone.utc)
+    return None
+
+
+def _result_text_for_limit_detection(output: Optional[str], error: Optional[str]) -> str:
+    """Combine backend result fields into a single searchable string."""
+    parts = [part.strip() for part in (error or "", output or "") if part and part.strip()]
+    return "\n".join(parts)
+
+
+async def _codex_usage_limit_state(
+    deps: HandlerDependencies,
+    working_directory: str,
+    result_text: str,
+) -> Optional[_QueueUsageLimitState]:
+    """Resolve Codex usage-limit state from RPC metadata and textual fallback."""
+    if not _USAGE_LIMIT_RE.search(result_text):
+        return None
+
+    resume_at: Optional[datetime] = None
+    if deps.codex_executor:
+        try:
+            payload = await deps.codex_executor.account_rate_limits_read(working_directory)
+            snapshots = _extract_rate_limits_from_rpc(payload)
+            reset_epochs = [
+                window.resets_at
+                for snapshot in snapshots.values()
+                for window in (snapshot.primary, snapshot.secondary)
+                if window and window.resets_at
+            ]
+            future_resets = [
+                datetime.fromtimestamp(epoch, tz=timezone.utc)
+                for epoch in reset_epochs
+                if epoch > int(datetime.now(timezone.utc).timestamp())
+            ]
+            if future_resets:
+                resume_at = min(future_resets)
+        except Exception:
+            resume_at = None
+
+    if resume_at is None:
+        resume_at = _parse_resume_time_from_text(result_text)
+
+    detail = "Codex usage limit reached."
+    if resume_at is not None:
+        detail = f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+    else:
+        detail = f"{detail} Resume time could not be determined automatically."
+    return _QueueUsageLimitState(resume_at=resume_at, detail=detail)
+
+
+async def _claude_usage_limit_state(
+    result_text: str,
+) -> Optional[_QueueUsageLimitState]:
+    """Resolve Claude usage-limit state from CLI output."""
+    if not _USAGE_LIMIT_RE.search(result_text):
+        return None
+
+    resume_at = _parse_resume_time_from_text(result_text)
+    detail = "Claude usage limit reached."
+    if resume_at is not None:
+        detail = f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+    else:
+        detail = f"{detail} Resume time could not be determined automatically."
+    return _QueueUsageLimitState(resume_at=resume_at, detail=detail)
+
+
+async def _resolve_usage_limit_state(
+    *,
+    backend: str,
+    deps: HandlerDependencies,
+    session: Session,
+    result_output: Optional[str],
+    result_error: Optional[str],
+) -> Optional[_QueueUsageLimitState]:
+    """Return usage-limit pause metadata for a backend result when applicable."""
+    result_text = _result_text_for_limit_detection(result_output, result_error)
+    if not result_text:
+        return None
+    if backend == "codex":
+        return await _codex_usage_limit_state(deps, session.working_directory, result_text)
+    return await _claude_usage_limit_state(result_text)
+
+
+async def _pause_queue_for_usage_limit(
+    *,
+    item,
+    channel_id: str,
+    thread_ts: Optional[str],
+    deps: HandlerDependencies,
+    client,
+    usage_limit: _QueueUsageLimitState,
+) -> None:
+    """Pause queue processing and optionally schedule resume after backend limits reset."""
+    await deps.db.update_queue_item_status(item.id, "pending")
+    await deps.db.update_queue_control_state(channel_id, thread_ts, "paused")
+
+    if usage_limit.resume_at is not None:
+        await deps.db.add_queue_scheduled_events(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            events=[("resume", usage_limit.resume_at)],
+        )
+        await ensure_queue_schedule_dispatcher(deps, client)
+
+    scope_label = _queue_scope_label(thread_ts)
+    text = (
+        f"{scope_label}: paused queue because backend usage limits were hit. "
+        f"{usage_limit.detail} Queue item #{item.id} was returned to pending."
+    )
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=text,
+        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
+    )
 
 
 def _scheduled_controls_summary(controls: list[QueueScheduledControl]) -> str:
@@ -618,9 +799,36 @@ async def _execute_queue_item(
             on_plan_approved=on_plan_approved,
         )
         result = route.result
+        route_backend = "claude"
+        try:
+            route_backend = route.backend
+        except AttributeError:
+            pass
         if override_key and result.session_id:
             backend_resume = override_resume_ids.setdefault(override_key, {})
-            backend_resume[route.backend] = result.session_id
+            backend_resume[route_backend] = result.session_id
+
+        usage_limit_state = await _resolve_usage_limit_state(
+            backend=route_backend,
+            deps=deps,
+            session=effective_session,
+            result_output=result.output,
+            result_error=result.error,
+        )
+        if usage_limit_state is not None:
+            await _pause_queue_for_usage_limit(
+                item=item,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                deps=deps,
+                client=client,
+                usage_limit=usage_limit_state,
+            )
+            if streaming_state and not streaming_state.accumulated_output.strip():
+                streaming_state.accumulated_output = usage_limit_state.detail
+            if streaming_state:
+                await streaming_state.finalize(is_error=True)
+            return None
 
         if result.success:
             await deps.db.update_queue_item_status(item.id, "completed", output=result.output)

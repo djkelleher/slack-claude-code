@@ -679,6 +679,169 @@ async def test_execute_queue_item_plan_approval_posts_implementation_message():
 
 
 @pytest.mark.asyncio
+async def test_execute_queue_item_pauses_and_requeues_on_claude_usage_limit():
+    """Claude usage-limit failures should pause the queue and return the item to pending."""
+    item = _queue_item(89, "ship fix")
+    session = Session(id=1, channel_id="C123", model="opus")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, True]),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+            add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=901)]),
+        ),
+        codex_executor=None,
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.001"}),
+        chat_update=AsyncMock(),
+    )
+
+    class _FakeStreamingState:
+        def __init__(self, **kwargs):
+            self.message_ts = kwargs["message_ts"]
+            self.accumulated_output = ""
+
+        def start_heartbeat(self):
+            return None
+
+        async def finalize(self, is_error: bool = False):
+            return None
+
+        async def stop_heartbeat(self):
+            return None
+
+    route_result = SimpleNamespace(
+        backend="claude",
+        result=SimpleNamespace(
+            success=False,
+            output="Usage limit reached. Try again at 7 PM.",
+            error="Usage limit reached. Try again at 7 PM.",
+            session_id=None,
+        ),
+    )
+
+    with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
+        with patch(
+            "src.handlers.claude.queue.create_streaming_callback",
+            side_effect=lambda _state: AsyncMock(),
+        ):
+            with patch(
+                "src.handlers.claude.queue.execute_for_session",
+                new=AsyncMock(return_value=route_result),
+            ):
+                with patch(
+                    "src.handlers.claude.queue.ensure_queue_schedule_dispatcher",
+                    new=AsyncMock(),
+                ) as mock_dispatcher:
+                    result = await _execute_queue_item(
+                        item,
+                        channel_id="C123",
+                        thread_ts=None,
+                        scope="C123:channel",
+                        deps=deps,
+                        client=client,
+                        log=MagicMock(),
+                        base_session=session,
+                        sequence_label="1",
+                        override_resume_ids={},
+                    )
+
+    assert result is None
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
+    assert statuses == ["running", "pending"]
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
+    deps.db.add_queue_scheduled_events.assert_awaited_once()
+    mock_dispatcher.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_queue_item_pauses_and_requeues_on_codex_usage_limit():
+    """Codex usage-limit failures should schedule resume using rate-limit metadata."""
+    item = _queue_item(90, "ship fix")
+    session = Session(id=1, channel_id="C123", model="gpt-5.4")
+    future_reset = int((datetime.now(timezone.utc) + timedelta(minutes=20)).timestamp())
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, True]),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+            add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=902)]),
+        ),
+        codex_executor=SimpleNamespace(
+            account_rate_limits_read=AsyncMock(
+                return_value={
+                    "rateLimits": {
+                        "limitId": "codex",
+                        "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": future_reset},
+                    }
+                }
+            )
+        ),
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.001"}),
+        chat_update=AsyncMock(),
+    )
+
+    class _FakeStreamingState:
+        def __init__(self, **kwargs):
+            self.message_ts = kwargs["message_ts"]
+            self.accumulated_output = ""
+
+        def start_heartbeat(self):
+            return None
+
+        async def finalize(self, is_error: bool = False):
+            return None
+
+        async def stop_heartbeat(self):
+            return None
+
+    route_result = SimpleNamespace(
+        backend="codex",
+        result=SimpleNamespace(
+            success=False,
+            output="Rate limit reached.",
+            error="Rate limit reached.",
+            session_id=None,
+        ),
+    )
+
+    with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
+        with patch(
+            "src.handlers.claude.queue.create_streaming_callback",
+            side_effect=lambda _state: AsyncMock(),
+        ):
+            with patch(
+                "src.handlers.claude.queue.execute_for_session",
+                new=AsyncMock(return_value=route_result),
+            ):
+                with patch(
+                    "src.handlers.claude.queue.ensure_queue_schedule_dispatcher",
+                    new=AsyncMock(),
+                ) as mock_dispatcher:
+                    result = await _execute_queue_item(
+                        item,
+                        channel_id="C123",
+                        thread_ts=None,
+                        scope="C123:channel",
+                        deps=deps,
+                        client=client,
+                        log=MagicMock(),
+                        base_session=session,
+                        sequence_label="1",
+                        override_resume_ids={},
+                    )
+
+    assert result is None
+    deps.codex_executor.account_rate_limits_read.assert_awaited_once_with("~")
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
+    assert statuses == ["running", "pending"]
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
+    deps.db.add_queue_scheduled_events.assert_awaited_once()
+    mock_dispatcher.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_register_queue_commands_exposes_current_queue_commands():
     """Queue command registration should expose the current queue command set."""
     app = _FakeApp()

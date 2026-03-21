@@ -14,7 +14,7 @@ from src.backends.stream_accumulator import StreamAccumulator
 from src.utils.process_utils import terminate_process_safely
 from src.utils.stream_models import concat_with_spacing
 
-from ..config import config
+from ..config import config, parse_claude_model_effort
 from .streaming import StreamMessage, StreamParser
 
 # Timeout for reading a single line from Claude process stdout
@@ -191,8 +191,12 @@ class SubprocessExecutor(ProcessExecutorBase):
         # Add model flag if specified (explicit model > config default)
         effective_model = model or config.DEFAULT_MODEL
         if effective_model:
-            cmd.extend(["--model", effective_model])
-            logger.info(f"{log_prefix}Using --model {effective_model}")
+            claude_model, claude_effort = parse_claude_model_effort(effective_model)
+            cmd.extend(["--model", claude_model])
+            logger.info(f"{log_prefix}Using --model {claude_model}")
+            if claude_effort:
+                cmd.extend(["--effort", claude_effort])
+                logger.info(f"{log_prefix}Using --effort {claude_effort}")
 
         # Determine permission mode: explicit > config default
         requested_mode = permission_mode or config.CLAUDE_PERMISSION_MODE

@@ -121,3 +121,24 @@ class TestClaudeSubprocessExecutor:
         assert result.success is True
         assert result.has_pending_plan_approval is True
         assert process.terminated is True
+
+    @pytest.mark.asyncio
+    async def test_claude_effort_suffix_is_passed_via_flag(self):
+        """Claude effort-bearing model IDs should become separate `--effort` args."""
+        process = _DummyProcess([_json_line({"type": "result", "result": "done", "duration_ms": 1})])
+
+        executor = SubprocessExecutor()
+        with patch.object(executor, "start_subprocess", new=AsyncMock(return_value=(process, None))) as mock_start:
+            result = await executor.execute(
+                prompt="build it",
+                working_directory="/tmp",
+                model="claude-opus-4-6-high",
+                db_session_id=2,
+            )
+
+        assert result.success is True
+        cmd = mock_start.await_args.kwargs["cmd"]
+        assert "--model" in cmd
+        assert "claude-opus-4-6" in cmd
+        assert "--effort" in cmd
+        assert "high" in cmd

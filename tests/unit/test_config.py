@@ -11,6 +11,8 @@ from src.config import (
     SlackTimeouts,
     TimeoutConfig,
     config,
+    get_backend_for_model,
+    parse_claude_model_effort,
 )
 
 
@@ -202,3 +204,19 @@ class TestPlansDirConstant:
         """PLANS_DIR equals the expanded home path."""
         expected = str(Path.home() / ".slack-claude-code" / "plans")
         assert PLANS_DIR == expected
+
+
+class TestModelParsingHelpers:
+    """Tests for backend and model-effort parsing helpers."""
+
+    def test_parse_claude_model_effort(self):
+        """Claude effort suffixes should split into model + effort."""
+        assert parse_claude_model_effort("claude-opus-4-6-high") == (
+            "claude-opus-4-6",
+            "high",
+        )
+        assert parse_claude_model_effort("claude-opus-4-6") == ("claude-opus-4-6", None)
+
+    def test_unknown_gpt_models_route_to_codex_backend(self):
+        """GPT-prefixed models should resolve to Codex even when not pre-listed."""
+        assert get_backend_for_model("gpt-3.4-high") == "codex"

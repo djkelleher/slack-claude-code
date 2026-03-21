@@ -27,6 +27,8 @@ class TestNormalizeModelName:
         assert normalize_model_name("sonnet") == "sonnet"
         assert normalize_model_name("sonnet-1m") == "claude-sonnet-4-6[1m]"
         assert normalize_model_name("haiku-4.5") == "haiku"
+        assert normalize_model_name("co46h") == "claude-opus-4-6-high"
+        assert normalize_model_name("claude-opus-4-6-max") == "claude-opus-4-6-max"
 
     def test_normalizes_codex_aliases_with_effort(self):
         """Codex aliases should map to canonical Codex IDs with effort suffixes."""

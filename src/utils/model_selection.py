@@ -5,10 +5,12 @@ from typing import Optional
 
 from src.config import (
     CODEX_MODELS,
+    CLAUDE_EFFORT_LEVELS,
     EFFORT_LEVELS,
     get_backend_for_model,
     is_supported_codex_model,
     looks_like_codex_model,
+    parse_claude_model_effort,
     parse_model_effort,
 )
 
@@ -165,17 +167,22 @@ def normalize_model_name(model_name: str) -> Optional[str]:
     if not normalized:
         return None
 
-    base_name, effort = parse_model_effort(normalized)
-    if base_name in _CLAUDE_MODEL_ALIASES:
-        resolved_base = _CLAUDE_MODEL_ALIASES[base_name]
-    else:
-        resolved_base = _CODEX_MODEL_ALIASES.get(base_name, base_name)
+    codex_base_name, codex_effort = parse_model_effort(normalized)
+    if codex_base_name in _CODEX_MODEL_ALIASES or looks_like_codex_model(codex_base_name):
+        resolved_codex_base = _CODEX_MODEL_ALIASES.get(codex_base_name, codex_base_name)
+        if codex_effort and looks_like_codex_model(resolved_codex_base):
+            return f"{resolved_codex_base}-{codex_effort}"
+        return resolved_codex_base
 
-    if resolved_base is None:
+    claude_base_name, claude_effort = parse_claude_model_effort(normalized)
+    resolved_claude_base = _CLAUDE_MODEL_ALIASES.get(claude_base_name, claude_base_name)
+    if resolved_claude_base is None:
+        if claude_effort:
+            return f"{claude_base_name}-{claude_effort}"
         return None
-    if effort and looks_like_codex_model(resolved_base):
-        return f"{resolved_base}-{effort}"
-    return resolved_base
+    if claude_effort and claude_effort in CLAUDE_EFFORT_LEVELS:
+        return f"{resolved_claude_base}-{claude_effort}"
+    return resolved_claude_base
 
 
 def get_claude_model_options() -> list[dict[str, str | None]]:
