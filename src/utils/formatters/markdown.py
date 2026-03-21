@@ -53,9 +53,15 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
 
     text = re.sub(r"`[^`\n]+?`", preserve_inline_code, text)
 
-    # Escape Python dunder methods by wrapping them in backticks
-    # This prevents __init__ etc from being interpreted as bold
-    text = re.sub(r"(?<!`)(__[a-zA-Z_][a-zA-Z0-9_]*__)(?!`)", r"`\1`", text)
+    # Preserve Python dunder methods with placeholders so later bold/italic
+    # regexes cannot rewrite their interior underscores.
+    dunder_names = []
+
+    def preserve_dunder_name(match):
+        dunder_names.append(f"`{match.group(1)}`")
+        return f"\x00DUNDER{len(dunder_names) - 1}\x00"
+
+    text = re.sub(r"(?<!`)(__[a-zA-Z_][a-zA-Z0-9_]*__)(?!`)", preserve_dunder_name, text)
 
     # Preserve Slack bold by using placeholders for converted bold text
     slack_bolds = []
@@ -89,6 +95,10 @@ def markdown_to_slack_mrkdwn(text: str) -> str:
     # Restore inline code
     for i, code in enumerate(inline_codes):
         text = text.replace(f"\x00INLINECODE{i}\x00", code)
+
+    # Restore dunder names
+    for i, dunder_name in enumerate(dunder_names):
+        text = text.replace(f"\x00DUNDER{i}\x00", dunder_name)
 
     # Restore code blocks
     for i, block in enumerate(code_blocks):

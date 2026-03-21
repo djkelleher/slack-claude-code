@@ -5,19 +5,39 @@ from src.database.models import ParallelJob
 from .base import time_ago
 
 
+_STATUS_LABELS = {
+    "pending": ":hourglass: Pending",
+    "running": ":arrows_counterclockwise: Running",
+    "completed": ":heavy_check_mark: Completed",
+    "failed": ":x: Failed",
+    "cancelled": ":no_entry: Cancelled",
+}
+
+
+def _status_text(status: str, fallback: str | None = None) -> str:
+    """Return a human-friendly status label with optional running detail."""
+    if status == "running" and fallback:
+        return fallback
+    return _STATUS_LABELS.get(status, status)
+
+
+def _cancel_button(job_id: int | None) -> dict:
+    """Build the shared cancel action button."""
+    return {
+        "type": "button",
+        "text": {"type": "plain_text", "text": "Cancel", "emoji": True},
+        "action_id": "cancel_job",
+        "value": str(job_id),
+        "style": "danger",
+    }
+
+
 def parallel_job_status(job: ParallelJob) -> list[dict]:
     """Format parallel job status."""
     config = job.config
     n_terminals = config.get("n_instances", 0)
     results = job.results or []
-
-    status_text = {
-        "pending": ":hourglass: Pending",
-        "running": ":arrows_counterclockwise: Running",
-        "completed": ":heavy_check_mark: Completed",
-        "failed": ":x: Failed",
-        "cancelled": ":no_entry: Cancelled",
-    }.get(job.status, job.status)
+    status_text = _status_text(job.status)
 
     # Build terminal status list
     terminal_statuses = []
@@ -65,15 +85,7 @@ def parallel_job_status(job: ParallelJob) -> list[dict]:
             }
         )
     if job.status in ("pending", "running"):
-        action_elements.append(
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "Cancel", "emoji": True},
-                "action_id": "cancel_job",
-                "value": str(job.id),
-                "style": "danger",
-            }
-        )
+        action_elements.append(_cancel_button(job.id))
 
     if action_elements:
         blocks.append({"type": "actions", "elements": action_elements})
@@ -90,14 +102,11 @@ def sequential_job_status(job: ParallelJob) -> list[dict]:
 
     current_loop = len(results) // len(commands) + 1 if commands else 1
     current_cmd = len(results) % len(commands) if commands else 0
-
-    status_text = {
-        "pending": ":hourglass: Pending",
-        "running": f":arrows_counterclockwise: Running (Loop {current_loop}/{loop_count}, Command {current_cmd + 1}/{len(commands)})",
-        "completed": ":heavy_check_mark: Completed",
-        "failed": ":x: Failed",
-        "cancelled": ":no_entry: Cancelled",
-    }.get(job.status, job.status)
+    running_detail = (
+        f":arrows_counterclockwise: Running (Loop {current_loop}/{loop_count}, "
+        f"Command {current_cmd + 1}/{len(commands)})"
+    )
+    status_text = _status_text(job.status, fallback=running_detail)
 
     blocks = [
         {
@@ -127,15 +136,7 @@ def sequential_job_status(job: ParallelJob) -> list[dict]:
         blocks.append(
             {
                 "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Cancel", "emoji": True},
-                        "action_id": "cancel_job",
-                        "value": str(job.id),
-                        "style": "danger",
-                    }
-                ],
+                "elements": [_cancel_button(job.id)],
             }
         )
 
@@ -171,13 +172,7 @@ def job_status_list(jobs: list[ParallelJob]) -> list[dict]:
                     "type": "mrkdwn",
                     "text": f"*Job #{job.id}* {status_emoji} {job_type}\n_{time_ago(job.created_at)}_",
                 },
-                "accessory": {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Cancel", "emoji": True},
-                    "action_id": "cancel_job",
-                    "value": str(job.id),
-                    "style": "danger",
-                },
+                "accessory": _cancel_button(job.id),
             }
         )
 
