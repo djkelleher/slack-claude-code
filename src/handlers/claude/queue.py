@@ -49,9 +49,15 @@ _PARALLEL_HISTORY_COMMAND_LIMIT = 10
 _PARALLEL_HISTORY_OUTPUT_LIMIT = 1000
 _PARALLEL_HISTORY_TOTAL_LIMIT = 12000
 _THREAD_TS_PATTERN = re.compile(r"^\d+\.\d+$")
-_QUEUE_OUTPUT_REFERENCE_RE = re.compile(r"\(\(\s*prev(\d+)output\s*\)\)", re.IGNORECASE)
 _QUEUE_POSITION_OUTPUT_REFERENCE_RE = re.compile(r"\(\(\s*p(\d+)output\s*\)\)", re.IGNORECASE)
 _QUEUE_DIRECTIVE_LINE_RE = re.compile(r"^\(\((.+)\)\)$")
+_QUEUE_SAVE_OUTPUT_DIRECTIVE_RE = re.compile(
+    r"^\(\(\s*save\s+([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)$",
+    re.IGNORECASE,
+)
+_QUEUE_NAMED_OUTPUT_REFERENCE_RE = re.compile(
+    r"\(\(\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)"
+)
 _QUEUE_COMMAND_USER_ID_PREFIX = "queue-item"
 _QUEUE_SCHEDULE_DISPATCHER_TASK_ID = "queue_schedule_dispatcher"
 _QUEUE_SCHEDULE_DISPATCHER_POLL_SECONDS = 1.0
@@ -437,14 +443,36 @@ def _scheduled_controls_summary(controls: list[QueueScheduledControl]) -> str:
     return f"Scheduled controls: {summary}."
 
 
-def _strip_runtime_directive_lines(prompt: str) -> tuple[str, Optional[str]]:
-    """Strip leading prompt-local directives and return prompt + optional model override."""
+def _extract_saved_output_name(prompt: str) -> Optional[str]:
+    """Return the saved-output variable name declared on a queue prompt, if any."""
+    for raw_line in prompt.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        match = _QUEUE_SAVE_OUTPUT_DIRECTIVE_RE.match(stripped)
+        if match:
+            return match.group(1)
+        if not _QUEUE_DIRECTIVE_LINE_RE.match(stripped):
+            break
+    return None
+
+
+def _strip_runtime_directive_lines(prompt: str) -> tuple[str, Optional[str], Optional[str]]:
+    """Strip leading prompt-local directives and return prompt, model override, save target."""
     lines = prompt.splitlines()
     stripped_lines = list(lines)
     model_override: Optional[str] = None
+    save_output_as: Optional[str] = None
 
     while stripped_lines:
-        match = _QUEUE_DIRECTIVE_LINE_RE.match(stripped_lines[0].strip())
+        current_line = stripped_lines[0].strip()
+        save_match = _QUEUE_SAVE_OUTPUT_DIRECTIVE_RE.match(current_line)
+        if save_match:
+            save_output_as = save_match.group(1)
+            stripped_lines.pop(0)
+            continue
+
+        match = _QUEUE_DIRECTIVE_LINE_RE.match(current_line)
         if not match:
             break
         directive_body = match.group(1).strip()
@@ -455,15 +483,16 @@ def _strip_runtime_directive_lines(prompt: str) -> tuple[str, Optional[str]]:
             "prepend",
             "replace",
             "clear",
+            "endbranch",
             "parallel",
             "endparallel",
-        } and not lowered.startswith(("loop", "endloop", "insert", "at ")):
+        } and not lowered.startswith(("branch ", "loop", "endloop", "insert", "at ", "save ")):
             model_override = normalized_model
             stripped_lines.pop(0)
             continue
         break
 
-    return "\n".join(stripped_lines).strip(), model_override
+    return "\n".join(stripped_lines).strip(), model_override, save_output_as
 
 
 async def _resolve_queue_runtime_prompt(
@@ -475,7 +504,7 @@ async def _resolve_queue_runtime_prompt(
     prompt: str,
 ) -> tuple[str, Optional[str]]:
     """Resolve prompt-local runtime substitutions and model overrides for a queue item."""
-    stripped_prompt, model_override = _strip_runtime_directive_lines(prompt)
+    stripped_prompt, model_override, _ = _strip_runtime_directive_lines(prompt)
     try:
         completed_items = await deps.db.get_completed_queue_items_before_position(
             channel_id,
@@ -484,26 +513,34 @@ async def _resolve_queue_runtime_prompt(
         )
     except AttributeError:
         completed_items = []
-    prior_outputs = list(reversed([queued.output or "" for queued in completed_items]))
     completed_outputs_by_position = {
         queued.position: queued.output or "" for queued in completed_items if queued.position < item.position
     }
-
-    def replace_output_reference(match: re.Match[str]) -> str:
-        index = int(match.group(1))
-        if index < 1 or index > len(prior_outputs):
-            return ""
-        return prior_outputs[index - 1]
+    saved_outputs_by_name = {
+        name: queued.output or ""
+        for queued in completed_items
+        if (name := _extract_saved_output_name(getattr(queued, "prompt", "")))
+    }
 
     def replace_position_output_reference(match: re.Match[str]) -> str:
         position = int(match.group(1))
         if position < 1 or position >= item.position:
-            return ""
-        return completed_outputs_by_position.get(position, "")
+            raise ValueError(f"Queue output reference `((p{position}output))` is not available yet.")
+        if position not in completed_outputs_by_position:
+            raise ValueError(f"Queue output reference `((p{position}output))` was not found.")
+        return completed_outputs_by_position[position]
 
-    resolved_prompt = _QUEUE_OUTPUT_REFERENCE_RE.sub(replace_output_reference, stripped_prompt)
+    def replace_named_output_reference(match: re.Match[str]) -> str:
+        variable_name = match.group(1)
+        if variable_name not in saved_outputs_by_name:
+            return match.group(0)
+        return saved_outputs_by_name[variable_name]
+
     resolved_prompt = _QUEUE_POSITION_OUTPUT_REFERENCE_RE.sub(
-        replace_position_output_reference, resolved_prompt
+        replace_position_output_reference, stripped_prompt
+    )
+    resolved_prompt = _QUEUE_NAMED_OUTPUT_REFERENCE_RE.sub(
+        replace_named_output_reference, resolved_prompt
     )
     return resolved_prompt.strip(), model_override
 

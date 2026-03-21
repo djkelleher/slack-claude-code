@@ -130,16 +130,14 @@ async def test_process_queue_marks_failed_when_initial_notification_fails():
 
 
 @pytest.mark.asyncio
-async def test_resolve_queue_runtime_prompt_supports_relative_output_references() -> (
-    None
-):
-    """Runtime prompt substitutions should resolve prior outputs by reverse-relative position."""
+async def test_resolve_queue_runtime_prompt_supports_named_output_references() -> None:
+    """Runtime prompt substitutions should resolve previously saved named outputs."""
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_completed_queue_items_before_position=AsyncMock(
                 return_value=[
-                    SimpleNamespace(position=1, output="first output"),
-                    SimpleNamespace(position=2, output="second output"),
+                    SimpleNamespace(position=1, prompt="((save first_pass))\nreview", output="first output"),
+                    SimpleNamespace(position=2, prompt="plain prompt", output="second output"),
                 ]
             )
         )
@@ -151,10 +149,10 @@ async def test_resolve_queue_runtime_prompt_supports_relative_output_references(
         item=item,
         channel_id="C123",
         thread_ts="123.456",
-        prompt="Compare ((prev1output)) against ((prev2output)).",
+        prompt="Compare ((first_pass)) against ((missing_value)).",
     )
 
-    assert resolved_prompt == "Compare second output against first output."
+    assert resolved_prompt == "Compare first output against ((missing_value))."
     assert model_override is None
 
 
@@ -167,9 +165,9 @@ async def test_resolve_queue_runtime_prompt_supports_absolute_output_references(
         db=SimpleNamespace(
             get_completed_queue_items_before_position=AsyncMock(
                 return_value=[
-                    SimpleNamespace(position=1, output="first output"),
-                    SimpleNamespace(position=2, output="second output"),
-                    SimpleNamespace(position=4, output="future output"),
+                    SimpleNamespace(position=1, prompt="first", output="first output"),
+                    SimpleNamespace(position=2, prompt="second", output="second output"),
+                    SimpleNamespace(position=4, prompt="future", output="future output"),
                 ]
             )
         )
@@ -181,11 +179,33 @@ async def test_resolve_queue_runtime_prompt_supports_absolute_output_references(
         item=item,
         channel_id="C123",
         thread_ts="123.456",
-        prompt="Use ((p1output)), ((p2output)), and ((p4output)).",
+        prompt="Use ((p1output)) and ((p2output)).",
     )
 
-    assert resolved_prompt == "Use first output, second output, and ."
+    assert resolved_prompt == "Use first output and second output."
     assert model_override is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_queue_runtime_prompt_rejects_unavailable_absolute_output_reference() -> None:
+    """Absolute output references should fail fast when the requested item is unavailable."""
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_completed_queue_items_before_position=AsyncMock(
+                return_value=[SimpleNamespace(position=1, prompt="first", output="first output")]
+            )
+        )
+    )
+    item = SimpleNamespace(position=2)
+
+    with pytest.raises(ValueError, match=r"\(\(p2output\)\)"):
+        await _resolve_queue_runtime_prompt(
+            deps,
+            item=item,
+            channel_id="C123",
+            thread_ts="123.456",
+            prompt="Use ((p2output)).",
+        )
 
 
 def test_queue_processing_log_line_preserves_prompt_tail() -> None:
@@ -1716,12 +1736,12 @@ async def test_q_add_structured_plan_defaults_to_append_when_queue_is_running():
             ):
                 await handler(
                     ack=AsyncMock(),
-                    command={
-                        "channel_id": "C123",
-                        "user_id": "U123",
-                        "text": "***loop-2\nnext",
-                        "command": "/q",
-                    },
+                        command={
+                            "channel_id": "C123",
+                            "user_id": "U123",
+                            "text": "((loop2))\nnext",
+                            "command": "/q",
+                        },
                     client=client,
                     logger=MagicMock(),
                 )
@@ -1741,8 +1761,8 @@ async def test_q_add_structured_plan_defaults_to_append_when_queue_is_running():
 
 
 @pytest.mark.asyncio
-async def test_q_add_structured_plan_supports_clear_directive():
-    """Structured `/q` submissions accept `((clear))` as replace-pending directive."""
+async def test_q_add_structured_plan_rejects_clear_directive():
+    """Structured `/q` submissions should direct queue clearing to `/qc clear`."""
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
@@ -1760,47 +1780,20 @@ async def test_q_add_structured_plan_supports_clear_directive():
 
     handler = app.handlers["/q"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.contains_queue_plan_markers", return_value=True
-    ):
-        with patch(
-            "src.handlers.claude.queue.materialize_queue_plan_text",
-            new=AsyncMock(
-                return_value=[
-                    SimpleNamespace(
-                        prompt="next",
-                        working_directory_override=None,
-                        parallel_group_id=None,
-                        parallel_limit=None,
-                    )
-                ]
-            ),
-        ) as mock_materialize:
-            with patch(
-                "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-            ):
-                await handler(
-                    ack=AsyncMock(),
-                    command={
-                        "channel_id": "C123",
-                        "user_id": "U123",
-                        "text": "((clear))\nnext",
-                        "command": "/q",
-                    },
-                    client=client,
-                    logger=MagicMock(),
-                )
-
-    deps.db.add_many_to_queue.assert_awaited_once_with(
-        session_id=1,
-        channel_id="C123",
-        thread_ts=None,
-        queue_entries=[("next", None, None, None)],
-        replace_pending=True,
-        insertion_mode="append",
-        insert_at=None,
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "((clear))\nnext",
+            "command": "/q",
+        },
+        client=client,
+        logger=MagicMock(),
     )
-    assert mock_materialize.await_args.kwargs["text"] == "next"
+
+    deps.db.add_many_to_queue.assert_not_awaited()
+    assert "handled by `/qc clear`" in client.chat_postMessage.await_args.kwargs["text"]
 
 
 @pytest.mark.asyncio
@@ -1956,7 +1949,7 @@ async def test_q_structured_plan_stays_paused_by_default():
             command={
                 "channel_id": "C123",
                 "user_id": "U123",
-                "text": "***loop-2\nqueued now",
+                "text": "((loop2))\nqueued now",
                 "command": "/q",
             },
             client=client,

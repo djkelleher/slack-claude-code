@@ -573,11 +573,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": (
-                            f"*Current Model:* {current_display}\n"
-                            f"*Backend:* {current_backend}\n"
-                            f"*Model ID:* `{current_model_id}`\n\nSelect a model:"
-                        ),
+                        "text": "*Select a model:*",
                     },
                     "accessory": {
                         "type": "static_select",

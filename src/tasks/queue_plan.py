@@ -11,12 +11,6 @@ from src.git.service import GitError, GitService
 MAX_EXPANDED_QUEUE_PLAN_ITEMS: int | None = None
 
 _ANY_MARKER_RE = re.compile(r"^\*\*\*.+$")
-_BRANCH_START_RE = re.compile(r"^\*\*\*branch-(.+)$")
-_BRANCH_END_RE = re.compile(r"^\*\*\*branch-(.+)-end$")
-_LOOP_START_RE = re.compile(r"^\*\*\*loop-(-?\d+)$")
-_LOOP_END_RE = re.compile(r"^\*\*\*loop-(-?\d+)-end$")
-_PARALLEL_START_RE = re.compile(r"^\*\*\*parallel(?:-(-?\d+))?$")
-_PARALLEL_END_RE = re.compile(r"^\*\*\*parallel-end$")
 _DIRECTIVE_RE = re.compile(r"^\(\((.+)\)\)$")
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -153,7 +147,6 @@ def parse_queue_plan_submission(
     - ``((append))``: append to the current pending queue
     - ``((prepend))``: insert at the front of the pending queue
     - ``((insertN))``: insert at one-based pending queue index ``N``
-    - ``((replace))`` or ``((clear))``: replace pending items in scope
     - ``((at <time>))``: schedule an implicit resume/start at the given time
     """
     current_now_utc = now_utc or datetime.now(timezone.utc)
@@ -183,7 +176,7 @@ def parse_queue_plan_submission(
             if seen_directive is not None and seen_directive != directive_name:
                 raise QueuePlanError(
                     "Queue submission directives conflict. Use only one of "
-                    "`((append))`, `((prepend))`, `((insertN))`, `((replace))`, or `((clear))`."
+                    "`((append))`, `((prepend))`, or `((insertN))`."
                 )
             if directive_name == "append":
                 seen_directive = "append"
@@ -195,11 +188,6 @@ def parse_queue_plan_submission(
                 replace_pending = False
                 insertion_mode = "prepend"
                 insert_at = 1
-            elif directive_name == "replace":
-                seen_directive = "replace"
-                replace_pending = True
-                insertion_mode = "append"
-                insert_at = None
             elif directive_name == "insert":
                 seen_directive = "insert"
                 replace_pending = False
@@ -386,16 +374,11 @@ def _parse_to_ast(text: str) -> list[_Node]:
 
         if marker_type == "branch_start":
             branch_name = marker[1]
-            # Allow `***branch-x` to act as a shorthand close marker
-            # when the matching branch block is currently open.
-            if current.kind == "branch" and current.branch_name == branch_name:
-                _close_frame(stack)
-            else:
-                stack.append(
-                    _Frame(
-                        kind="branch", start_line=line_number, branch_name=branch_name
-                    )
+            stack.append(
+                _Frame(
+                    kind="branch", start_line=line_number, branch_name=branch_name
                 )
+            )
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
@@ -405,17 +388,11 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 raise QueuePlanError(
                     f"Line {line_number}: inline prompt is not supported on branch end markers."
                 )
-            branch_name = marker[1]
             if current.kind != "branch":
                 detail = _unexpected_block_close_detail(current)
                 raise QueuePlanError(
-                    f"Line {line_number}: found branch end marker for `{branch_name}` "
-                    f"without matching open branch block. {detail}"
-                )
-            if current.branch_name != branch_name:
-                raise QueuePlanError(
-                    f"Line {line_number}: branch end `{branch_name}` does not match open "
-                    f"branch `{current.branch_name}` from line {current.start_line}."
+                    f"Line {line_number}: found branch end marker without matching open "
+                    f"branch block. {detail}"
                 )
             _close_frame(stack)
             continue
@@ -433,17 +410,11 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 raise QueuePlanError(
                     f"Line {line_number}: inline prompt is not supported on loop end markers."
                 )
-            loop_count = marker[1]
             if current.kind != "loop":
                 detail = _unexpected_block_close_detail(current)
                 raise QueuePlanError(
-                    f"Line {line_number}: found loop end marker for `{loop_count}` "
-                    f"without matching open loop block. {detail}"
-                )
-            if current.loop_count != loop_count:
-                raise QueuePlanError(
-                    f"Line {line_number}: loop end `{loop_count}` does not match open "
-                    f"loop `{current.loop_count}` from line {current.start_line}."
+                    f"Line {line_number}: found loop end marker without matching open "
+                    f"loop block. {detail}"
                 )
             _close_frame(stack)
             continue
@@ -512,23 +483,19 @@ def _unexpected_block_close_detail(current: _Frame) -> str:
     if current.kind == "root":
         return "No block is currently open."
     if current.kind == "branch":
-        branch_name = current.branch_name or ""
         return (
-            f"You are currently inside branch `{branch_name}` opened on line "
-            f"{current.start_line}. Close it first with `***branch-{branch_name}` "
-            f"or `***branch-{branch_name}-end`."
+            f"You are currently inside branch `{current.branch_name or ''}` opened on line "
+            f"{current.start_line}. Close it first with `((endbranch))`."
         )
     if current.kind == "loop":
-        loop_count = current.loop_count or 1
         return (
-            f"You are currently inside loop `{loop_count}` opened on line "
-            f"{current.start_line}. Close it first with `((endloop{loop_count}))` "
-            f"or `***loop-{loop_count}-end`."
+            f"You are currently inside loop `{current.loop_count or 1}` opened on line "
+            f"{current.start_line}. Close it first with `((endloop))`."
         )
     if current.kind == "parallel":
         return (
             f"You are currently inside parallel block opened on line {current.start_line}. "
-            "Close it first with `((endparallel))` or `***parallel-end`."
+            "Close it first with `((endparallel))`."
         )
     return "A different block is currently open."
 
@@ -617,6 +584,15 @@ def _parse_marker_with_inline_prompt(
     if marker is not None:
         return marker, None
 
+    if line.startswith("(("):
+        closing_index = line.find("))")
+        if closing_index != -1:
+            marker_token = line[: closing_index + 2]
+            trailing_text = line[closing_index + 2 :].strip()
+            inline_marker = _parse_marker(marker_token)
+            if inline_marker is not None:
+                return inline_marker, trailing_text or None
+
     parts = line.split(maxsplit=1)
     if len(parts) == 2:
         marker_token, trailing_text = parts
@@ -637,34 +613,6 @@ def _parse_marker(line: str) -> tuple[str, str | int] | tuple[str] | None:
     if double_paren_marker is not None:
         return double_paren_marker
 
-    parallel_end = _PARALLEL_END_RE.match(line)
-    if parallel_end:
-        return ("parallel_end",)
-
-    parallel_start = _PARALLEL_START_RE.match(line)
-    if parallel_start:
-        return _parse_parallel_marker_value(parallel_start.group(1), line)
-
-    loop_end = _LOOP_END_RE.match(line)
-    if loop_end:
-        return _parse_loop_marker_value(loop_end.group(1), line, marker_type="loop_end")
-
-    loop_start = _LOOP_START_RE.match(line)
-    if loop_start:
-        return _parse_loop_marker_value(
-            loop_start.group(1), line, marker_type="loop_start"
-        )
-
-    branch_end = _BRANCH_END_RE.match(line)
-    if branch_end:
-        return _parse_branch_marker_value(branch_end.group(1), marker_type="branch_end")
-
-    branch_start = _BRANCH_START_RE.match(line)
-    if branch_start:
-        return _parse_branch_marker_value(
-            branch_start.group(1), marker_type="branch_start"
-        )
-
     return None
 
 
@@ -681,14 +629,15 @@ def _parse_double_paren_submission_directive(
         return None
 
     lowered = body.lower()
-    if lowered in {"append", "prepend", "replace", "clear"}:
-        normalized = "replace" if lowered == "clear" else lowered
-        return normalized, normalized
+    if lowered in {"append", "prepend"}:
+        return lowered, lowered
     if lowered.startswith("insert"):
         index_text = lowered[len("insert") :].strip()
         if not index_text.isdigit() or int(index_text) < 1:
             raise QueuePlanError("Insert directives must be like `((insert1))`.")
         return "insert", int(index_text)
+    if lowered in {"clear", "replace"}:
+        raise QueuePlanError("Queue clearing is handled by `/qc clear`, not queue DSL.")
     if lowered.startswith("at "):
         schedule_body = body[3:].strip()
         if not schedule_body:
@@ -724,10 +673,12 @@ def _parse_double_paren_block_marker(
         count_text = lowered[len("loop") :].strip()
         if count_text.isdigit():
             return _parse_loop_marker_value(count_text, line, marker_type="loop_start")
-    if lowered.startswith("endloop"):
-        count_text = lowered[len("endloop") :].strip()
-        if count_text.isdigit():
-            return _parse_loop_marker_value(count_text, line, marker_type="loop_end")
+    if lowered == "endloop":
+        return ("loop_end",)
+    if lowered.startswith("branch "):
+        return _parse_branch_marker_value(body[len("branch ") :], marker_type="branch_start")
+    if lowered == "endbranch":
+        return ("branch_end",)
     return None
 
 
@@ -747,8 +698,6 @@ def _parse_branch_marker_value(branch_text: str, marker_type: str) -> tuple[str,
     """Parse and validate branch marker payload."""
     branch_name = branch_text.strip()
     if not branch_name:
-        if marker_type == "branch_end":
-            raise QueuePlanError("Branch end marker must include a branch name.")
         raise QueuePlanError("Branch marker must include a branch name.")
     return marker_type, branch_name
 
