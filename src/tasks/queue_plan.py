@@ -156,11 +156,17 @@ def parse_queue_plan_submission(
     """Extract top-level queue submission directives from queue-plan text.
 
     Supported directives must appear before the first non-empty, non-directive line:
-    - ``***queue-new`` or ``***queue-replace``: replace pending items in scope
-    - ``***queue-append``: append to the current pending queue
-    - ``***at <time> <action>``: schedule queue scope control events
-    - ``/new``, ``/replace``, or ``/clear``: replace pending items in scope
-    - ``/append``: append to the current pending queue
+    - ``((append))``: append to the current pending queue
+    - ``((prepend))``: insert at the front of the pending queue
+    - ``((insertN))``: insert at one-based pending queue index ``N``
+    - ``((replace))`` or ``((clear))``: replace pending items in scope
+    - ``((at <time>))``: schedule an implicit resume/start at the given time
+
+    Backward-compatible legacy directives are also accepted:
+    - ``***queue-new`` or ``***queue-replace``
+    - ``***queue-append``
+    - ``***at <time> <action>``
+    - ``/new``, ``/replace``, ``/clear``, ``/append``
     """
     current_now_utc = now_utc or datetime.now(timezone.utc)
     if current_now_utc.tzinfo is None or current_now_utc.tzinfo.utcoffset(current_now_utc) is None:
@@ -189,8 +195,8 @@ def parse_queue_plan_submission(
             if seen_directive is not None and seen_directive != directive:
                 raise QueuePlanError(
                     "Queue submission directives conflict. Use only one of "
-                    "`***queue-append`, `***queue-new`, `***queue-replace`, "
-                    "`/append`, `/new`, `/replace`, or `/clear`."
+                    "`((append))`, `((prepend))`, `((insertN))`, `((replace))`, "
+                    "`((clear))`, or one legacy directive such as `***queue-append`."
                 )
             seen_directive = directive
             replace_pending = directive != "append"
@@ -531,12 +537,13 @@ def _unexpected_block_close_detail(current: _Frame) -> str:
         loop_count = current.loop_count or 1
         return (
             f"You are currently inside loop `{loop_count}` opened on line "
-            f"{current.start_line}. Close it first with `***loop-{loop_count}-end`."
+            f"{current.start_line}. Close it first with `((endloop{loop_count}))` "
+            f"or legacy `***loop-{loop_count}-end`."
         )
     if current.kind == "parallel":
         return (
             f"You are currently inside parallel block opened on line {current.start_line}. "
-            "Close it first with `***parallel-end`."
+            "Close it first with `((endparallel))` or legacy `***parallel-end`."
         )
     return "A different block is currently open."
 

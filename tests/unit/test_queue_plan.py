@@ -18,8 +18,11 @@ from src.tasks.queue_plan import (
 
 def test_contains_queue_plan_markers_detects_known_markers() -> None:
     assert contains_queue_plan_markers("first\n***\nsecond") is True
+    assert contains_queue_plan_markers("((append))\nfirst\n***\nsecond") is True
+    assert contains_queue_plan_markers("((loop2))\nrun\n((endloop2))") is True
     assert contains_queue_plan_markers("***loop-2\nrun\n***loop-2-end") is True
     assert contains_queue_plan_markers("***branch-feature/x\nrun\n***branch-feature/x-end") is True
+    assert contains_queue_plan_markers("((parallel2))\nrun\n***\nmore\n((endparallel))") is True
     assert contains_queue_plan_markers("***parallel-2\nrun\n***parallel-end") is True
 
 
@@ -56,8 +59,21 @@ def test_parse_queue_plan_loop_supports_single_line_statement() -> None:
     assert [item.prompt for item in prompts] == ["continue", "continue", "continue"]
 
 
+def test_parse_queue_plan_supports_double_paren_loop_markers() -> None:
+    prompts = parse_queue_plan_text("((loop2))\nrun once\n((endloop2))")
+    assert [item.prompt for item in prompts] == ["run once", "run once"]
+
+
 def test_parse_queue_plan_parallel_block_assigns_shared_group() -> None:
     prompts = parse_queue_plan_text("***parallel-2\nfirst\n***\nsecond\n***parallel-end")
+    assert [item.prompt for item in prompts] == ["first", "second"]
+    assert prompts[0].parallel_group_id == prompts[1].parallel_group_id
+    assert prompts[0].parallel_limit == 2
+    assert prompts[1].parallel_limit == 2
+
+
+def test_parse_queue_plan_supports_double_paren_parallel_markers() -> None:
+    prompts = parse_queue_plan_text("((parallel2))\nfirst\n***\nsecond\n((endparallel))")
     assert [item.prompt for item in prompts] == ["first", "second"]
     assert prompts[0].parallel_group_id == prompts[1].parallel_group_id
     assert prompts[0].parallel_limit == 2
@@ -178,6 +194,33 @@ def test_parse_queue_plan_submission_supports_append_directive() -> None:
     assert body == "first task\n***\nsecond task"
 
 
+def test_parse_queue_plan_submission_supports_double_paren_append_directive() -> None:
+    options, body = parse_queue_plan_submission("((append))\nfirst task\n***\nsecond task")
+    assert options.replace_pending is False
+    assert options.directive_explicit is True
+    assert options.insertion_mode == "append"
+    assert options.insert_at is None
+    assert body == "first task\n***\nsecond task"
+
+
+def test_parse_queue_plan_submission_supports_prepend_directive() -> None:
+    options, body = parse_queue_plan_submission("((prepend))\nfirst task\n***\nsecond task")
+    assert options.replace_pending is False
+    assert options.directive_explicit is True
+    assert options.insertion_mode == "prepend"
+    assert options.insert_at == 1
+    assert body == "first task\n***\nsecond task"
+
+
+def test_parse_queue_plan_submission_supports_insert_directive() -> None:
+    options, body = parse_queue_plan_submission("((insert2))\nfirst task\n***\nsecond task")
+    assert options.replace_pending is False
+    assert options.directive_explicit is True
+    assert options.insertion_mode == "insert"
+    assert options.insert_at == 2
+    assert body == "first task\n***\nsecond task"
+
+
 def test_parse_queue_plan_submission_supports_clear_slash_directive() -> None:
     options, body = parse_queue_plan_submission("/clear\nfirst task\n***\nsecond task")
     assert options.replace_pending is True
@@ -231,6 +274,21 @@ def test_parse_queue_plan_submission_parses_timer_directives_with_hhmm_time() ->
     assert len(options.scheduled_controls) == 1
     assert options.scheduled_controls[0].action == "resume"
     assert options.scheduled_controls[0].execute_at > now_utc
+
+
+def test_parse_queue_plan_submission_parses_double_paren_timer_directive() -> None:
+    now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
+    options, body = parse_queue_plan_submission(
+        "((at 2026-03-13T18:30:00+00:00))\nfirst task",
+        now_utc=now,
+    )
+
+    assert body == "first task"
+    assert len(options.scheduled_controls) == 1
+    assert options.scheduled_controls[0].action == "resume"
+    assert options.scheduled_controls[0].execute_at == datetime(
+        2026, 3, 13, 18, 30, tzinfo=timezone.utc
+    )
 
 
 def test_parse_queue_plan_submission_rejects_past_timer_directive() -> None:
