@@ -511,6 +511,22 @@ class TestQueueOperations:
         assert updated.completed_at is not None
 
     @pytest.mark.asyncio
+    async def test_update_queue_item_status_pending_clears_run_metadata(self, db_repo):
+        """Resetting an item back to pending should clear stale run metadata."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        item = await db_repo.add_to_queue(session.id, "C123ABC", None, "test")
+        await db_repo.update_queue_item_status(item.id, "running")
+        await db_repo.update_queue_item_status(item.id, "failed", output="oops", error_message="boom")
+        await db_repo.update_queue_item_status(item.id, "pending")
+
+        updated = await db_repo.get_queue_item(item.id)
+        assert updated.status == "pending"
+        assert updated.output is None
+        assert updated.error_message is None
+        assert updated.started_at is None
+        assert updated.completed_at is None
+
+    @pytest.mark.asyncio
     async def test_remove_queue_item(self, db_repo):
         """remove_queue_item removes pending item."""
         session = await db_repo.get_or_create_session("C123ABC", None)

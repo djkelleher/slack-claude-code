@@ -225,11 +225,23 @@ async def test_handle_add_updates_session_by_default():
         ),
     )
     deps = _deps_for_session(session, executor=executor)
-    git_service = SimpleNamespace(add_worktree=AsyncMock(return_value="/repo-worktrees/feature-x"))
+    git_service = SimpleNamespace(
+        add_worktree=AsyncMock(return_value="/repo-worktrees/feature-x"),
+        list_worktrees=AsyncMock(
+            side_effect=[
+                [Worktree(path="/repo", branch="main", is_main=True)],
+                [
+                    Worktree(path="/repo", branch="main", is_main=True),
+                    Worktree(path="/repo-worktrees/feature-x", branch="feature-x"),
+                ],
+            ]
+        ),
+    )
 
     await _handle_add(ctx, deps, session, git_service, "feature-x", from_ref=None, stay=False)
 
     git_service.add_worktree.assert_not_called()
+    git_service.list_worktrees.assert_awaited()
     deps.db.update_session_cwd.assert_awaited_once_with(
         "C123", "123.456", "/repo-worktrees/feature-x"
     )
@@ -267,6 +279,31 @@ async def test_handle_add_raises_when_claude_native_worktree_unavailable():
         await _handle_add(ctx, deps, session, git_service, "feature-x", from_ref=None, stay=False)
 
     git_service.add_worktree.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_add_raises_when_native_worktree_not_identifiable():
+    ctx = _ctx()
+    session = Session(working_directory="/repo")
+    executor = SimpleNamespace(
+        supports_native_worktree=AsyncMock(return_value=True),
+        execute=AsyncMock(
+            return_value=SimpleNamespace(success=True, output="ok", session_id="claude-native-1")
+        ),
+    )
+    deps = _deps_for_session(session, executor=executor)
+    git_service = SimpleNamespace(
+        add_worktree=AsyncMock(),
+        list_worktrees=AsyncMock(
+            side_effect=[
+                [Worktree(path="/repo", branch="main", is_main=True)],
+                [Worktree(path="/repo", branch="main", is_main=True)],
+            ]
+        ),
+    )
+
+    with pytest.raises(GitError, match="no new worktree could be identified"):
+        await _handle_add(ctx, deps, session, git_service, "feature-x", from_ref=None, stay=False)
 
 
 @pytest.mark.asyncio

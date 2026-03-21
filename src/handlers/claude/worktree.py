@@ -2,7 +2,6 @@
 
 import json
 import shlex
-from pathlib import Path
 from typing import Optional
 
 from slack_bolt.async_app import AsyncApp
@@ -22,24 +21,10 @@ from src.utils.formatters.command import error_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
-
-def _extract_worktree_path_from_output(output: str) -> str:
-    """Extract an absolute path from Claude native worktree output."""
-    candidate = (output or "").strip().strip("`")
-    if not candidate:
-        raise GitError("Claude native worktree did not return a working directory path")
-    first_line = candidate.splitlines()[0].strip().strip("`")
-    path = Path(first_line).expanduser()
-    if not path.is_absolute():
-        raise GitError(
-            f"Claude native worktree returned a non-absolute path: {first_line or '(empty)'}"
-        )
-    return str(path.resolve())
-
-
 async def _create_claude_native_worktree(
     deps: HandlerDependencies,
     session: Session,
+    git_service: GitService,
     branch_name: str,
 ) -> tuple[str, Optional[str]]:
     """Create a Claude-native worktree session and return path + session id."""
@@ -50,8 +35,11 @@ async def _create_claude_native_worktree(
     if not await executor.supports_native_worktree():
         raise GitError("Claude native `--worktree` is unavailable on this host.")
 
+    worktrees_before = await git_service.list_worktrees(session.working_directory)
+    before_paths = {worktree.path for worktree in worktrees_before}
+
     result = await executor.execute(
-        prompt="Reply with ONLY the absolute current working directory path.",
+        prompt="Acknowledge once the new worktree session is ready.",
         working_directory=session.working_directory,
         execution_id=f"worktree_add_{branch_name}",
         permission_mode=config.DEFAULT_BYPASS_MODE,
@@ -63,7 +51,16 @@ async def _create_claude_native_worktree(
     )
     if not result.success:
         raise GitError(result.error or result.output or "Claude native worktree creation failed")
-    return _extract_worktree_path_from_output(result.output), result.session_id
+
+    worktrees_after = await git_service.list_worktrees(session.working_directory)
+    for worktree in worktrees_after:
+        if worktree.path not in before_paths and worktree.branch == branch_name:
+            return worktree.path, result.session_id
+    for worktree in worktrees_after:
+        if worktree.path not in before_paths:
+            return worktree.path, result.session_id
+
+    raise GitError("Claude native worktree completed but no new worktree could be identified")
 
 
 async def _switch_session_to_claude_native_worktree(
@@ -83,7 +80,7 @@ async def _switch_session_to_claude_native_worktree(
     if session.codex_session_id:
         await deps.db.clear_session_codex_id(channel_id, thread_ts)
 
-    session.working_directory = str(Path(target_path).resolve())
+    session.working_directory = target_path
     session.claude_session_id = claude_session_id
     session.codex_session_id = None
 
@@ -329,6 +326,7 @@ async def _handle_add(
         worktree_path, claude_session_id = await _create_claude_native_worktree(
             deps,
             session,
+            git_service,
             branch_name,
         )
         await _switch_session_to_claude_native_worktree(

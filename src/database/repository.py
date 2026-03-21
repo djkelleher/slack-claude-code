@@ -991,6 +991,14 @@ class DatabaseRepository:
                         item_id,
                     ),
                 )
+            elif status == "pending":
+                cursor = await db.execute(
+                    """UPDATE queue_items
+                       SET status = ?, output = NULL, error_message = NULL,
+                           started_at = NULL, completed_at = NULL
+                       WHERE id = ?""",
+                    (status, item_id),
+                )
             else:
                 cursor = await db.execute(
                     "UPDATE queue_items SET status = ? WHERE id = ?",

@@ -88,25 +88,32 @@ class SubprocessExecutor(ProcessExecutorBase):
         self._execution_states: dict[str, ExecutionState] = {}
         self._states_lock: asyncio.Lock = asyncio.Lock()
         self._supports_native_worktree: Optional[bool] = None
+        self._native_worktree_probe_lock: asyncio.Lock = asyncio.Lock()
 
     async def supports_native_worktree(self) -> bool:
         """Return True when the installed Claude CLI supports `--worktree`."""
         if self._supports_native_worktree is not None:
             return self._supports_native_worktree
 
-        try:
-            process = await asyncio.create_subprocess_exec(
-                "claude",
-                "--help",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout_bytes, _stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=5.0)
-            help_text = stdout_bytes.decode("utf-8", errors="replace")
-            self._supports_native_worktree = "--worktree" in help_text
-        except Exception:
-            self._supports_native_worktree = False
-        return self._supports_native_worktree
+        async with self._native_worktree_probe_lock:
+            if self._supports_native_worktree is not None:
+                return self._supports_native_worktree
+
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "claude",
+                    "--help",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout_bytes, _stderr_bytes = await asyncio.wait_for(
+                    process.communicate(), timeout=5.0
+                )
+                help_text = stdout_bytes.decode("utf-8", errors="replace")
+                self._supports_native_worktree = "--worktree" in help_text
+            except Exception:
+                return False
+            return self._supports_native_worktree
 
     async def _get_current_permission_mode(
         self, db_session_id: Optional[int], fallback_mode: Optional[str]

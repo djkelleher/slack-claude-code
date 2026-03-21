@@ -61,6 +61,10 @@ _USAGE_LIMIT_RE = re.compile(
     r"(usage limit|rate limit|too many requests|try again later|quota exceeded)",
     re.IGNORECASE,
 )
+_CLAUDE_USAGE_LIMIT_SIGNAL_RE = re.compile(
+    r"(usage limit|quota exceeded|try again|retry|available again|resets?)",
+    re.IGNORECASE,
+)
 _RESUME_TIME_PATTERNS = (
     re.compile(
         r"\b(?:try again|retry|resumes?|reset(?:s)?|available again)\s+(?:at|after)\s+"
@@ -326,6 +330,8 @@ async def _claude_usage_limit_state(
     """Resolve Claude usage-limit state from CLI output."""
     if not _USAGE_LIMIT_RE.search(result_text):
         return None
+    if not _CLAUDE_USAGE_LIMIT_SIGNAL_RE.search(result_text):
+        return None
 
     resume_at = _parse_resume_time_from_text(result_text)
     detail = "Claude usage limit reached."
@@ -343,8 +349,11 @@ async def _resolve_usage_limit_state(
     session: Session,
     result_output: Optional[str],
     result_error: Optional[str],
+    was_success: bool,
 ) -> Optional[_QueueUsageLimitState]:
     """Return usage-limit pause metadata for a backend result when applicable."""
+    if was_success:
+        return None
     result_text = _result_text_for_limit_detection(result_output, result_error)
     if not result_text:
         return None
@@ -814,6 +823,7 @@ async def _execute_queue_item(
             session=effective_session,
             result_output=result.output,
             result_error=result.error,
+            was_success=result.success,
         )
         if usage_limit_state is not None:
             await _pause_queue_for_usage_limit(
