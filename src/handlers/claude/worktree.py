@@ -2,6 +2,7 @@
 
 import json
 import shlex
+from pathlib import Path
 from typing import Optional
 
 from slack_bolt.async_app import AsyncApp
@@ -20,6 +21,71 @@ from src.handlers.worktree_ops import (
 from src.utils.formatters.command import error_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
+
+
+def _extract_worktree_path_from_output(output: str) -> str:
+    """Extract an absolute path from Claude native worktree output."""
+    candidate = (output or "").strip().strip("`")
+    if not candidate:
+        raise GitError("Claude native worktree did not return a working directory path")
+    first_line = candidate.splitlines()[0].strip().strip("`")
+    path = Path(first_line).expanduser()
+    if not path.is_absolute():
+        raise GitError(
+            f"Claude native worktree returned a non-absolute path: {first_line or '(empty)'}"
+        )
+    return str(path.resolve())
+
+
+async def _create_claude_native_worktree(
+    deps: HandlerDependencies,
+    session: Session,
+    branch_name: str,
+) -> tuple[str, Optional[str]]:
+    """Create a Claude-native worktree session and return path + session id."""
+    try:
+        executor = deps.executor
+    except AttributeError as exc:
+        raise GitError("Claude native `--worktree` executor is not configured.") from exc
+    if not await executor.supports_native_worktree():
+        raise GitError("Claude native `--worktree` is unavailable on this host.")
+
+    result = await executor.execute(
+        prompt="Reply with ONLY the absolute current working directory path.",
+        working_directory=session.working_directory,
+        execution_id=f"worktree_add_{branch_name}",
+        permission_mode=config.DEFAULT_BYPASS_MODE,
+        db_session_id=session.id,
+        model=session.model,
+        channel_id=session.channel_id,
+        thread_ts=session.thread_ts,
+        worktree_name=branch_name,
+    )
+    if not result.success:
+        raise GitError(result.error or result.output or "Claude native worktree creation failed")
+    return _extract_worktree_path_from_output(result.output), result.session_id
+
+
+async def _switch_session_to_claude_native_worktree(
+    deps: HandlerDependencies,
+    session: Session,
+    channel_id: str,
+    thread_ts: Optional[str],
+    target_path: str,
+    claude_session_id: Optional[str],
+) -> None:
+    """Switch session cwd while preserving the newly created Claude session ID."""
+    await deps.db.update_session_cwd(channel_id, thread_ts, target_path)
+    if claude_session_id:
+        await deps.db.update_session_claude_id(channel_id, thread_ts, claude_session_id)
+    else:
+        await deps.db.clear_session_claude_id(channel_id, thread_ts)
+    if session.codex_session_id:
+        await deps.db.clear_session_codex_id(channel_id, thread_ts)
+
+    session.working_directory = str(Path(target_path).resolve())
+    session.claude_session_id = claude_session_id
+    session.codex_session_id = None
 
 
 def _parse_worktree_tokens(tokens: list[str]) -> tuple[list[str], set[str], dict[str, str]]:
@@ -256,20 +322,39 @@ async def _handle_add(
     stay: bool = False,
 ) -> None:
     """Create a new worktree and optionally switch session to it."""
-    worktree_path = await git_service.add_worktree(
-        session.working_directory, branch_name, from_ref=from_ref
+    use_claude_native_worktree = (
+        session.get_backend() == "claude" and from_ref is None and not stay
     )
-
-    switch_note = "Session kept on current worktree."
-    if not stay:
-        await switch_session_to_worktree(
+    if use_claude_native_worktree:
+        worktree_path, claude_session_id = await _create_claude_native_worktree(
+            deps,
+            session,
+            branch_name,
+        )
+        await _switch_session_to_claude_native_worktree(
             deps,
             session,
             ctx.channel_id,
             ctx.thread_ts,
             worktree_path,
+            claude_session_id,
         )
-        switch_note = "Session switched to new worktree."
+        switch_note = "Session switched to new Claude native worktree."
+    else:
+        worktree_path = await git_service.add_worktree(
+            session.working_directory, branch_name, from_ref=from_ref
+        )
+
+        switch_note = "Session kept on current worktree."
+        if not stay:
+            await switch_session_to_worktree(
+                deps,
+                session,
+                ctx.channel_id,
+                ctx.thread_ts,
+                worktree_path,
+            )
+            switch_note = "Session switched to new worktree."
 
     from_note = f"\n*Base ref:* `{from_ref}`" if from_ref else ""
 

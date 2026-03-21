@@ -87,6 +87,26 @@ class SubprocessExecutor(ProcessExecutorBase):
         # Per-execution state to avoid race conditions between concurrent executions
         self._execution_states: dict[str, ExecutionState] = {}
         self._states_lock: asyncio.Lock = asyncio.Lock()
+        self._supports_native_worktree: Optional[bool] = None
+
+    async def supports_native_worktree(self) -> bool:
+        """Return True when the installed Claude CLI supports `--worktree`."""
+        if self._supports_native_worktree is not None:
+            return self._supports_native_worktree
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "claude",
+                "--help",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, _stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=5.0)
+            help_text = stdout_bytes.decode("utf-8", errors="replace")
+            self._supports_native_worktree = "--worktree" in help_text
+        except Exception:
+            self._supports_native_worktree = False
+        return self._supports_native_worktree
 
     async def _get_current_permission_mode(
         self, db_session_id: Optional[int], fallback_mode: Optional[str]
@@ -135,6 +155,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         model: Optional[str] = None,
         channel_id: Optional[str] = None,
         thread_ts: Optional[str] = None,
+        worktree_name: Optional[str] = None,
         _recursion_depth: int = 0,
         _is_retry_after_exit_plan_error: bool = False,
     ) -> ExecutionResult:
@@ -151,6 +172,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             db_session_id: Database session ID for smart context tracking (optional)
             model: Model to use (e.g., "sonnet", "haiku", "claude-opus-4-6[1m]")
             channel_id: Slack channel ID for channel-specific cancellation
+            worktree_name: Optional Claude native worktree name for this execution
             _recursion_depth: Internal parameter to track retry depth (max 3)
 
         Returns:
@@ -221,6 +243,10 @@ class SubprocessExecutor(ProcessExecutorBase):
             cmd.extend(["--add-dir", added_dir])
         if added_dirs:
             logger.info(f"{log_prefix}Using {len(added_dirs)} added directory override(s)")
+
+        if worktree_name:
+            cmd.extend(["--worktree", worktree_name])
+            logger.info(f"{log_prefix}Using native Claude worktree `{worktree_name}`")
 
         # Add resume flag if we have a valid Claude session ID (must be UUID format)
         if resume_session_id and UUID_PATTERN.match(resume_session_id):
@@ -677,6 +703,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                     model=model,
                     channel_id=channel_id,
                     thread_ts=thread_ts,
+                    worktree_name=worktree_name,
                     _recursion_depth=_recursion_depth + 1,
                 )
 
@@ -698,6 +725,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                     model=model,
                     channel_id=channel_id,
                     thread_ts=thread_ts,
+                    worktree_name=worktree_name,
                     _recursion_depth=_recursion_depth + 1,
                     _is_retry_after_exit_plan_error=True,  # Prevent infinite retry
                 )

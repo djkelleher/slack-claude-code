@@ -41,14 +41,16 @@ def _ctx(channel_id: str = "C123", thread_ts: str = "123.456"):
     )
 
 
-def _deps_for_session(session: Session):
+def _deps_for_session(session: Session, executor=None):
     return SimpleNamespace(
         db=SimpleNamespace(
             get_or_create_session=AsyncMock(return_value=session),
             update_session_cwd=AsyncMock(),
             clear_session_claude_id=AsyncMock(),
             clear_session_codex_id=AsyncMock(),
-        )
+            update_session_claude_id=AsyncMock(),
+        ),
+        executor=executor,
     )
 
 
@@ -211,16 +213,30 @@ async def test_command_rejects_invalid_flags_for_list():
 async def test_handle_add_updates_session_by_default():
     ctx = _ctx()
     session = Session(working_directory="/repo", codex_session_id="codex-1")
-    deps = _deps_for_session(session)
+    executor = SimpleNamespace(
+        supports_native_worktree=AsyncMock(return_value=True),
+        execute=AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                output="/repo-worktrees/feature-x",
+                session_id="claude-native-1",
+                error=None,
+            )
+        ),
+    )
+    deps = _deps_for_session(session, executor=executor)
     git_service = SimpleNamespace(add_worktree=AsyncMock(return_value="/repo-worktrees/feature-x"))
 
     await _handle_add(ctx, deps, session, git_service, "feature-x", from_ref=None, stay=False)
 
-    git_service.add_worktree.assert_awaited_once_with("/repo", "feature-x", from_ref=None)
+    git_service.add_worktree.assert_not_called()
     deps.db.update_session_cwd.assert_awaited_once_with(
         "C123", "123.456", "/repo-worktrees/feature-x"
     )
-    deps.db.clear_session_claude_id.assert_awaited_once_with("C123", "123.456")
+    deps.db.update_session_claude_id.assert_awaited_once_with(
+        "C123", "123.456", "claude-native-1"
+    )
+    deps.db.clear_session_claude_id.assert_not_called()
     deps.db.clear_session_codex_id.assert_awaited_once_with("C123", "123.456")
 
 
@@ -237,6 +253,20 @@ async def test_handle_add_with_stay_does_not_change_session_cwd():
     deps.db.update_session_cwd.assert_not_called()
     deps.db.clear_session_claude_id.assert_not_called()
     deps.db.clear_session_codex_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_add_raises_when_claude_native_worktree_unavailable():
+    ctx = _ctx()
+    session = Session(working_directory="/repo")
+    executor = SimpleNamespace(supports_native_worktree=AsyncMock(return_value=False))
+    deps = _deps_for_session(session, executor=executor)
+    git_service = SimpleNamespace(add_worktree=AsyncMock())
+
+    with pytest.raises(GitError, match="native `--worktree` is unavailable"):
+        await _handle_add(ctx, deps, session, git_service, "feature-x", from_ref=None, stay=False)
+
+    git_service.add_worktree.assert_not_called()
 
 
 @pytest.mark.asyncio
