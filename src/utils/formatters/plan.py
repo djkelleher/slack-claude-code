@@ -5,6 +5,27 @@ from typing import Optional
 from .base import escape_markdown, split_text_into_blocks
 
 
+def _prompt_context(prompt: str) -> dict:
+    """Build the shared prompt preview context block."""
+    preview = escape_markdown(prompt[:200])
+    suffix = "..." if len(prompt) > 200 else ""
+    return {
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": f"> {preview}{suffix}"}],
+    }
+
+
+def _metadata_footer(parts: list[str]) -> list[dict]:
+    """Build a standard metadata footer separated by a divider."""
+    return [
+        {"type": "divider"},
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": " | ".join(parts)}],
+        },
+    ]
+
+
 def plan_processing_message(prompt: str) -> list[dict]:
     """Format initial planning message.
 
@@ -15,15 +36,7 @@ def plan_processing_message(prompt: str) -> list[dict]:
         List of Slack blocks
     """
     return [
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"> {escape_markdown(prompt[:200])}{'...' if len(prompt) > 200 else ''}",
-                }
-            ],
-        },
+        _prompt_context(prompt),
         {"type": "divider"},
         {
             "type": "section",
@@ -51,15 +64,7 @@ def plan_ready_message(
         List of Slack blocks
     """
     return [
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"> {escape_markdown(prompt[:200])}{'...' if len(prompt) > 200 else ''}",
-                }
-            ],
-        },
+        _prompt_context(prompt),
         {"type": "divider"},
         {
             "type": "section",
@@ -87,15 +92,7 @@ def plan_execution_update(
         List of Slack blocks
     """
     blocks = [
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"> {escape_markdown(prompt[:200])}{'...' if len(prompt) > 200 else ''}",
-                }
-            ],
-        },
+        _prompt_context(prompt),
         {"type": "divider"},
         {
             "type": "section",
@@ -117,13 +114,7 @@ def plan_execution_update(
 
     # Add footer with duration if available
     if duration_ms:
-        blocks.append({"type": "divider"})
-        blocks.append(
-            {
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": f":stopwatch: {duration_ms / 1000:.1f}s"}],
-            }
-        )
+        blocks.extend(_metadata_footer([f":stopwatch: {duration_ms / 1000:.1f}s"]))
 
     return blocks
 
@@ -148,15 +139,7 @@ def plan_execution_complete(
         List of Slack blocks
     """
     blocks = [
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"> {escape_markdown(prompt[:200])}{'...' if len(prompt) > 200 else ''}",
-                }
-            ],
-        },
+        _prompt_context(prompt),
         {"type": "divider"},
     ]
 
@@ -176,12 +159,6 @@ def plan_execution_complete(
     if command_id:
         footer_parts.append(f":memo: History #{command_id}")
 
-    blocks.append({"type": "divider"})
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": " | ".join(footer_parts)}],
-        }
-    )
+    blocks.extend(_metadata_footer(footer_parts))
 
     return blocks
