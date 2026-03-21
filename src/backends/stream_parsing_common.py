@@ -7,6 +7,13 @@ from typing import Any
 from src.utils.stream_models import BaseToolActivity
 
 
+def _preview_tool_value(value: Any, max_len: int = 100) -> Any:
+    """Truncate long string tool inputs for detailed activity output."""
+    if isinstance(value, str) and len(value) > max_len:
+        return value[:max_len] + "..."
+    return value
+
+
 def parse_json_line_with_buffer(
     *,
     line: str,
@@ -76,11 +83,7 @@ def create_tool_activity(
 
     detailed_addition = f"\n\n[Tool: {tool_name}]\n"
     for key, value in normalized_input.items():
-        if isinstance(value, str) and len(value) > 100:
-            value_preview = value[:100] + "..."
-        else:
-            value_preview = value
-        detailed_addition += f"  {key}: {value_preview}\n"
+        detailed_addition += f"  {key}: {_preview_tool_value(value)}\n"
 
     return tool_activity, detailed_addition, collision
 
