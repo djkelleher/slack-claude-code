@@ -6,6 +6,14 @@ from typing import Any
 from .base import escape_markdown
 
 
+def _more_items_context(count: int) -> dict:
+    """Render a standard overflow notice."""
+    return {
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": f"_... and {count} more_"}],
+    }
+
+
 def _escaped_preview(text: str, limit: int) -> str:
     """Escape and truncate text for compact queue previews."""
     if len(text) <= limit:
@@ -84,14 +92,7 @@ def queue_status(pending: list, running: Any, scheduled_events: list | None = No
             }
         )
         if len(scheduled) > 5:
-            blocks.append(
-                {
-                    "type": "context",
-                    "elements": [
-                        {"type": "mrkdwn", "text": f"_... and {len(scheduled) - 5} more_"}
-                    ],
-                }
-            )
+            blocks.append(_more_items_context(len(scheduled) - 5))
         blocks.append({"type": "divider"})
 
     if not pending:
@@ -111,12 +112,7 @@ def queue_status(pending: list, running: Any, scheduled_events: list | None = No
             )
 
         if len(pending) > 10:
-            blocks.append(
-                {
-                    "type": "context",
-                    "elements": [{"type": "mrkdwn", "text": f"_... and {len(pending) - 10} more_"}],
-                }
-            )
+            blocks.append(_more_items_context(len(pending) - 10))
 
     return blocks
 
@@ -210,11 +206,6 @@ def queue_scope_overview(scopes: list[dict[str, Any]]) -> list[dict]:
         )
 
     if len(scopes) > 15:
-        blocks.append(
-            {
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": f"_... and {len(scopes) - 15} more_"}],
-            }
-        )
+        blocks.append(_more_items_context(len(scopes) - 15))
 
     return blocks
