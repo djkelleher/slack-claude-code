@@ -2,12 +2,35 @@
 
 import asyncio
 import os
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from slack_sdk.web.async_client import AsyncWebClient
 
 from src.hooks import HookRegistry
+
+
+def _load_dotenv(path: str = ".env") -> None:
+    """Load simple KEY=VALUE pairs from a local .env file into os.environ."""
+    dotenv_path = Path(path)
+    if not dotenv_path.exists():
+        return
+
+    for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 def pytest_addoption(parser):
@@ -22,6 +45,7 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     """Register custom markers."""
+    _load_dotenv()
     config.addinivalue_line(
         "markers",
         "live: marks tests as live integration tests (require Slack credentials)",

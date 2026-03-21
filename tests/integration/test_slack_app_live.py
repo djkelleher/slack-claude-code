@@ -16,7 +16,33 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
+
+
+async def _post_user_message_or_skip(
+    client: AsyncWebClient,
+    *,
+    channel: str,
+    text: str,
+    thread_ts: str | None = None,
+) -> dict[str, Any]:
+    """Post a user-scoped message or skip with a clear scope error."""
+    kwargs: dict[str, Any] = {"channel": channel, "text": text}
+    if thread_ts:
+        kwargs["thread_ts"] = thread_ts
+
+    try:
+        return await client.chat_postMessage(**kwargs)
+    except SlackApiError as exc:
+        if exc.response.get("error") != "missing_scope":
+            raise
+
+        needed = exc.response.get("needed", "unknown")
+        provided = exc.response.get("provided", "unknown")
+        pytest.skip(
+            f"SLACK_USER_TOKEN missing required Slack scope: needed={needed}, provided={provided}"
+        )
 
 
 async def _wait_for_channel_message(
@@ -109,7 +135,8 @@ async def test_app_mention_roundtrip(
     bot_response_ts = None
 
     try:
-        post = await slack_user_client.chat_postMessage(
+        post = await _post_user_message_or_skip(
+            slack_user_client,
             channel=slack_test_channel,
             text=mention_text,
         )
@@ -149,14 +176,16 @@ async def test_thread_message_roundtrip(
     bot_response_ts = None
 
     try:
-        parent = await slack_user_client.chat_postMessage(
+        parent = await _post_user_message_or_skip(
+            slack_user_client,
             channel=slack_test_channel,
             text=f"[Live App Test] thread-parent-{marker}",
         )
         assert parent["ok"] is True
         parent_ts = parent["ts"]
 
-        thread_reply = await slack_user_client.chat_postMessage(
+        thread_reply = await _post_user_message_or_skip(
+            slack_user_client,
             channel=slack_test_channel,
             thread_ts=parent_ts,
             text=f"[Live App Test] thread-reply-{marker}",
