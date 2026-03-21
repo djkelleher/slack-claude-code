@@ -1611,7 +1611,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         require_text=True,
         usage_hint=(
             "Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume|"
-            "append <prompt>|prepend <prompt>|insert <index> <prompt>>"
+            "append <prompt>|prepend <prompt>|insert <index> <prompt>"
         ),
     )
     async def handle_queue_command(ctx: CommandContext, deps: HandlerDependencies = deps):
@@ -1931,7 +1931,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             text="Invalid queue command",
             blocks=error_message(
                 "Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume|"
-                "append <prompt>|prepend <prompt>|insert <index> <prompt>>"
+                "append <prompt>|prepend <prompt>|insert <index> <prompt>"
             ),
         )
 

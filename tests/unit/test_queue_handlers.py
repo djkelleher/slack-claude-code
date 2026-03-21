@@ -1038,6 +1038,20 @@ async def test_qc_append_enqueues_plain_prompt():
 
 
 @pytest.mark.asyncio
+async def test_qc_invalid_subcommand_shows_clean_usage_text():
+    """`/qc` usage text should not include malformed trailing punctuation."""
+    handler, _deps = _registered_handler("/qc", SimpleNamespace())
+
+    client = await _invoke_slash_handler(handler, command_name="/qc", text="wat")
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Invalid queue command"
+    rendered = kwargs["blocks"][0]["text"]["text"]
+    assert "insert <index> <prompt>`" in rendered
+    assert "insert <index> <prompt>>" not in rendered
+
+
+@pytest.mark.asyncio
 async def test_qc_prepend_enqueues_plain_prompt_at_front():
     """`/qc prepend` should prepend plain prompt text to the queue."""
     handler, deps = _registered_handler(
