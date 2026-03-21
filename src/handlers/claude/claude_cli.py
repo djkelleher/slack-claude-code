@@ -12,7 +12,7 @@ from src.codex.capabilities import (
 from src.config import (
     config,
 )
-from src.handlers.backend_command_adapter import (
+from src.handlers.codex_command_adapter import (
     build_codex_status_summary,
     format_codex_review_status,
     get_codex_mcp_summary,

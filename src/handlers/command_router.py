@@ -29,6 +29,16 @@ class CommandRouteResult:
     result: Any
 
 
+@dataclass
+class _ConversationState:
+    """Shared mutable state for one backend conversation loop."""
+
+    accumulated_context: str = ""
+    pending_question: Any = None
+    question_count: int = 0
+    question_limit_reached: bool = False
+
+
 def resolve_backend_for_session(session: Session) -> str:
     """Resolve backend for a session based on selected model."""
     return session.get_backend()
@@ -43,59 +53,6 @@ def _result_field(result: Any, field_name: str, default: Any) -> Any:
     if field_name in values:
         return values[field_name]
     return default
-
-
-def _normalize_codex_question_input(tool_name: str, tool_input: dict) -> dict:
-    """Normalize Codex question tool input into AskUserQuestion-compatible shape."""
-    normalized_input = tool_input if isinstance(tool_input, dict) else {}
-    if normalized_input.get("questions"):
-        return normalized_input
-
-    if normalized_input.get("question"):
-        return {
-            "questions": [
-                {
-                    "question": normalized_input.get("question", ""),
-                    "header": normalized_input.get("header", "Question"),
-                    "options": normalized_input.get("options", []),
-                    "multiSelect": normalized_input.get("multiSelect", False),
-                }
-            ]
-        }
-
-    if (tool_name or "").strip().lower() == "request_user_input":
-        return {
-            "questions": [
-                {
-                    "question": "Please provide additional input.",
-                    "header": "Input Needed",
-                    "options": [],
-                    "multiSelect": False,
-                }
-            ]
-        }
-
-    return {"questions": []}
-
-
-def _normalize_claude_question_input(tool_input: dict) -> dict:
-    """Normalize Claude AskUserQuestion payload into canonical question shape."""
-    normalized_input = tool_input if isinstance(tool_input, dict) else {}
-    if normalized_input.get("questions"):
-        return normalized_input
-
-    if normalized_input.get("question"):
-        return {
-            "questions": [
-                {
-                    "question": normalized_input.get("question", ""),
-                    "header": normalized_input.get("header", "Question"),
-                    "options": normalized_input.get("options", []),
-                    "multiSelect": normalized_input.get("multiSelect", False),
-                }
-            ]
-        }
-    return {"questions": []}
 
 
 def _extract_codex_thread_id(response: dict) -> Optional[str]:
@@ -203,6 +160,92 @@ def _detect_codex_plan_content(text: Optional[str]) -> tuple[Optional[str], str]
     return None, "none"
 
 
+async def _maybe_swap_on_chunk_after_interaction(
+    on_interaction_resumed: Any,
+    on_chunk: Any,
+) -> Any:
+    """Swap streaming target after a Slack interaction resumes execution."""
+    if on_interaction_resumed is None:
+        return on_chunk
+    replacement_on_chunk = await on_interaction_resumed()
+    if replacement_on_chunk is None:
+        return on_chunk
+    return replacement_on_chunk
+
+
+def _append_assistant_context(state: _ConversationState, msg: Any) -> None:
+    """Track assistant text for Slack question context and fallback output."""
+    if msg.type == "assistant" and msg.content:
+        state.accumulated_context += msg.content
+
+
+async def _post_or_auto_answer_question(
+    *,
+    backend: str,
+    pending_question: Any,
+    slack_client: Any,
+    deps: Any,
+    context_text: str,
+    auto_answer_questions: bool,
+    logger: Any,
+    log_prefix: str,
+) -> str | dict | None:
+    """Resolve a pending question through auto-answering or Slack UI."""
+    if auto_answer_questions:
+        pending_question.answers = QuestionManager.select_recommended_answers(
+            pending_question.questions
+        )
+        response = QuestionManager.format_answer(pending_question, backend=backend)
+        if backend == "claude" and isinstance(response, str):
+            response = response.strip() or "Use your recommended/default option and continue."
+        if logger:
+            logger.info(
+                f"Auto-answering {log_prefix} question {pending_question.tool_use_id} "
+                f"for queue-style execution ({len(pending_question.questions)} question(s))"
+            )
+        return response
+
+    if slack_client is None:
+        return None
+
+    await QuestionManager.post_question_to_slack(
+        pending_question,
+        slack_client,
+        deps.db,
+        context_text=context_text,
+    )
+    answers = await QuestionManager.wait_for_answer(pending_question.question_id)
+    if not answers:
+        return None
+    return QuestionManager.format_answer(pending_question, backend=backend)
+
+
+async def _request_plan_approval(
+    *,
+    session: Session,
+    prompt: str,
+    channel_id: str,
+    thread_ts: Optional[str],
+    slack_client: Any,
+    user_id: Optional[str],
+    plan_content: str,
+    resume_session_id: str,
+    plan_file_path: Optional[str],
+) -> bool:
+    """Open shared plan approval flow for either backend."""
+    return await PlanApprovalManager.request_approval(
+        session_id=str(session.id),
+        channel_id=channel_id,
+        plan_content=plan_content,
+        resume_session_id=resume_session_id,
+        prompt=prompt,
+        user_id=user_id,
+        thread_ts=thread_ts,
+        slack_client=slack_client,
+        plan_file_path=plan_file_path,
+    )
+
+
 async def _execute_codex_backend(
     *,
     deps: Any,
@@ -226,22 +269,10 @@ async def _execute_codex_backend(
     if not deps.codex_executor:
         raise RuntimeError("Codex executor is not configured")
 
-    pending_question = None
-    accumulated_context = ""
-    question_count = 0
-    question_limit_reached = False
+    state = _ConversationState()
     max_questions = config.timeouts.execution.max_questions_per_conversation
     codex_turn_index = 1
     tool_id_namespace = f"turn{codex_turn_index}:"
-
-    async def maybe_swap_on_chunk_after_interaction() -> None:
-        nonlocal on_chunk
-        if on_interaction_resumed is None:
-            return
-
-        replacement_on_chunk = await on_interaction_resumed()
-        if replacement_on_chunk is not None:
-            on_chunk = replacement_on_chunk
 
     async def resolve_initial_resume_session_id() -> Optional[str]:
         """Fork inherited channel thread IDs when entering a new Slack thread scope."""
@@ -292,7 +323,6 @@ async def _execute_codex_backend(
         return forked_thread_id
 
     async def wrapped_on_chunk(msg: Any) -> None:
-        nonlocal accumulated_context
         if msg.tool_activities:
             for tool in msg.tool_activities:
                 tool_id = str(tool.id)
@@ -300,14 +330,12 @@ async def _execute_codex_backend(
                     tool.id = f"{tool_id_namespace}{tool_id}"
         if on_chunk:
             await on_chunk(msg)
-
-        if msg.type == "assistant" and msg.content:
-            accumulated_context += msg.content
+        _append_assistant_context(state, msg)
 
     async def on_user_input_request(tool_use_id: str, tool_input: dict) -> dict | None:
-        nonlocal pending_question, question_count, question_limit_reached
-        if question_count >= max_questions:
-            question_limit_reached = True
+        nonlocal on_chunk
+        if state.question_count >= max_questions:
+            state.question_limit_reached = True
             if logger:
                 logger.warning(
                     f"Reached maximum Codex question limit ({max_questions}) "
@@ -315,27 +343,38 @@ async def _execute_codex_backend(
                 )
             return None
 
-        normalized_tool_input = _normalize_codex_question_input("request_user_input", tool_input)
+        normalized_tool_input = QuestionManager.normalize_question_tool_input(
+            tool_input,
+            default_question="Please provide additional input.",
+            default_header="Input Needed",
+        )
 
         if auto_answer_questions:
             questions = QuestionManager.parse_ask_user_question_input(normalized_tool_input)
             auto_answers = QuestionManager.select_recommended_answers(questions)
-            question_count += 1
+            state.question_count += 1
             if logger:
                 logger.info(
                     f"Auto-answering Codex question request {tool_use_id} "
                     f"for queue-style execution ({len(questions)} question(s))"
                 )
-            return QuestionManager.format_answers_for_codex_questions(questions, auto_answers)
+            response = QuestionManager.serialize_answers(
+                questions,
+                auto_answers,
+                backend="codex",
+            )
+            if not isinstance(response, dict):
+                return None
+            return response
 
         if slack_client is None:
-            if pending_question and pending_question.tool_use_id == tool_use_id:
-                await QuestionManager.cancel(pending_question.question_id)
-                pending_question = None
+            if state.pending_question and state.pending_question.tool_use_id == tool_use_id:
+                await QuestionManager.cancel(state.pending_question.question_id)
+                state.pending_question = None
             return None
 
-        if not pending_question or pending_question.tool_use_id != tool_use_id:
-            pending_question = await QuestionManager.create_pending_question(
+        if not state.pending_question or state.pending_question.tool_use_id != tool_use_id:
+            state.pending_question = await QuestionManager.create_pending_question(
                 session_id=str(session.id),
                 channel_id=channel_id,
                 thread_ts=thread_ts,
@@ -343,24 +382,27 @@ async def _execute_codex_backend(
                 tool_input=normalized_tool_input,
             )
 
-        await QuestionManager.post_question_to_slack(
-            pending_question,
-            slack_client,
-            deps.db,
-            context_text=accumulated_context,
+        state.question_count += 1
+        response_payload = await _post_or_auto_answer_question(
+            backend="codex",
+            pending_question=state.pending_question,
+            slack_client=slack_client,
+            deps=deps,
+            context_text=state.accumulated_context,
+            auto_answer_questions=False,
+            logger=logger,
+            log_prefix="Codex",
         )
-        question_count += 1
-        answers = await QuestionManager.wait_for_answer(pending_question.question_id)
-        if not answers:
-            pending_question = None
+        if not isinstance(response_payload, dict):
+            state.pending_question = None
             return None
 
-        response_payload = QuestionManager.format_answer_for_codex_request(pending_question)
-        pending_question = None
-        await maybe_swap_on_chunk_after_interaction()
+        state.pending_question = None
+        on_chunk = await _maybe_swap_on_chunk_after_interaction(on_interaction_resumed, on_chunk)
         return response_payload
 
     async def on_approval_request(method: str, approval_input: dict) -> dict | None:
+        nonlocal on_chunk
         if auto_approve_permissions:
             if logger:
                 logger.info(
@@ -383,7 +425,7 @@ async def _execute_codex_backend(
             db=deps.db,
             auto_approve_tools=config.AUTO_APPROVE_TOOLS,
         )
-        await maybe_swap_on_chunk_after_interaction()
+        on_chunk = await _maybe_swap_on_chunk_after_interaction(on_interaction_resumed, on_chunk)
         return approval_payload_from_decision(method, approved)
 
     async def run_codex_turn(turn_prompt: str, resume_session_id: Optional[str]) -> Any:
@@ -415,15 +457,15 @@ async def _execute_codex_backend(
 
     result = await run_codex_turn(first_prompt, initial_resume_session_id)
 
-    if question_limit_reached:
+    if state.question_limit_reached:
         result.output = (
-            (result.output or accumulated_context)
+            (result.output or state.accumulated_context)
             + f"\n\n_Reached maximum question limit ({max_questions})._"
         ).strip()
         result.success = False
-    if pending_question:
-        await QuestionManager.cancel(pending_question.question_id)
-        pending_question = None
+    if state.pending_question:
+        await QuestionManager.cancel(state.pending_question.question_id)
+        state.pending_question = None
 
     if session.permission_mode == "plan" and result.success and slack_client is not None:
         plan_content, plan_detection_source = _detect_codex_plan_content(result.output)
@@ -457,15 +499,15 @@ async def _execute_codex_backend(
             app_logger.info(approval_log)
             if logger:
                 logger.info(approval_log)
-            approved = await PlanApprovalManager.request_approval(
-                session_id=str(session.id),
-                channel_id=channel_id,
-                plan_content=plan_content,
-                claude_session_id=result.session_id or "",
+            approved = await _request_plan_approval(
+                session=session,
                 prompt=prompt,
-                user_id=user_id,
+                channel_id=channel_id,
                 thread_ts=thread_ts,
                 slack_client=slack_client,
+                user_id=user_id,
+                plan_content=plan_content,
+                resume_session_id=result.session_id or "",
                 plan_file_path=None,
             )
 
@@ -475,9 +517,10 @@ async def _execute_codex_backend(
                 await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
                 session.permission_mode = config.DEFAULT_BYPASS_MODE
                 if on_plan_approved:
-                    replacement_on_chunk = await on_plan_approved()
-                    if replacement_on_chunk is not None:
-                        on_chunk = replacement_on_chunk
+                    on_chunk = await _maybe_swap_on_chunk_after_interaction(
+                        on_plan_approved,
+                        on_chunk,
+                    )
 
                 result = await run_codex_turn(
                     "Plan approved. Please proceed with the implementation.",
@@ -518,41 +561,29 @@ async def _execute_claude_backend(
     on_interaction_resumed: Any,
 ) -> Any:
     """Execute prompt against Claude backend, including questions and plan approval."""
-    pending_question = None
-    accumulated_context = ""
-    question_count = 0
+    state = _ConversationState()
     max_questions = config.timeouts.execution.max_questions_per_conversation
 
-    async def maybe_swap_on_chunk_after_interaction() -> None:
-        nonlocal on_chunk
-        if on_interaction_resumed is None:
-            return
-
-        replacement_on_chunk = await on_interaction_resumed()
-        if replacement_on_chunk is not None:
-            on_chunk = replacement_on_chunk
-
     async def wrapped_on_chunk(msg: Any) -> None:
-        nonlocal accumulated_context, pending_question
+        nonlocal on_chunk
         if msg.tool_activities and (slack_client is not None or auto_answer_questions):
             for tool in msg.tool_activities:
                 if tool.name != "AskUserQuestion":
                     continue
                 if tool.result is not None:
                     continue
-                if pending_question and pending_question.tool_use_id == tool.id:
+                if state.pending_question and state.pending_question.tool_use_id == tool.id:
                     continue
-                pending_question = await QuestionManager.create_pending_question(
+                state.pending_question = await QuestionManager.create_pending_question(
                     session_id=str(session.id),
                     channel_id=channel_id,
                     thread_ts=thread_ts,
                     tool_use_id=tool.id,
-                    tool_input=_normalize_claude_question_input(tool.input),
+                    tool_input=QuestionManager.normalize_question_tool_input(tool.input),
                 )
         if on_chunk:
             await on_chunk(msg)
-        if msg.type == "assistant" and msg.content:
-            accumulated_context += msg.content
+        _append_assistant_context(state, msg)
 
     async def run_claude_turn(
         turn_prompt: str,
@@ -594,58 +625,48 @@ async def _execute_claude_backend(
 
     while (
         _result_field(result, "has_pending_question", False)
-        and pending_question
+        and state.pending_question
         and result.session_id
-        and question_count < max_questions
+        and state.question_count < max_questions
     ):
         if slack_client is None and not auto_answer_questions:
             break
-        question_count += 1
-        if auto_answer_questions:
-            pending_question.answers = QuestionManager.select_recommended_answers(
-                pending_question.questions
-            )
-            answer_text = QuestionManager.format_answer_for_claude(pending_question).strip()
-            if not answer_text:
-                answer_text = "Use your recommended/default option and continue."
-            if logger:
-                logger.info(
-                    f"Auto-answering Claude question {pending_question.tool_use_id} "
-                    f"for queue-style execution ({len(pending_question.questions)} question(s))"
-                )
-        else:
-            await QuestionManager.post_question_to_slack(
-                pending_question,
-                slack_client,
-                deps.db,
-                context_text=accumulated_context,
-            )
-            answers = await QuestionManager.wait_for_answer(pending_question.question_id)
-            if not answers:
-                pending_question = None
-                result.output = (accumulated_context + "\n\n_Question was cancelled._").strip()
-                result.success = False
-                break
-            answer_text = QuestionManager.format_answer_for_claude(pending_question)
-            await maybe_swap_on_chunk_after_interaction()
-        pending_question = None
+        state.question_count += 1
+        answer_text = await _post_or_auto_answer_question(
+            backend="claude",
+            pending_question=state.pending_question,
+            slack_client=slack_client,
+            deps=deps,
+            context_text=state.accumulated_context,
+            auto_answer_questions=auto_answer_questions,
+            logger=logger,
+            log_prefix="Claude",
+        )
+        if not isinstance(answer_text, str):
+            state.pending_question = None
+            result.output = (state.accumulated_context + "\n\n_Question was cancelled._").strip()
+            result.success = False
+            break
+        if not auto_answer_questions:
+            on_chunk = await _maybe_swap_on_chunk_after_interaction(on_interaction_resumed, on_chunk)
+        state.pending_question = None
         result = await run_claude_turn(
             answer_text,
             result.session_id,
             mode=session.permission_mode,
-            turn_execution_id=f"{execution_id}-q{question_count}",
+            turn_execution_id=f"{execution_id}-q{state.question_count}",
         )
 
-    if question_count >= max_questions and pending_question:
+    if state.question_count >= max_questions and state.pending_question:
         result.output = (
-            (accumulated_context or result.output)
+            (state.accumulated_context or result.output)
             + f"\n\n_Reached maximum question limit ({max_questions}). Please start a new conversation._"
         ).strip()
         result.success = False
 
-    if pending_question:
-        await QuestionManager.cancel(pending_question.question_id)
-        pending_question = None
+    if state.pending_question:
+        await QuestionManager.cancel(state.pending_question.question_id)
+        state.pending_question = None
 
     if _result_field(result, "has_pending_plan_approval", False) and slack_client is not None:
         plan_text = _result_field(result, "plan_subagent_result", "") or result.output or ""
@@ -664,24 +685,25 @@ async def _execute_claude_backend(
         if not plan_content:
             plan_content = "⚠️ No plan content was produced. Ask the assistant to generate a concrete plan and try again."
 
-        approved = await PlanApprovalManager.request_approval(
-            session_id=str(session.id),
-            channel_id=channel_id,
-            plan_content=plan_content,
-            claude_session_id=result.session_id or "",
+        approved = await _request_plan_approval(
+            session=session,
             prompt=prompt,
-            user_id=user_id,
+            channel_id=channel_id,
             thread_ts=thread_ts,
             slack_client=slack_client,
+            user_id=user_id,
+            plan_content=plan_content,
+            resume_session_id=result.session_id or "",
             plan_file_path=plan_file_path,
         )
         if approved:
             await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
             session.permission_mode = config.DEFAULT_BYPASS_MODE
             if on_plan_approved:
-                replacement_on_chunk = await on_plan_approved()
-                if replacement_on_chunk is not None:
-                    on_chunk = replacement_on_chunk
+                on_chunk = await _maybe_swap_on_chunk_after_interaction(
+                    on_plan_approved,
+                    on_chunk,
+                )
             result = await run_claude_turn(
                 "Plan approved. Please proceed with the implementation.",
                 result.session_id,

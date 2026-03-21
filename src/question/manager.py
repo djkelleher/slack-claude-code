@@ -70,6 +70,44 @@ class QuestionManager:
 
     _pending = PendingManager[PendingQuestion]()
 
+    @staticmethod
+    def normalize_question_tool_input(
+        tool_input: dict,
+        *,
+        default_question: Optional[str] = None,
+        default_header: str = "Question",
+    ) -> dict:
+        """Normalize backend-specific question payloads to canonical shape."""
+        normalized_input = tool_input if isinstance(tool_input, dict) else {}
+        if normalized_input.get("questions"):
+            return normalized_input
+
+        if normalized_input.get("question"):
+            return {
+                "questions": [
+                    {
+                        "question": normalized_input.get("question", ""),
+                        "header": normalized_input.get("header", default_header),
+                        "options": normalized_input.get("options", []),
+                        "multiSelect": normalized_input.get("multiSelect", False),
+                    }
+                ]
+            }
+
+        if default_question:
+            return {
+                "questions": [
+                    {
+                        "question": default_question,
+                        "header": default_header,
+                        "options": [],
+                        "multiSelect": False,
+                    }
+                ]
+            }
+
+        return {"questions": []}
+
     @classmethod
     def parse_ask_user_question_input(cls, tool_input: dict) -> list[Question]:
         """Parse the input from AskUserQuestion tool.
@@ -397,54 +435,41 @@ class QuestionManager:
         return answers
 
     @classmethod
-    def format_answers_for_claude_questions(
+    def serialize_answers(
         cls,
         questions: list[Question],
         answers_by_index: dict[int, list[str]],
-    ) -> str:
-        """Format indexed answers for Claude follow-up message text."""
+        *,
+        backend: str,
+    ) -> str | dict:
+        """Serialize indexed answers for the selected backend transport."""
+        if backend == "codex":
+            answers: dict[str, dict[str, list[str]]] = {}
+            for i, question in enumerate(questions):
+                question_id = question.id or f"q_{i + 1}"
+                answers[question_id] = {"answers": answers_by_index.get(i, [])}
+            return {"answers": answers}
+
         response_parts = []
 
         for i, question in enumerate(questions):
             selected = answers_by_index.get(i, [])
             if len(questions) > 1:
-                # Multiple questions - include question reference
                 response_parts.append(f"**{question.header}**: {', '.join(selected)}")
             else:
-                # Single question - just the answer
                 response_parts.append(", ".join(selected))
 
         return "\n".join(response_parts)
 
     @classmethod
-    def format_answers_for_codex_questions(
+    def format_answer(
         cls,
-        questions: list[Question],
-        answers_by_index: dict[int, list[str]],
-    ) -> dict:
-        """Format indexed answers for Codex app-server requestUserInput response."""
-        answers: dict[str, dict[str, list[str]]] = {}
-        for i, question in enumerate(questions):
-            question_id = question.id or f"q_{i + 1}"
-            answers[question_id] = {"answers": answers_by_index.get(i, [])}
-        return {"answers": answers}
-
-    @classmethod
-    def format_answer_for_claude(cls, pending: PendingQuestion) -> str:
-        """Format the user's answers into a text response for Claude.
-
-        Args:
-            pending: The pending question with answers
-
-        Returns:
-            Formatted text response to send as a follow-up message
-        """
-        return cls.format_answers_for_claude_questions(pending.questions, pending.answers)
-
-    @classmethod
-    def format_answer_for_codex_request(cls, pending: PendingQuestion) -> dict:
-        """Format answers for Codex app-server `item/tool/requestUserInput` response."""
-        return cls.format_answers_for_codex_questions(pending.questions, pending.answers)
+        pending: PendingQuestion,
+        *,
+        backend: str,
+    ) -> str | dict:
+        """Serialize a pending question response for the selected backend."""
+        return cls.serialize_answers(pending.questions, pending.answers, backend=backend)
 
     @classmethod
     async def count_pending(cls) -> int:

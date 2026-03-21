@@ -14,7 +14,7 @@ from slack_bolt.async_app import AsyncApp
 from src.config import config
 from src.database.models import Session
 from src.git.service import GitService
-from src.handlers.backend_command_adapter import _extract_rate_limits_from_rpc
+from src.handlers.codex_command_adapter import _extract_rate_limits_from_rpc
 from src.tasks.manager import TaskManager
 from src.tasks.queue_plan import (
     QueuePlanError,

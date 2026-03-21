@@ -691,7 +691,7 @@ class TestCommandRouter:
                         new=AsyncMock(return_value={0: ["Yes"]}),
                     ):
                         with patch(
-                            "src.handlers.command_router.QuestionManager.format_answer_for_codex_request",
+                            "src.handlers.command_router.QuestionManager.format_answer",
                             return_value={"answers": {"q_1": {"answers": ["Yes"]}}},
                         ):
                             routed = await execute_for_session(
@@ -896,7 +896,7 @@ class TestCommandRouter:
                     new=AsyncMock(return_value={0: ["Yes"]}),
                 ):
                     with patch(
-                        "src.handlers.command_router.QuestionManager.format_answer_for_codex_request",
+                        "src.handlers.command_router.QuestionManager.format_answer",
                         return_value={"answers": {"q_1": {"answers": ["Yes"]}}},
                     ):
                         await execute_for_session(
@@ -1205,7 +1205,7 @@ class TestCommandRouter:
                         new=AsyncMock(return_value={0: ["Yes"]}),
                     ):
                         with patch(
-                            "src.handlers.command_router.QuestionManager.format_answer_for_codex_request",
+                            "src.handlers.command_router.QuestionManager.format_answer",
                             return_value={"answers": {"q_1": {"answers": ["Yes"]}}},
                         ):
                             routed = await execute_for_session(

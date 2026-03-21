@@ -110,3 +110,64 @@ def test_select_recommended_answers_falls_back_to_first_option():
 
     answers = QuestionManager.select_recommended_answers(questions)
     assert answers == {0: ["First"], 1: ["A"]}
+
+
+def test_normalize_question_tool_input_builds_single_question_payload():
+    """Single-question payloads should normalize into canonical questions list."""
+    normalized = QuestionManager.normalize_question_tool_input(
+        {"question": "Proceed?", "header": "Confirm", "options": [{"label": "Yes"}]}
+    )
+
+    assert normalized == {
+        "questions": [
+            {
+                "question": "Proceed?",
+                "header": "Confirm",
+                "options": [{"label": "Yes"}],
+                "multiSelect": False,
+            }
+        ]
+    }
+
+
+def test_normalize_question_tool_input_applies_default_prompt():
+    """Fallback defaults should create a usable canonical question payload."""
+    normalized = QuestionManager.normalize_question_tool_input(
+        {},
+        default_question="Please provide additional input.",
+        default_header="Input Needed",
+    )
+
+    assert normalized == {
+        "questions": [
+            {
+                "question": "Please provide additional input.",
+                "header": "Input Needed",
+                "options": [],
+                "multiSelect": False,
+            }
+        ]
+    }
+
+
+def test_serialize_answers_for_claude_and_codex():
+    """Answer serialization should vary only by backend transport."""
+    questions = QuestionManager.parse_ask_user_question_input(
+        {
+            "questions": [
+                {"id": "q1", "question": "Pick one", "header": "Choice", "options": []},
+                {"id": "q2", "question": "Pick two", "header": "Second", "options": []},
+            ]
+        }
+    )
+    answers = {0: ["Yes"], 1: ["A", "B"]}
+
+    assert QuestionManager.serialize_answers(questions, answers, backend="claude") == (
+        "**Choice**: Yes\n**Second**: A, B"
+    )
+    assert QuestionManager.serialize_answers(questions, answers, backend="codex") == {
+        "answers": {
+            "q1": {"answers": ["Yes"]},
+            "q2": {"answers": ["A", "B"]},
+        }
+    }

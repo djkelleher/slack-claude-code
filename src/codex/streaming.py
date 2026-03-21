@@ -5,29 +5,32 @@ from typing import Optional
 from loguru import logger
 
 from src.backends.stream_parser_base import BaseStreamParser
+from src.backends.tool_summary_registry import build_tool_summary_rules
 from src.utils.stream_models import BaseToolActivity, StreamMessage
 
 # Maximum size for buffered incomplete JSON to prevent memory exhaustion
 MAX_BUFFER_SIZE = 1024 * 1024  # 1MB
 
-CODEX_TOOL_SUMMARY_RULES = {
-    "read_file": {"type": "path", "keys": ["path", "file_path"]},
-    "edit_file": {"type": "path", "keys": ["path", "file_path"]},
-    "write_file": {"type": "path", "keys": ["path", "file_path"]},
-    "shell": {"type": "cmd", "keys": ["command", "cmd"]},
-    "run_command": {"type": "cmd", "keys": ["command", "cmd"]},
-    "glob": {"type": "pattern", "keys": ["pattern"]},
-    "find_files": {"type": "pattern", "keys": ["pattern"]},
-    "grep": {"type": "pattern", "keys": ["pattern", "query"]},
-    "search": {"type": "pattern", "keys": ["pattern", "query"]},
-    "web_fetch": {"type": "url", "keys": ["url"]},
-    "web_search": {"type": "text", "keys": ["query"]},
-    "fuzzy_file_search": {"type": "pattern", "keys": ["query", "pattern"]},
-    "file_change": {"type": "path", "keys": ["path"]},
-    "mcp_tool_call": {"type": "text", "keys": ["server", "tool"]},
-    "reasoning": {"type": "text", "keys": ["summary", "content"]},
-    "request_user_input": {"type": "first_question", "keys": ["questions"]},
-}
+CODEX_TOOL_SUMMARY_RULES = build_tool_summary_rules(
+    {
+        "read_file": "read",
+        "edit_file": "edit",
+        "write_file": "write",
+        "shell": "shell",
+        "run_command": "shell",
+        "glob": "glob",
+        "find_files": "glob",
+        "grep": "grep",
+        "search": "grep",
+        "web_fetch": "web_fetch",
+        "web_search": "web_search",
+        "fuzzy_file_search": "glob",
+        "file_change": "file_change",
+        "mcp_tool_call": "mcp_tool_call",
+        "reasoning": "reasoning",
+        "request_user_input": "ask_user",
+    }
+)
 
 
 class ToolActivity(BaseToolActivity):

@@ -1,4 +1,4 @@
-"""Backend command adapter helpers shared by slash-command handlers."""
+"""Codex-specific command adapter helpers used by slash-command handlers."""
 
 import json
 from collections import deque

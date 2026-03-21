@@ -4,6 +4,7 @@ from typing import Optional
 from loguru import logger
 
 from src.backends.stream_parser_base import BaseStreamParser
+from src.backends.tool_summary_registry import build_tool_summary_rules
 from src.utils.stream_models import (
     BaseToolActivity,
     StreamMessage,
@@ -14,20 +15,22 @@ from src.utils.stream_models import (
 # Increased to 1MB to handle large file reads and tool outputs
 MAX_BUFFER_SIZE = 1024 * 1024  # 1MB
 
-CLAUDE_TOOL_SUMMARY_RULES = {
-    "Read": {"type": "path", "keys": ["file_path"]},
-    "Edit": {"type": "path", "keys": ["file_path"]},
-    "Write": {"type": "path", "keys": ["file_path"]},
-    "Bash": {"type": "cmd", "keys": ["command"]},
-    "Glob": {"type": "pattern", "keys": ["pattern"]},
-    "Grep": {"type": "pattern", "keys": ["pattern"]},
-    "Task": {"type": "text", "keys": ["description", "prompt"]},
-    "WebFetch": {"type": "url", "keys": ["url"]},
-    "WebSearch": {"type": "text", "keys": ["query"]},
-    "LSP": {"type": "lsp", "op_key": "operation", "path_keys": ["filePath"]},
-    "TodoWrite": {"type": "count", "keys": ["todos"], "suffix": " items"},
-    "AskUserQuestion": {"type": "first_question", "keys": ["questions"]},
-}
+CLAUDE_TOOL_SUMMARY_RULES = build_tool_summary_rules(
+    {
+        "Read": "read",
+        "Edit": "edit",
+        "Write": "write",
+        "Bash": "shell",
+        "Glob": "glob",
+        "Grep": "grep",
+        "Task": "task",
+        "WebFetch": "web_fetch",
+        "WebSearch": "web_search",
+        "LSP": "lsp",
+        "TodoWrite": "todo_write",
+        "AskUserQuestion": "ask_user",
+    }
+)
 
 _concat_with_spacing = concat_with_spacing
 

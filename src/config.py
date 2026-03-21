@@ -1,4 +1,5 @@
 import functools
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -10,27 +11,161 @@ from src.config_storage import get_storage
 # Global constant for application plan directory
 PLANS_DIR = str(Path.home() / ".slack-claude-code" / "plans")
 
-# Model-to-backend mapping
-CLAUDE_MODELS: set[str] = {
-    "default",
-    "opus",
-    "sonnet",
-    "haiku",
-    "claude-opus-4-6",
-    "claude-opus-4-6[1m]",
-    "claude-sonnet-4-6",
-    "claude-sonnet-4-6[1m]",
-    "claude-haiku-4-5",
+@dataclass(frozen=True)
+class ModelOption:
+    """Static metadata for a selectable model option."""
+
+    name: str
+    value: Optional[str]
+    display: str
+    desc: str
+
+
+CLAUDE_MODEL_DISPLAY: dict[str | None, str] = {
+    None: "Default (recommended)",
+    "default": "Default (recommended)",
+    "opus": "Default (recommended)",
+    "claude-opus-4-6": "Default (recommended)",
+    "claude-opus-4-6[1m]": "Opus (1M context)",
+    "sonnet": "Sonnet",
+    "claude-sonnet-4-6": "Sonnet",
+    "claude-sonnet-4-6[1m]": "Sonnet (1M context)",
+    "haiku": "Haiku",
+    "claude-haiku-4-5": "Haiku",
 }
 
+CLAUDE_MODEL_ALIASES: dict[str, str | None] = {
+    "default": None,
+    "default (recommended)": None,
+    "recommended": None,
+    "opus": None,
+    "opus-4.6": None,
+    "claude-opus-4-6": None,
+    "opus-1m": "claude-opus-4-6[1m]",
+    "opus (1m context)": "claude-opus-4-6[1m]",
+    "claude-opus-4-6[1m]": "claude-opus-4-6[1m]",
+    "sonnet": "sonnet",
+    "sonnet-4.6": "sonnet",
+    "claude-sonnet-4-6": "sonnet",
+    "sonnet-1m": "claude-sonnet-4-6[1m]",
+    "sonnet (1m context)": "claude-sonnet-4-6[1m]",
+    "claude-sonnet-4-6[1m]": "claude-sonnet-4-6[1m]",
+    "haiku": "haiku",
+    "haiku-4.5": "haiku",
+    "claude-haiku-4-5": "haiku",
+    "co45m": "claude-opus-4-5-medium",
+    "co46h": "claude-opus-4-6-high",
+}
+
+CODEX_MODEL_ALIASES: dict[str, str] = {
+    "codex": "gpt-5.3-codex",
+    "gpt-5.3-codex": "gpt-5.3-codex",
+    "gpt-5.4": "gpt-5.4",
+    "gpt-5.3-codex-spark": "gpt-5.3-codex-spark",
+    "gpt-5.2-codex": "gpt-5.2-codex",
+    "gpt-5.1-codex-max": "gpt-5.1-codex-max",
+    "gpt-5.2": "gpt-5.2",
+    "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
+    "g34h": "gpt-3.4-high",
+}
+
+CLAUDE_DEFAULT_ALIASES: set[str] = {"default", "opus", "claude-opus-4-6"}
+
+CLAUDE_MODEL_OPTIONS: tuple[ModelOption, ...] = (
+    ModelOption(
+        name="default",
+        value=None,
+        display="Default (recommended)",
+        desc="Opus 4.6 · Most capable for complex work",
+    ),
+    ModelOption(
+        name="opus-1m",
+        value="claude-opus-4-6[1m]",
+        display="Opus (1M context)",
+        desc="Opus 4.6 with 1M context · Billed as extra usage · $10/$37.50 per Mtok",
+    ),
+    ModelOption(
+        name="sonnet",
+        value="sonnet",
+        display="Sonnet",
+        desc="Sonnet 4.6 · Best for everyday tasks",
+    ),
+    ModelOption(
+        name="sonnet-1m",
+        value="claude-sonnet-4-6[1m]",
+        display="Sonnet (1M context)",
+        desc="Sonnet 4.6 with 1M context · Billed as extra usage · $6/$22.50 per Mtok",
+    ),
+    ModelOption(
+        name="haiku",
+        value="haiku",
+        display="Haiku",
+        desc="Haiku 4.5 · Fastest for quick answers",
+    ),
+)
+
+CODEX_BASE_MODEL_OPTIONS: tuple[ModelOption, ...] = (
+    ModelOption(
+        name="gpt-5.3-codex",
+        value="gpt-5.3-codex",
+        display="GPT-5.3 Codex",
+        desc="Latest frontier agentic coding model",
+    ),
+    ModelOption(
+        name="gpt-5.4",
+        value="gpt-5.4",
+        display="GPT-5.4",
+        desc="Latest frontier agentic coding model",
+    ),
+    ModelOption(
+        name="gpt-5.3-codex-spark",
+        value="gpt-5.3-codex-spark",
+        display="GPT-5.3 Codex Spark",
+        desc="Ultra-fast coding model",
+    ),
+    ModelOption(
+        name="gpt-5.2-codex",
+        value="gpt-5.2-codex",
+        display="GPT-5.2 Codex",
+        desc="Frontier agentic coding model",
+    ),
+    ModelOption(
+        name="gpt-5.1-codex-max",
+        value="gpt-5.1-codex-max",
+        display="GPT-5.1 Codex Max",
+        desc="Codex-optimized flagship for deep and fast reasoning",
+    ),
+    ModelOption(
+        name="gpt-5.2",
+        value="gpt-5.2",
+        display="GPT-5.2",
+        desc="Latest frontier model with improvements across knowledge, reasoning and coding",
+    ),
+    ModelOption(
+        name="gpt-5.1-codex-mini",
+        value="gpt-5.1-codex-mini",
+        display="GPT-5.1 Codex Mini",
+        desc="Optimized for codex. Cheaper, faster, but less capable",
+    ),
+)
+
+CODEX_EFFORT_LABELS: dict[str, str] = {
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "xhigh": "Extra-High",
+}
+
+CLAUDE_MODELS: set[str] = {
+    alias for alias, value in CLAUDE_MODEL_ALIASES.items() if alias and value != "sonnet"
+}
+CLAUDE_MODELS.update(
+    option.value for option in CLAUDE_MODEL_OPTIONS if option.value is not None
+)
+CLAUDE_MODELS.update({"sonnet", "haiku"})
+
 CODEX_MODELS: set[str] = {
-    "gpt-5.3-codex",
-    "gpt-5.4",
-    "gpt-5.3-codex-spark",
-    "gpt-5.2-codex",
-    "gpt-5.1-codex-max",
-    "gpt-5.2",
-    "gpt-5.1-codex-mini",
+    option.value for option in CODEX_BASE_MODEL_OPTIONS if option.value is not None
 }
 
 

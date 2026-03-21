@@ -28,7 +28,7 @@ class PendingPlanApproval:
     session_id: str
     channel_id: str
     plan_content: str
-    claude_session_id: str  # For --resume
+    resume_session_id: str  # For backend resume/continue
     prompt: str  # Original prompt
     user_id: Optional[str] = None
     thread_ts: Optional[str] = None
@@ -52,7 +52,7 @@ class PlanApprovalManager:
         session_id: str,
         channel_id: str,
         plan_content: str,
-        claude_session_id: str,
+        resume_session_id: str,
         prompt: str,
         user_id: Optional[str] = None,
         thread_ts: Optional[str] = None,
@@ -65,7 +65,7 @@ class PlanApprovalManager:
             session_id: The session requesting approval
             channel_id: Slack channel to post approval request
             plan_content: The plan text to show user
-            claude_session_id: Claude session ID for --resume
+            resume_session_id: Backend session ID for resume/continue
             prompt: Original prompt
             user_id: Optional user who initiated the request
             thread_ts: Optional thread to post in
@@ -83,7 +83,7 @@ class PlanApprovalManager:
             session_id=session_id,
             channel_id=channel_id,
             plan_content=plan_content,
-            claude_session_id=claude_session_id,
+            resume_session_id=resume_session_id,
             prompt=prompt,
             user_id=user_id,
             thread_ts=thread_ts,
