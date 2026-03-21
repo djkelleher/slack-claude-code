@@ -1,5 +1,6 @@
 """Unit tests for backend-aware command routing."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,11 +8,30 @@ import pytest
 
 from src.config import config
 from src.database.models import Session
-from src.handlers.command_router import execute_for_session, resolve_backend_for_session
+from src.handlers.command_router import (
+    _build_claude_plan_prompt,
+    execute_for_session,
+    resolve_backend_for_session,
+)
 
 
 class TestCommandRouter:
     """Tests for route selection and execution."""
+
+    def test_build_claude_plan_prompt_creates_plans_dir(self, tmp_path, monkeypatch):
+        """Claude plan prompt should ensure the plans directory exists."""
+        plans_dir = tmp_path / "plans"
+        monkeypatch.setattr("src.handlers.command_router.PLANS_DIR", str(plans_dir))
+
+        prompt = _build_claude_plan_prompt(
+            "Plan this change",
+            session_id=42,
+            execution_id="exec-123",
+        )
+
+        assert plans_dir.is_dir()
+        expected_path = Path(plans_dir) / "plan-session-42-exec-123.md"
+        assert str(expected_path) in prompt
 
     def test_resolve_backend_for_session(self):
         """Backend resolution follows selected model."""

@@ -147,9 +147,7 @@ async def save_snippet_content(
         default_suffix=".txt",
     )
 
-    # Snippets are small text payloads; a single direct write is simpler and
-    # avoids depending on the async file backend for one buffered write.
-    local_path.write_text(content, encoding="utf-8")
+    await asyncio.to_thread(local_path.write_text, content, encoding="utf-8")
 
     logger.info(f"Saved snippet {filename} ({len(content_bytes)} bytes) to {local_path}")
 

@@ -69,7 +69,7 @@ _CLAUDE_USAGE_LIMIT_SIGNAL_RE = re.compile(
 _RESUME_TIME_PATTERNS = (
     re.compile(
         r"\b(?:try again|retry|resumes?|reset(?:s)?|available again)\s+(?:at|after)\s+"
-        r"(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
+        r"(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?:\s*(?P<tz>[A-Za-z]{1,5}|[+-]\d{2}:?\d{2}))?",
         re.IGNORECASE,
     ),
     re.compile(
@@ -244,6 +244,25 @@ def _normalize_resume_at(resume_at: datetime) -> datetime:
     return resume_at.astimezone(timezone.utc)
 
 
+def _parse_resume_timezone_token(token: Optional[str]) -> Optional[timezone]:
+    """Parse a supported timezone token from backend retry text."""
+    normalized = (token or "").strip().upper()
+    if not normalized:
+        return None
+    if normalized in {"UTC", "GMT", "Z"}:
+        return timezone.utc
+
+    match = re.fullmatch(r"([+-])(\d{2}):?(\d{2})", normalized)
+    if not match:
+        return None
+
+    sign, hours, minutes = match.groups()
+    offset = timedelta(hours=int(hours), minutes=int(minutes))
+    if sign == "-":
+        offset = -offset
+    return timezone(offset)
+
+
 def _parse_resume_time_from_text(text: str) -> Optional[datetime]:
     """Best-effort parser for backend reset times embedded in plain text."""
     if not text:
@@ -254,6 +273,7 @@ def _parse_resume_time_from_text(text: str) -> Optional[datetime]:
         if not match:
             continue
         value = match.group("time").strip()
+        tz_token = match.groupdict().get("tz")
         try:
             if "T" in value or "t" in value:
                 return _normalize_resume_at(datetime.fromisoformat(value.replace("Z", "+00:00")))
@@ -267,14 +287,18 @@ def _parse_resume_time_from_text(text: str) -> Optional[datetime]:
                 except ValueError:
                     continue
 
-        now_local = datetime.now().astimezone()
-        candidate = now_local.replace(
+        parsed_timezone = _parse_resume_timezone_token(tz_token)
+        if tz_token and parsed_timezone is None:
+            continue
+
+        now_reference = datetime.now(parsed_timezone or datetime.now().astimezone().tzinfo)
+        candidate = now_reference.replace(
             hour=parsed.hour,
             minute=parsed.minute,
             second=0,
             microsecond=0,
         )
-        if candidate <= now_local:
+        if candidate <= now_reference:
             candidate += timedelta(days=1)
         return candidate.astimezone(timezone.utc)
     return None

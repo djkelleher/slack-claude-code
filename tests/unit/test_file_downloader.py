@@ -1,7 +1,9 @@
 """Unit tests for file downloader helpers."""
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -49,61 +51,72 @@ def test_prepare_local_path_sanitizes_hidden_and_duplicate_names(tmp_path) -> No
     assert hidden.name == "snippet_f2.txt"
 
 
-@pytest.mark.asyncio
-async def test_save_snippet_content_writes_content_and_uses_preview_fallback(tmp_path) -> None:
+def test_save_snippet_content_writes_content_and_uses_preview_fallback(tmp_path) -> None:
     """Snippet saving should write content locally and fall back to preview text."""
     client = SimpleNamespace(token="xoxb-test")
 
-    local_path, metadata = await save_snippet_content(
-        client=client,
-        file_id="F123",
-        file_info={
-            "name": "../notes.py",
-            "size": 12,
-            "content": "print('hi')\n",
-            "mimetype": "text/x-python",
-        },
-        destination_dir=str(tmp_path),
-    )
+    async def immediate_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    with patch("src.utils.file_downloader.asyncio.to_thread", new=immediate_to_thread):
+        local_path, metadata = asyncio.run(
+            save_snippet_content(
+                client=client,
+                file_id="F123",
+                file_info={
+                    "name": "../notes.py",
+                    "size": 12,
+                    "content": "print('hi')\n",
+                    "mimetype": "text/x-python",
+                },
+                destination_dir=str(tmp_path),
+            )
+        )
 
     assert Path(local_path).read_text(encoding="utf-8") == "print('hi')\n"
     assert metadata["filename"] == "../notes.py"
     assert metadata["is_snippet"] is True
     assert Path(local_path).name == "notes.py"
 
-    preview_path, preview_meta = await save_snippet_content(
-        client=client,
-        file_id="F124",
-        file_info={
-            "name": "preview.txt",
-            "size": 7,
-            "preview": "preview",
-        },
-        destination_dir=str(tmp_path),
-    )
+    with patch("src.utils.file_downloader.asyncio.to_thread", new=immediate_to_thread):
+        preview_path, preview_meta = asyncio.run(
+            save_snippet_content(
+                client=client,
+                file_id="F124",
+                file_info={
+                    "name": "preview.txt",
+                    "size": 7,
+                    "preview": "preview",
+                },
+                destination_dir=str(tmp_path),
+            )
+        )
 
     assert Path(preview_path).read_text(encoding="utf-8") == "preview"
     assert preview_meta["local_path"] == preview_path
 
 
-@pytest.mark.asyncio
-async def test_save_snippet_content_rejects_oversized_or_empty_content(tmp_path) -> None:
+def test_save_snippet_content_rejects_oversized_or_empty_content(tmp_path) -> None:
     """Snippet saving should reject oversized and empty files cleanly."""
     client = SimpleNamespace(token="xoxb-test")
 
     with pytest.raises(FileTooLargeError):
-        await save_snippet_content(
-            client=client,
-            file_id="F200",
-            file_info={"name": "big.txt", "size": 20},
-            destination_dir=str(tmp_path),
-            max_size_bytes=10,
+        asyncio.run(
+            save_snippet_content(
+                client=client,
+                file_id="F200",
+                file_info={"name": "big.txt", "size": 20},
+                destination_dir=str(tmp_path),
+                max_size_bytes=10,
+            )
         )
 
     with pytest.raises(FileDownloadError, match="No content available"):
-        await save_snippet_content(
-            client=client,
-            file_id="F201",
-            file_info={"name": "empty.txt", "size": 0},
-            destination_dir=str(tmp_path),
+        asyncio.run(
+            save_snippet_content(
+                client=client,
+                file_id="F201",
+                file_info={"name": "empty.txt", "size": 0},
+                destination_dir=str(tmp_path),
+            )
         )

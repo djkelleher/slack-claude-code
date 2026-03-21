@@ -91,6 +91,10 @@ def _build_claude_plan_prompt(
     execution_id: str,
 ) -> str:
     """Append deterministic plan-file instructions for Claude plan mode."""
+    try:
+        os.makedirs(PLANS_DIR, exist_ok=True)
+    except OSError:
+        pass
     if session_id:
         plan_file_name = f"plan-session-{session_id}-{execution_id}.md"
     else:

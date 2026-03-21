@@ -12,6 +12,7 @@ from src.database.models import Session
 from src.handlers.claude.queue import (
     _QUEUE_START_LOCKS,
     _execute_queue_item,
+    _parse_resume_time_from_text,
     _process_queue,
     _process_queue_scheduled_events,
     _queue_processing_log_line,
@@ -187,6 +188,21 @@ def test_queue_processing_log_line_preserves_prompt_tail() -> None:
     assert line.startswith("Processing queue item 7: how can we improve")
     assert line.endswith("/src/handlers/claude/queue.py")
     assert "..." in line
+
+
+def test_parse_resume_time_from_text_preserves_utc_timezone() -> None:
+    """UTC retry times should be scheduled in UTC rather than host-local time."""
+    resume_at = _parse_resume_time_from_text("Usage limit reached. Try again at 14:30 UTC.")
+
+    assert resume_at is not None
+    assert resume_at.tzinfo == timezone.utc
+    assert resume_at.hour == 14
+    assert resume_at.minute == 30
+
+
+def test_parse_resume_time_from_text_skips_unsupported_timezone_abbreviations() -> None:
+    """Ambiguous timezone abbreviations should not produce a misleading schedule."""
+    assert _parse_resume_time_from_text("Usage limit reached. Try again at 14:30 PT.") is None
 
 
 @pytest.mark.asyncio
