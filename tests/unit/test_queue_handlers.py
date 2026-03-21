@@ -934,6 +934,105 @@ async def test_qc_pause_updates_control_state():
 
 
 @pytest.mark.asyncio
+async def test_qc_append_enqueues_plain_prompt():
+    """`/qc append` should append plain prompt text to the queue."""
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=41, position=4)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+        ),
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+        await _invoke_slash_handler(
+            handler,
+            command_name="/qc",
+            text="append run the linter",
+            client=client,
+        )
+
+    deps.db.add_many_to_queue.assert_awaited_once_with(
+        session_id=1,
+        channel_id="C123",
+        thread_ts=None,
+        queue_entries=[("run the linter", None, None, None)],
+        replace_pending=False,
+        insertion_mode="append",
+        insert_at=None,
+    )
+    mock_ensure.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_qc_prepend_enqueues_plain_prompt_at_front():
+    """`/qc prepend` should prepend plain prompt text to the queue."""
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=42, position=1)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+        ),
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+        await _invoke_slash_handler(
+            handler,
+            command_name="/qc",
+            text="prepend run the formatter",
+            client=client,
+        )
+
+    deps.db.add_many_to_queue.assert_awaited_once_with(
+        session_id=1,
+        channel_id="C123",
+        thread_ts=None,
+        queue_entries=[("run the formatter", None, None, None)],
+        replace_pending=False,
+        insertion_mode="prepend",
+        insert_at=None,
+    )
+    mock_ensure.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_qc_insert_enqueues_plain_prompt_at_index():
+    """`/qc insert` should insert plain prompt text at an explicit index."""
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=43, position=2)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+        ),
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+        await _invoke_slash_handler(
+            handler,
+            command_name="/qc",
+            text="insert 2 run the tests",
+            client=client,
+        )
+
+    deps.db.add_many_to_queue.assert_awaited_once_with(
+        session_id=1,
+        channel_id="C123",
+        thread_ts=None,
+        queue_entries=[("run the tests", None, None, None)],
+        replace_pending=False,
+        insertion_mode="insert",
+        insert_at=2,
+    )
+    mock_ensure.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_qc_stop_cancels_running_processor():
     """`/qc stop` should persist stopped state and cancel the worker."""
     handler, deps = _registered_handler(

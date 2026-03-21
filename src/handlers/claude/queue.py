@@ -1175,6 +1175,82 @@ async def ensure_queue_schedule_dispatcher(
         task.add_done_callback(done_callback)
 
 
+async def _enqueue_plain_queue_text(
+    *,
+    ctx: CommandContext,
+    deps: HandlerDependencies,
+    text: str,
+    insertion_mode: str,
+    insert_at: Optional[int] = None,
+) -> None:
+    """Enqueue plain prompt text using explicit insertion semantics."""
+    session = await deps.db.get_or_create_session(
+        ctx.channel_id,
+        thread_ts=ctx.thread_ts,
+        default_cwd=config.DEFAULT_WORKING_DIR,
+    )
+    queued_items = await deps.db.add_many_to_queue(
+        session_id=session.id,
+        channel_id=ctx.channel_id,
+        thread_ts=ctx.thread_ts,
+        queue_entries=[(text, None, None, None)],
+        replace_pending=False,
+        insertion_mode=insertion_mode,
+        insert_at=insert_at,
+    )
+    running_items = await deps.db.get_running_queue_items(ctx.channel_id, ctx.thread_ts)
+    queue_state = await _queue_state_for_submission(
+        deps,
+        ctx.channel_id,
+        ctx.thread_ts,
+        replace_pending=False,
+    )
+    paused_notice = _queue_state_notice(queue_state)
+    action_verb = {
+        "append": "Added",
+        "prepend": "Prepended",
+        "insert": "Inserted",
+    }.get(insertion_mode, "Added")
+    position_text = _displayed_queue_range(
+        running_count=len(running_items),
+        item_count=len(queued_items),
+        insertion_mode=insertion_mode,
+        insert_at=insert_at,
+    )
+    confirmation_text = f"{action_verb} 1 item(s) to queue ({position_text})."
+    if paused_notice:
+        confirmation_text = f"{confirmation_text} {paused_notice}"
+
+    await ctx.client.chat_postMessage(
+        channel=ctx.channel_id,
+        thread_ts=ctx.thread_ts,
+        text=confirmation_text,
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":inbox_tray: {action_verb} 1 item(s) to queue ({position_text})\n"
+                    f"> {escape_markdown(text[:200])}"
+                    f"{'...' if len(text) > 200 else ''}",
+                },
+            },
+            *(
+                [
+                    {
+                        "type": "context",
+                        "elements": [{"type": "mrkdwn", "text": paused_notice}],
+                    }
+                ]
+                if paused_notice
+                else []
+            ),
+        ],
+    )
+    if queue_state == "running":
+        await ensure_queue_processor(ctx.channel_id, ctx.thread_ts, deps, ctx.client, ctx.logger)
+
+
 def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register queue command handlers."""
     git_service = GitService()
@@ -1518,13 +1594,71 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     @app.command("/qc")
     @slack_command(
         require_text=True,
-        usage_hint="Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume>",
+        usage_hint=(
+            "Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume|"
+            "append <prompt>|prepend <prompt>|insert <index> <prompt>>"
+        ),
     )
     async def handle_queue_command(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /qc queue control subcommands."""
         parts = ctx.text.split()
         subcommand = parts[0].lower()
         args = parts[1:]
+
+        if subcommand in {"append", "prepend"}:
+            prompt_text = ctx.text[len(parts[0]) :].strip()
+            if not prompt_text:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue command",
+                    blocks=error_message(f"Usage: /qc {subcommand} <prompt>"),
+                )
+                return
+            await _enqueue_plain_queue_text(
+                ctx=ctx,
+                deps=deps,
+                text=prompt_text,
+                insertion_mode=subcommand,
+            )
+            return
+
+        if subcommand == "insert":
+            if len(args) < 2:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue command",
+                    blocks=error_message("Usage: /qc insert <index> <prompt>"),
+                )
+                return
+            try:
+                insert_at = int(args[0])
+            except ValueError:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue index",
+                    blocks=error_message("Queue insert index must be an integer."),
+                )
+                return
+            if insert_at < 1:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue index",
+                    blocks=error_message("Queue insert index must be >= 1."),
+                )
+                return
+            prompt_text = ctx.text.split(None, 2)[2].strip()
+            await _enqueue_plain_queue_text(
+                ctx=ctx,
+                deps=deps,
+                text=prompt_text,
+                insertion_mode="insert",
+                insert_at=insert_at,
+            )
+            return
 
         if subcommand == "view":
             if len(args) > 1:
@@ -1781,7 +1915,8 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             thread_ts=ctx.thread_ts,
             text="Invalid queue command",
             blocks=error_message(
-                "Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume>"
+                "Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume|"
+                "append <prompt>|prepend <prompt>|insert <index> <prompt>>"
             ),
         )
 
