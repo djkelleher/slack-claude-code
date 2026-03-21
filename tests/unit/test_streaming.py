@@ -184,6 +184,19 @@ class TestStreamingMessageState:
 
         assert state.get_execution_plan_filename() == "plan-session-42.md"
 
+    def test_get_execution_plan_path_uses_configured_plans_dir(self):
+        """get_execution_plan_path should stay under the app-owned plans directory."""
+        state = StreamingMessageState(
+            channel_id="C123",
+            message_ts="123.456",
+            prompt="test",
+            client=MagicMock(),
+            logger=MagicMock(),
+            db_session_id=42,
+        )
+
+        assert state.get_execution_plan_path("abc123") == f"{PLANS_DIR}/plan-session-42-abc123.md"
+
 
 class TestStreamingHeartbeat:
     """Tests for heartbeat functionality."""

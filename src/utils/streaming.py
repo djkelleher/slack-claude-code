@@ -183,7 +183,7 @@ class StreamingMessageState:
         min_mtime: float,
         max_mtime: Optional[float] = None,
     ) -> Optional[str]:
-        """Find a plan file in ~/.claude/plans modified within a time window.
+        """Find a plan file in the configured app plans directory within a time window.
 
         Parameters
         ----------
