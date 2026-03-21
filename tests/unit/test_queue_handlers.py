@@ -16,6 +16,7 @@ from src.handlers.claude.queue import (
     _process_queue_scheduled_events,
     _queue_processing_log_line,
     _queue_task_id,
+    _resolve_queue_runtime_prompt,
     ensure_queue_processor,
     register_queue_commands,
 )
@@ -117,6 +118,61 @@ async def test_process_queue_marks_failed_when_initial_notification_fails():
     )
     mock_execute.assert_not_awaited()
     client.chat_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_queue_runtime_prompt_supports_relative_output_references() -> None:
+    """Runtime prompt substitutions should resolve prior outputs by reverse-relative position."""
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_completed_queue_items_before_position=AsyncMock(
+                return_value=[
+                    SimpleNamespace(position=1, output="first output"),
+                    SimpleNamespace(position=2, output="second output"),
+                ]
+            )
+        )
+    )
+    item = SimpleNamespace(position=3)
+
+    resolved_prompt, model_override = await _resolve_queue_runtime_prompt(
+        deps,
+        item=item,
+        channel_id="C123",
+        thread_ts="123.456",
+        prompt="Compare ((prev1output)) against ((prev2output)).",
+    )
+
+    assert resolved_prompt == "Compare second output against first output."
+    assert model_override is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_queue_runtime_prompt_supports_absolute_output_references() -> None:
+    """Runtime prompt substitutions should resolve prior outputs by authored queue position."""
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_completed_queue_items_before_position=AsyncMock(
+                return_value=[
+                    SimpleNamespace(position=1, output="first output"),
+                    SimpleNamespace(position=2, output="second output"),
+                    SimpleNamespace(position=4, output="future output"),
+                ]
+            )
+        )
+    )
+    item = SimpleNamespace(position=4)
+
+    resolved_prompt, model_override = await _resolve_queue_runtime_prompt(
+        deps,
+        item=item,
+        channel_id="C123",
+        thread_ts="123.456",
+        prompt="Use ((p1output)), ((p2output)), and ((p4output)).",
+    )
+
+    assert resolved_prompt == "Use first output, second output, and ."
+    assert model_override is None
 
 
 def test_queue_processing_log_line_preserves_prompt_tail() -> None:

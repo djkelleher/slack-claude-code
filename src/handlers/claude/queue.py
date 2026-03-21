@@ -50,6 +50,7 @@ _PARALLEL_HISTORY_OUTPUT_LIMIT = 1000
 _PARALLEL_HISTORY_TOTAL_LIMIT = 12000
 _THREAD_TS_PATTERN = re.compile(r"^\d+\.\d+$")
 _QUEUE_OUTPUT_REFERENCE_RE = re.compile(r"\(\(\s*prev(\d+)output\s*\)\)", re.IGNORECASE)
+_QUEUE_POSITION_OUTPUT_REFERENCE_RE = re.compile(r"\(\(\s*p(\d+)output\s*\)\)", re.IGNORECASE)
 _QUEUE_DIRECTIVE_LINE_RE = re.compile(r"^\(\((.+)\)\)$")
 _QUEUE_COMMAND_USER_ID_PREFIX = "queue-item"
 _QUEUE_SCHEDULE_DISPATCHER_TASK_ID = "queue_schedule_dispatcher"
@@ -460,6 +461,9 @@ async def _resolve_queue_runtime_prompt(
     except AttributeError:
         completed_items = []
     prior_outputs = list(reversed([queued.output or "" for queued in completed_items]))
+    completed_outputs_by_position = {
+        queued.position: queued.output or "" for queued in completed_items if queued.position < item.position
+    }
 
     def replace_output_reference(match: re.Match[str]) -> str:
         index = int(match.group(1))
@@ -467,7 +471,16 @@ async def _resolve_queue_runtime_prompt(
             return ""
         return prior_outputs[index - 1]
 
+    def replace_position_output_reference(match: re.Match[str]) -> str:
+        position = int(match.group(1))
+        if position < 1 or position >= item.position:
+            return ""
+        return completed_outputs_by_position.get(position, "")
+
     resolved_prompt = _QUEUE_OUTPUT_REFERENCE_RE.sub(replace_output_reference, stripped_prompt)
+    resolved_prompt = _QUEUE_POSITION_OUTPUT_REFERENCE_RE.sub(
+        replace_position_output_reference, resolved_prompt
+    )
     return resolved_prompt.strip(), model_override
 
 
