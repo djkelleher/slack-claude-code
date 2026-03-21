@@ -41,6 +41,34 @@ def is_snippet(file_info: dict[str, Any]) -> bool:
     return mode == "snippet" or filetype in ("text", "snippet", "post")
 
 
+def _prepare_local_path(
+    *,
+    destination_dir: str,
+    filename: str,
+    fallback_name: str,
+    default_suffix: str = "",
+) -> Path:
+    """Create a sanitized, collision-free local destination path."""
+    os.makedirs(destination_dir, exist_ok=True)
+
+    safe_filename = os.path.basename(filename.replace("..", "_"))
+    if not safe_filename or safe_filename.startswith("."):
+        safe_filename = fallback_name
+    if default_suffix and not Path(safe_filename).suffix:
+        safe_filename += default_suffix
+
+    base_path = Path(destination_dir) / safe_filename
+    local_path = base_path
+    counter = 1
+    while local_path.exists():
+        stem = base_path.stem
+        suffix = base_path.suffix or default_suffix
+        local_path = Path(destination_dir) / f"{stem}_{counter}{suffix}"
+        counter += 1
+
+    return local_path
+
+
 async def save_snippet_content(
     client: AsyncWebClient,
     file_id: str,
@@ -112,27 +140,16 @@ async def save_snippet_content(
     if len(content_bytes) > max_size_bytes:
         raise FileTooLargeError(filename, len(content_bytes), max_size_bytes)
 
-    # Create destination directory
-    os.makedirs(destination_dir, exist_ok=True)
+    local_path = _prepare_local_path(
+        destination_dir=destination_dir,
+        filename=filename,
+        fallback_name=f"snippet_{file_id}",
+        default_suffix=".txt",
+    )
 
-    # Sanitize filename
-    safe_filename = os.path.basename(filename.replace("..", "_"))
-    if not safe_filename or safe_filename.startswith("."):
-        safe_filename = f"snippet_{file_id}.txt"
-
-    # Determine local path (handle duplicates)
-    base_path = Path(destination_dir) / safe_filename
-    local_path = base_path
-    counter = 1
-    while local_path.exists():
-        stem = base_path.stem
-        suffix = base_path.suffix or ".txt"
-        local_path = Path(destination_dir) / f"{stem}_{counter}{suffix}"
-        counter += 1
-
-    # Write content to file
-    async with aiofiles.open(local_path, "w", encoding="utf-8") as f:
-        await f.write(content)
+    # Snippets are small text payloads; a single direct write is simpler and
+    # avoids depending on the async file backend for one buffered write.
+    local_path.write_text(content, encoding="utf-8")
 
     logger.info(f"Saved snippet {filename} ({len(content_bytes)} bytes) to {local_path}")
 
@@ -201,23 +218,11 @@ async def download_slack_file(
         if file_size > max_size_bytes:
             raise FileTooLargeError(filename, file_size, max_size_bytes)
 
-        # Create destination directory
-        os.makedirs(destination_dir, exist_ok=True)
-
-        # Sanitize filename to prevent path traversal
-        safe_filename = os.path.basename(filename.replace("..", "_"))
-        if not safe_filename or safe_filename.startswith("."):
-            safe_filename = f"upload_{file_id}"
-
-        # Determine local path (handle duplicate filenames)
-        base_path = Path(destination_dir) / safe_filename
-        local_path = base_path
-        counter = 1
-        while local_path.exists():
-            stem = base_path.stem
-            suffix = base_path.suffix
-            local_path = Path(destination_dir) / f"{stem}_{counter}{suffix}"
-            counter += 1
+        local_path = _prepare_local_path(
+            destination_dir=destination_dir,
+            filename=filename,
+            fallback_name=f"upload_{file_id}",
+        )
 
         # Download file using aiohttp with Slack authorization
         timeout = aiohttp.ClientTimeout(total=300, connect=30)
@@ -230,7 +235,7 @@ async def download_slack_file(
                 # Verify content length if available
                 content_length = response.headers.get("Content-Length")
                 if content_length and int(content_length) > max_size_bytes:
-                    raise FileTooLargeError(safe_filename, int(content_length), max_size_bytes)
+                    raise FileTooLargeError(local_path.name, int(content_length), max_size_bytes)
 
                 # Write file asynchronously with size verification
                 bytes_downloaded = 0
@@ -249,7 +254,7 @@ async def download_slack_file(
                                 logger.warning(
                                     f"Failed to clean up partial file {local_path}: {cleanup_error}"
                                 )
-                            raise FileTooLargeError(safe_filename, bytes_downloaded, max_size_bytes)
+                            raise FileTooLargeError(local_path.name, bytes_downloaded, max_size_bytes)
                         await f.write(chunk)
 
         logger.info(f"Downloaded file {filename} ({file_size} bytes) to {local_path}")
