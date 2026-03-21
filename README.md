@@ -9,7 +9,7 @@
   <a href="https://github.com/djkelleher/slack-claude-code/actions/workflows/tests.yml"><img src="https://github.com/djkelleher/slack-claude-code/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
 </p>
 
-**Claude Code, but in Slack.** Access Claude Code remotely from any device, or use it full-time for a better UI experience.
+**Claude Code and Codex, in Slack.** Access both backends remotely from any device, with Slack-native approvals, threads, uploads, queues, and status views.
 
 ## Why Slack?
 
@@ -29,11 +29,18 @@
 ### Prerequisites
 - Python 3.10+
 - [Claude Code CLI](https://github.com/anthropics/claude-code) installed and authenticated
+- `codex` CLI installed if you plan to use Codex models (`codex app-server` is used under the hood)
 
-### 1. Install the `ccslack` executable
+### 1. Install the CLI
 ```bash
 pipx install slack-claude-code
 ```
+
+This installs:
+- `aislack` - start the Slack bot
+- `aislack-config` - manage encrypted local config
+
+`src.app:run()` still accepts legacy `ccslack`-style invocation if your environment already exposes it, but the packaged entrypoints are `aislack` and `aislack-config`.
 
 ### 2. Create Slack App
 Go to https://api.slack.com/apps → "Create New App" → "From scratch"
@@ -58,7 +65,7 @@ Customize behavior for your workflow.
 |---------|-------------|---------|
 | `/model` | Show or change AI model | `/model sonnet` |
 | `/mode` | View or set session mode (Claude and Codex) | `/mode`, `/mode plan`, `/mode bypass`, `/mode approval never`, `/mode sandbox workspace-write` |
-| `/permissions` | View current permission mode (use `/mode` to change) | `/permissions` |
+| `/permissions` | Show current approval/sandbox settings and how to change them | `/permissions` |
 | `/notifications` | View or configure notifications | `/notifications`, `/notifications on`, `/notifications completion off` |
 
 #### Codex Controls
@@ -102,7 +109,7 @@ Breaking change:
 - Legacy Codex transport flags `CODEX_NATIVE_PLAN_MODE_ENABLED` and `CODEX_USE_DANGEROUS_BYPASS` were removed.
 
 #### Session Management
-Each Slack thread maintains an isolated Claude session with its own context.
+Each Slack thread maintains an isolated backend session with its own context.
 
 | Command | Description | Example |
 |---------|-------------|---------|
@@ -119,14 +126,21 @@ These map to terminal Claude Code slash commands. In Codex sessions, unsupported
 | `/context` | Show Claude context usage | `/context` |
 | `/init` | Initialize project memory files | `/init` |
 
-#### Navigation
-Control the working directory and additional directories for Claude's file operations.
+#### Shell & Navigation
+Control the working directory and run lightweight host commands.
 
 | Command | Description | Example |
 |---------|-------------|---------|
+| `/!` | Run a bash command directly on the host in the session working directory | `/! pytest -q` |
 | `/ls` | List directory contents | `/ls`, `/ls src/` |
 | `/cd` | Change working directory | `/cd /home/user/project`, `/cd subfolder`, `/cd ..` |
 | `/pwd` | Print working directory | `/pwd` |
+
+#### Directory Context
+Manage extra directories available to the assistant in addition to the working directory.
+
+| Command | Description | Example |
+|---------|-------------|---------|
 | `/add-dir` | Add directory to context | `/add-dir /home/user/other-project` |
 | `/remove-dir` | Remove directory from context | `/remove-dir /home/user/other-project` |
 | `/list-dirs` | List all directories in context | `/list-dirs` |
@@ -162,6 +176,9 @@ Queue commands for sequential execution while preserving Claude's session contex
 | `/qc pause` | Pause queue after current running item(s) finish (legacy control command) | `/qc pause` |
 | `/qc stop` | Stop queue immediately and cancel the active queue processor (legacy control command) | `/qc stop` |
 | `/qc resume` | Resume a paused/stopped queue | `/qc resume` |
+| `/qc append <prompt>` | Append a plain prompt to the current queue scope | `/qc append summarize the failures` |
+| `/qc prepend <prompt>` | Prepend a plain prompt to the current queue scope | `/qc prepend run smoke tests first` |
+| `/qc insert <index> <prompt>` | Insert a plain prompt at a 1-based queue position | `/qc insert 2 rerun the flaky test` |
 | `/qv` | View queue status | `/qv` |
 | `/qclear` | Clear pending queue | `/qclear` |
 | `/qdelete` | Delete the entire queue scope, including running/history items | `/qdelete` |
@@ -181,11 +198,17 @@ Queue control behavior:
 - Adding new items with `/q` does not auto-start processing while a scope is paused or stopped; resume it explicitly with `/qc resume`.
 - `/qv` and `/qc view` show queue state and include a notice when the scope is paused or stopped.
 - Set `QUEUE_AUTO_ANSWER_QUESTIONS=true` to auto-answer assistant questions during queue execution by choosing `(Recommended)` options (fallback: first option).
-- Set `QUEUE_AUTO_APPROVE_PERMISSIONS=true` to auto-approve all permission prompts during queue execution.
+- Set `QUEUE_AUTO_APPROVE_PERMISSIONS=true` to auto-approve permission prompts during queue execution. This defaults to `true`.
 
 #### Structured Queue DSL (Queues + Worktree + Loops)
 
 `/q` also supports a structured DSL so one command can enqueue many prompts.
+
+Queue submission directives supported before the first content block:
+- `/clear` or `((replace))` or `***queue-new` replace pending items before adding the new plan
+- `/append` or `((append))` or `***queue-append` append to pending items
+- `((prepend))` prepends the expanded plan
+- `((insert<n>))` inserts the expanded plan at 1-based position `n`
 
 | Marker | Meaning |
 |--------|---------|
@@ -213,6 +236,8 @@ Rules:
 - Missing branch worktrees are auto-created for that branch when needed.
 - Parallel blocks are barriers: later queue items do not start until the parallel block fully finishes.
 - Expanded plans are capped at 500 queue items.
+
+Structured queue plans can be submitted as normal message text or uploaded as a text file/snippet. If an uploaded file contains queue-plan markers, the bot parses it directly.
 
 Example:
 
@@ -258,12 +283,11 @@ Monitor and control long-running operations with real-time progress updates.
 | `/c` | Alias for `/cancel` | `/c` |
 | `/esc` | Interrupt current operation (Escape/Ctrl+C style) | `/esc` |
 
-#### Git
-Full git workflow without leaving Slack. Includes branch name and commit message validation.
+#### Git Worktrees
+Worktree workflows are exposed directly via Slack commands.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/git` | Consolidated git command (`status`, `diff`, `commit`, `branch`) | `/git status`, `/git diff --staged`, `/git commit fix: race condition`, `/git branch create feature/auth` |
 | `/worktree` | Manage worktrees (`add`, `list`, `switch`, `merge`, `remove`, `prune`) | `/worktree add feature/auth` |
 | `/wt` | Alias for `/worktree` | `/wt list` |
 
@@ -275,6 +299,11 @@ Worktree command examples:
 - `/worktree merge feature/auth --into main`
 - `/worktree remove feature/auth --delete-branch`
 - `/worktree prune --dry-run`
+
+Behavior notes:
+- In Claude sessions, `/worktree add <branch>` with no `--from` and no `--stay` uses Claude's native `--worktree` flow when available.
+- Branch-scoped queue plans auto-create missing worktrees and route those queue items to the branch worktree path.
+- `/worktree list --verbose` includes cleanliness and ahead/behind metadata.
 
 #### Worktree Workflow Tutorial
 
@@ -291,10 +320,11 @@ Use this when you want clean isolation for multiple tasks without stashing or br
    - `/worktree add feature/auth --from main`
 2. Confirm context:
    - `/pwd`
-   - `/git status`
+   - `/! git status --short --branch`
 3. Implement and commit as usual:
-   - `/git diff --staged`
-   - `/git commit feat: add auth middleware`
+   - Ask the assistant to make changes, or run your own commands with `/!`
+   - `/! git diff --staged`
+   - `/! git commit -m "feat: add auth middleware"`
 4. Merge into your current target branch:
    - `/worktree switch main`
    - `/worktree merge feature/auth`
@@ -335,19 +365,25 @@ Use this when you want clean isolation for multiple tasks without stashing or br
 Use the built-in config CLI to securely store your Slack credentials:
 
 ```bash
-ccslack-config set SLACK_BOT_TOKEN=xoxb-...
-ccslack-config set SLACK_APP_TOKEN=xapp-...
-ccslack-config set SLACK_SIGNING_SECRET=...
+aislack-config set SLACK_BOT_TOKEN=xoxb-...
+aislack-config set SLACK_APP_TOKEN=xapp-...
+aislack-config set SLACK_SIGNING_SECRET=...
+```
+
+Equivalent form:
+
+```bash
+aislack config set SLACK_BOT_TOKEN=xoxb-...
 ```
 
 **Config CLI Commands:**
 | Command | Description |
 |---------|-------------|
-| `ccslack-config set KEY=VALUE` | Store a configuration value |
-| `ccslack-config get KEY` | Retrieve a configuration value |
-| `ccslack-config list` | List all stored configuration |
-| `ccslack-config delete KEY` | Remove a configuration value |
-| `ccslack-config path` | Show config file locations |
+| `aislack-config set KEY=VALUE` | Store a configuration value |
+| `aislack-config get KEY` | Retrieve a configuration value |
+| `aislack-config list` | List all stored configuration |
+| `aislack-config delete KEY` | Remove a configuration value |
+| `aislack-config path` | Show config file locations |
 
 Configuration is encrypted and stored in `~/.slack-claude-code/config.enc`. Sensitive values (tokens, secrets) are masked when displayed.
 
@@ -357,13 +393,25 @@ Configuration is encrypted and stored in `~/.slack-claude-code/config.enc`. Sens
 - `SLACK_BOT_TOKEN`: Your App → OAuth & Permissions → Bot User OAuth Token
 - `SLACK_APP_TOKEN`: Your App → Basic Information → App-Level Tokens → (token you created with `connections:write`)
 - `SLACK_SIGNING_SECRET`: Your App → Basic Information → App Credentials → Signing Secret
+- `DEFAULT_WORKING_DIR`: Optional default starting directory for new sessions
+- `DEFAULT_MODEL`: Optional default Claude or Codex model
+- `SLACK_QUESTION_MENTION`: Optional mention text for interactive approval/question posts
+- `GITHUB_REPO`: Optional `owner/repo` used for GitHub file links in Slack output
+- `QUEUE_AUTO_ANSWER_QUESTIONS`: Optional queue auto-answer toggle (`false` by default)
+- `QUEUE_AUTO_APPROVE_PERMISSIONS`: Optional queue auto-approve toggle (`true` by default)
 
 ### 4. Start the Slack bot
-You can now run `ccslack` in your terminal. The working directory where you start the executable will be the default working directory for your Claude Code session(s). If you have a .env file in this directory, it will automatically be loaded.   
+Run `aislack` in your terminal. The working directory where you start it becomes the default working directory for new session scopes unless `DEFAULT_WORKING_DIR` is set. If a `.env` file exists in that directory, it is loaded automatically.
+
+```bash
+aislack
+```
 
 ## Usage
 
-Type messages in any channel where the bot is installed. The main channel is a single Claude Code session. If you click `reply` to any message and start a thread, this will be a new Claude Code session.
+Type messages in any channel where the bot is installed. The channel root is one session scope; each Slack thread is a separate isolated session scope with its own backend conversation, model, queue, working directory, and added directories.
+
+File uploads are downloaded into the app data directory and added to the session context automatically. If a message contains uploaded files but no text, the bot asks the selected backend to analyze those files. Images also get a Slack preview block in-thread.
 
 ## Architecture
 
@@ -373,10 +421,11 @@ src/
 ├── config.py              # Configuration
 ├── database/              # SQLite persistence (models, migrations, repository)
 ├── claude/                # Claude CLI integration (streaming)
+├── codex/                 # Codex app-server JSON-RPC integration
 ├── handlers/              # Slack command handlers
 ├── agents/                # Configurable subagent system (explore, plan, bash, general)
 ├── approval/              # Permission & plan approval handling
-├── git/                   # Git operations (status, diff, commit, branch, worktree)
+├── git/                   # Git service layer used by worktree flows
 ├── hooks/                 # Event hook system
 ├── question/              # AskUserQuestion tool support
 ├── tasks/                 # Background task management
@@ -387,13 +436,11 @@ src/
 
 | Problem | Solution |
 |---------|----------|
-| Configuration errors on startup | Check `.env` has all required tokens |
-| Commands not appearing | Verify slash commands in Slack app settings |
+| Configuration errors on startup | Check `aislack-config list`, `.env`, or environment variables for the required Slack tokens |
+| Commands not appearing | Verify you registered the slash commands in your Slack app settings |
+| Uploaded files fail | Check `files:read` and `files:write` scopes and confirm the file size is within `MAX_FILE_SIZE_MB` |
+| Queue branch blocks fail | Make sure the current session directory is inside a git repo |
 
 ## License
 
 MIT
-
-- - - 
-
-Congratulations, you can now use Claude Code from anywhere 🎉💪
