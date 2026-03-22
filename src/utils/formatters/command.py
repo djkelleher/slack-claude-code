@@ -103,21 +103,6 @@ def command_response_with_file(
     tuple[list[dict], str, str]
         Tuple of (blocks, file_content, file_title)
     """
-    # Extract a preview (first meaningful content, up to ~500 chars)
-    preview = output.strip()
-    if len(preview) > 500:
-        # Try to break at a sentence boundary
-        break_point = preview.rfind(". ", 0, 500)
-        if break_point > 200:
-            preview = preview[: break_point + 1]
-        else:
-            # Fall back to word boundary
-            break_point = preview.rfind(" ", 0, 500)
-            if break_point > 200:
-                preview = preview[:break_point]
-            else:
-                preview = preview[:500]
-
     blocks = [
         {
             "type": "context",
@@ -131,18 +116,26 @@ def command_response_with_file(
         {"type": "divider"},
     ]
 
-    # Use rich_text blocks for full-width preview display
-    if preview:
-        preview_blocks = text_to_rich_text_blocks(preview, terminal_style=terminal_style)
-        blocks.extend(preview_blocks)
-        # Add truncation notice
-        if len(output) > len(preview):
+    if output:
+        output_blocks = text_to_rich_text_blocks(output, terminal_style=terminal_style)
+        footer_block_count = 2
+        notice_block_count = 1
+        max_content_blocks = max(
+            1,
+            config.SLACK_MAX_BLOCKS_PER_MESSAGE
+            - len(blocks)
+            - footer_block_count
+            - notice_block_count,
+        )
+        truncated = len(output_blocks) > max_content_blocks
+        blocks.extend(output_blocks[:max_content_blocks])
+        if truncated:
             blocks.append(
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "_Preview only. Full response available via detailed output._",
+                        "text": "_Detailed output contains the remaining content._",
                     },
                 }
             )
@@ -150,7 +143,7 @@ def command_response_with_file(
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_No output_"}})
 
     # Add footer with metadata
-    footer_parts = [f":speech_balloon: Full response available ({len(output):,} chars)"]
+    footer_parts = [f":speech_balloon: Detailed output available ({len(output):,} chars)"]
     if duration_ms:
         footer_parts.append(f":stopwatch: {duration_ms / 1000:.1f}s")
     if cost_usd:

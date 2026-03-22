@@ -63,11 +63,11 @@ def test_command_response_passes_terminal_style(monkeypatch) -> None:
     assert seen["terminal_style"] is True
 
 
-def test_command_response_with_file_truncates_preview_and_adds_notice(monkeypatch) -> None:
-    captured_previews = []
+def test_command_response_with_file_shows_full_content_when_blocks_fit(monkeypatch) -> None:
+    captured_outputs = []
 
     def fake_text_to_rich_text_blocks(text: str, terminal_style: bool = False) -> list[dict]:
-        captured_previews.append(text)
+        captured_outputs.append(text)
         return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
 
     monkeypatch.setattr(command_fmt, "text_to_rich_text_blocks", fake_text_to_rich_text_blocks)
@@ -83,11 +83,35 @@ def test_command_response_with_file_truncates_preview_and_adds_notice(monkeypatc
 
     assert file_content == output
     assert file_title == "claude_response_7.txt"
-    assert captured_previews[0].endswith(".")
-    assert len(captured_previews[0]) < len(output)
+    assert captured_outputs == [output]
+    assert not any(
+        block.get("text", {}).get("text") == "_Detailed output contains the remaining content._"
+        for block in blocks
+    )
+
+
+def test_command_response_with_file_truncates_by_block_budget_and_adds_notice(monkeypatch) -> None:
+    monkeypatch.setattr(command_fmt.config, "SLACK_MAX_BLOCKS_PER_MESSAGE", 6, raising=False)
+
+    def fake_text_to_rich_text_blocks(text: str, terminal_style: bool = False) -> list[dict]:
+        return [
+            {"type": "rich_text", "elements": [{"type": "text", "text": f"block-{index}"}]}
+            for index in range(5)
+        ]
+
+    monkeypatch.setattr(command_fmt, "text_to_rich_text_blocks", fake_text_to_rich_text_blocks)
+
+    blocks, _, _ = command_fmt.command_response_with_file(
+        prompt="show output",
+        output="long output",
+        command_id=7,
+    )
+
+    rich_text_blocks = [block for block in blocks if block["type"] == "rich_text"]
+    assert len(rich_text_blocks) == 1
+    assert rich_text_blocks[0]["elements"][0]["text"] == "block-0"
     assert any(
-        block.get("text", {}).get("text")
-        == "_Preview only. Full response available via detailed output._"
+        block.get("text", {}).get("text") == "_Detailed output contains the remaining content._"
         for block in blocks
     )
 
