@@ -278,6 +278,36 @@ class SubprocessExecutor(ProcessExecutorBase):
         else:
             base_model, effort = None, None
 
+        async def register_active_turn(turn_id: str) -> None:
+            """Register active-turn state once a live turn ID is known."""
+            nonlocal active_turn_state, current_turn_id
+
+            normalized_turn_id = str(turn_id or "").strip()
+            if not normalized_turn_id or not result_session_id:
+                return
+            if active_turn_state and active_turn_state.turn_id == normalized_turn_id:
+                return
+
+            current_turn_id = normalized_turn_id
+            if active_turn_state:
+                active_turn_state.turn_id = normalized_turn_id
+            else:
+                active_turn_state = _ActiveTurnState(
+                    scope=session_scope,
+                    track_id=track_id,
+                    thread_id=result_session_id,
+                    turn_id=normalized_turn_id,
+                    control_queue=control_queue,
+                )
+            async with self._lock:
+                self._active_turns_by_scope[session_scope] = active_turn_state
+                self._active_turns_by_track[track_id] = active_turn_state
+            await self._increment_metric("turn_start_registered")
+            logger.info(
+                f"{log_prefix}event=turn_start_registered scope={session_scope} "
+                f"thread_id={result_session_id} turn_id={normalized_turn_id} track_id={track_id}"
+            )
+
         async def send_rpc(payload: dict) -> None:
             if process.stdin is None:
                 raise RuntimeError("app-server stdin is unavailable")
@@ -425,9 +455,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 turn = params.get("turn", {})
                 turn_id = turn.get("id")
                 if turn_id:
-                    current_turn_id = str(turn_id)
-                    if active_turn_state:
-                        active_turn_state.turn_id = current_turn_id
+                    await register_active_turn(str(turn_id))
                 msg = parser.parse_line(json.dumps({"type": "turn.started"}))
                 if msg:
                     await handle_stream_message(msg)
@@ -947,21 +975,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 logger.warning(f"{log_prefix}turn/start did not return a turn id")
 
             if current_turn_id:
-                active_turn_state = _ActiveTurnState(
-                    scope=session_scope,
-                    track_id=track_id,
-                    thread_id=result_session_id,
-                    turn_id=current_turn_id,
-                    control_queue=control_queue,
-                )
-                async with self._lock:
-                    self._active_turns_by_scope[session_scope] = active_turn_state
-                    self._active_turns_by_track[track_id] = active_turn_state
-                await self._increment_metric("turn_start_registered")
-                logger.info(
-                    f"{log_prefix}event=turn_start_registered scope={session_scope} "
-                    f"thread_id={result_session_id} turn_id={current_turn_id} track_id={track_id}"
-                )
+                await register_active_turn(current_turn_id)
 
             is_final = False
             while not is_final:

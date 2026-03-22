@@ -13,6 +13,7 @@ from src.codex.subprocess_executor import (
     _ActiveTurnState,
 )
 from src.config import config
+from src.utils.execution_scope import build_session_scope
 from src.utils.process_utils import terminate_process_safely
 
 
@@ -240,6 +241,60 @@ class TestCodexSubprocessExecutor:
                 "developer_instructions": None,
             },
         }
+
+    @pytest.mark.asyncio
+    async def test_turn_started_notification_registers_active_turn_when_start_result_has_no_id(
+        self, monkeypatch
+    ):
+        """Active-turn routing should work even if `turn/start` omits the turn ID."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {"turn": {}}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/started",
+                        "params": {"turn": {"id": "turn-123"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            session_scope = build_session_scope("C123", "123.456")
+            task = asyncio.create_task(
+                executor.execute(
+                    prompt="continue",
+                    working_directory="/tmp/workspace",
+                    channel_id="C123",
+                    thread_ts="123.456",
+                    session_id=session_scope,
+                    execution_id="exec-1",
+                )
+            )
+            while not await executor.has_active_turn(session_scope):
+                await asyncio.sleep(0)
+
+            active_turn = await executor.get_active_turn(session_scope)
+            assert active_turn is not None
+            assert active_turn["turn_id"] == "turn-123"
+
+            task.cancel()
+            await asyncio.wait_for(task, timeout=1.0)
 
     @pytest.mark.asyncio
     async def test_execute_non_plan_mode_sets_default_collaboration_mode(self, monkeypatch):
