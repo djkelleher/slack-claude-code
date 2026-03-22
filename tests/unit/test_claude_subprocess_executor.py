@@ -1,6 +1,7 @@
 """Unit tests for Claude subprocess executor."""
 
 import json
+import signal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -34,12 +35,17 @@ class _DummyProcess:
         self.stdout = _DummyStdout(lines)
         self.stderr = _DummyStderr()
         self.returncode = None
+        self.signals: list[signal.Signals] = []
         self.terminated = False
 
     async def wait(self) -> int:
         if self.returncode is None:
             self.returncode = 0
         return self.returncode
+
+    def send_signal(self, sig: signal.Signals) -> None:
+        self.signals.append(sig)
+        self.returncode = 0
 
     def terminate(self) -> None:
         self.terminated = True
@@ -120,7 +126,8 @@ class TestClaudeSubprocessExecutor:
 
         assert result.success is True
         assert result.has_pending_plan_approval is True
-        assert process.terminated is True
+        assert process.signals == [signal.SIGINT]
+        assert process.terminated is False
 
     @pytest.mark.asyncio
     async def test_claude_effort_suffix_is_passed_via_flag(self):

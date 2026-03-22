@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import signal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -55,11 +56,16 @@ class _DummyProcess:
         self.stdout = _DummyStdout(lines)
         self.stderr = _DummyStderr()
         self.returncode = None
+        self.signals: list[signal.Signals] = []
 
     async def wait(self) -> int:
         if self.returncode is None:
             self.returncode = 0
         return self.returncode
+
+    def send_signal(self, sig: signal.Signals) -> None:
+        self.signals.append(sig)
+        self.returncode = 0
 
     def terminate(self) -> None:
         self.returncode = 0
@@ -73,6 +79,7 @@ class _HangingProcess:
 
     def __init__(self) -> None:
         self.returncode = None
+        self.signals: list[signal.Signals] = []
         self.terminated = False
         self.killed = False
 
@@ -80,8 +87,11 @@ class _HangingProcess:
         if self.killed:
             self.returncode = -9
             return -9
-        await asyncio.sleep(1)
+        await asyncio.sleep(3)
         return 0
+
+    def send_signal(self, sig: signal.Signals) -> None:
+        self.signals.append(sig)
 
     def terminate(self) -> None:
         self.terminated = True
@@ -1081,6 +1091,7 @@ class TestCodexSubprocessExecutor:
 
         await terminate_process_safely(process, timeout=0.01)
 
+        assert process.signals == [signal.SIGINT]
         assert process.terminated is True
         assert process.killed is True
 
