@@ -40,11 +40,11 @@ class ToolActivity(BaseToolActivity):
 
 
 class StreamParser(BaseStreamParser):
-    """Parser for Codex CLI JSONL stream events.
+    """Parser for normalized Codex app-server stream events.
 
-    The executor forwards CLI JSONL output directly into this parser. Supported
-    events include `thread.started`, `item.started`, `item.completed`,
-    `request_user_input`, `turn.completed`, and `turn.failed`.
+    The executor maps app-server JSON-RPC notifications into line-delimited event
+    payloads consumed here (for example: thread.started, item.started/completed,
+    request_user_input, turn.completed, turn.failed).
     """
 
     def __init__(self) -> None:
@@ -407,11 +407,9 @@ class StreamParser(BaseStreamParser):
 
     @staticmethod
     def _parse_error_message(data: dict) -> StreamMessage:
-        error_msg = data.get("message")
-        if error_msg is None:
-            error_msg = data.get("error", {})
-            if isinstance(error_msg, dict):
-                error_msg = error_msg.get("message", str(error_msg))
+        error_msg = data.get("error", {})
+        if isinstance(error_msg, dict):
+            error_msg = error_msg.get("message", str(error_msg))
         return StreamMessage(
             type="error",
             content=str(error_msg),

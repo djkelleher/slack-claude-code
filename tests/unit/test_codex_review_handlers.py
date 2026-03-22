@@ -36,10 +36,20 @@ def _deps(session: Session, codex_executor) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_review_status_reports_unavailable_in_cli_mode():
+async def test_review_status_uses_thread_read_for_codex_session():
     app = _FakeApp()
     session = Session(model="gpt-5.3-codex", working_directory="/repo", codex_session_id="thread-1")
     codex_executor = SimpleNamespace(
+        thread_read=AsyncMock(
+            return_value={
+                "thread": {
+                    "id": "thread-1",
+                    "name": "review-thread",
+                    "status": "running",
+                    "turns": [{"id": "turn-1", "status": "running", "createdAt": "now"}],
+                }
+            }
+        ),
         review_start=AsyncMock(),
     )
     deps = _deps(session, codex_executor)
@@ -59,9 +69,14 @@ async def test_review_status_reports_unavailable_in_cli_mode():
         logger=MagicMock(),
     )
 
+    codex_executor.thread_read.assert_awaited_once_with(
+        thread_id="thread-1",
+        working_directory="/repo",
+        include_turns=True,
+    )
     codex_executor.review_start.assert_not_called()
     kwargs = client.chat_postMessage.await_args.kwargs
-    assert kwargs["text"] == "Codex review status unavailable"
+    assert kwargs["text"] == "Codex review status"
 
 
 @pytest.mark.asyncio
@@ -69,7 +84,10 @@ async def test_review_start_includes_status_followup_hint():
     app = _FakeApp()
     session = Session(model="gpt-5.3-codex", working_directory="/repo", codex_session_id="thread-1")
     codex_executor = SimpleNamespace(
-        review_start=AsyncMock(return_value={"reviewThreadId": None, "turn": {"id": "turn-9"}}),
+        thread_read=AsyncMock(),
+        review_start=AsyncMock(
+            return_value={"reviewThreadId": "review-2", "turn": {"id": "turn-9"}}
+        ),
     )
     deps = _deps(session, codex_executor)
     register_claude_cli_commands(app, deps)
@@ -91,4 +109,4 @@ async def test_review_start_includes_status_followup_hint():
     codex_executor.review_start.assert_awaited_once()
     kwargs = client.chat_postMessage.await_args.kwargs
     text = kwargs["blocks"][0]["text"]["text"]
-    assert "Started Codex CLI review" in text
+    assert "/review status review-2" in text
