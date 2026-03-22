@@ -1,4 +1,4 @@
-"""Parser for Codex CLI stream-json output format."""
+"""Parser for normalized Codex app-server event output."""
 
 from typing import Optional
 

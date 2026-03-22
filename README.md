@@ -425,8 +425,8 @@ src/
 ├── app.py                 # Main entry point
 ├── config.py              # Configuration
 ├── database/              # SQLite persistence (models, migrations, repository)
-├── claude/                # Claude CLI integration (streaming)
-├── codex/                 # Codex app-server integration
+├── claude/                # Claude CLI integration (`claude -p --output-format stream-json`)
+├── codex/                 # Codex app-server JSON-RPC integration
 ├── handlers/              # Slack command handlers
 ├── agents/                # Configurable subagent system (explore, plan, bash, general)
 ├── approval/              # Permission & plan approval handling
