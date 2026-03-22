@@ -31,7 +31,10 @@ from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
-from src.handlers.claude.queue import ensure_queue_processor, ensure_queue_schedule_dispatcher
+from src.handlers.claude.queue import (
+    ensure_queue_processor,
+    ensure_queue_schedule_dispatcher,
+)
 from src.handlers.execution_runtime import execute_prompt_with_runtime
 from src.question.manager import QuestionManager
 from src.tasks.queue_plan import (
@@ -568,10 +571,7 @@ async def _route_claude_message_to_active_execution_or_queue(
     await deps.db.update_command_status(
         cmd_history.id,
         "completed",
-        output=(
-            "Active Claude execution detected."
-            f" Auto-queued item #{queued_item.id}."
-        ),
+        output=("Active Claude execution detected." f" Auto-queued item #{queued_item.id}."),
     )
     await ensure_queue_processor(
         channel_id=channel_id,

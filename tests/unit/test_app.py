@@ -10,15 +10,15 @@ import pytest
 
 from src.app import (
     _application_data_dir,
-    _route_claude_message_to_active_execution_or_queue,
     _event_dedupe_key,
     _extract_structured_queue_plan_from_uploaded_files,
     _handle_typed_model_command,
     _is_duplicate_event,
-    _restore_pending_queue_processors,
-    _slack_uploads_dir,
     _queue_structured_plan_message,
+    _restore_pending_queue_processors,
+    _route_claude_message_to_active_execution_or_queue,
     _route_codex_message_to_active_turn_or_queue,
+    _slack_uploads_dir,
     _strip_leading_slack_mention,
     configure_logging,
     slack_api_with_retry,

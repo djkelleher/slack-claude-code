@@ -21,6 +21,7 @@ from src.utils.formatters.command import error_message
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
+
 async def _create_claude_native_worktree(
     deps: HandlerDependencies,
     session: Session,

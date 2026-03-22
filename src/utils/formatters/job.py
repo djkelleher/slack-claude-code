@@ -4,7 +4,6 @@ from src.database.models import ParallelJob
 
 from .base import time_ago
 
-
 _STATUS_LABELS = {
     "pending": ":hourglass: Pending",
     "running": ":arrows_counterclockwise: Running",

@@ -9,6 +9,7 @@ from src.utils.formatters.command import (
     should_attach_file,
 )
 
+
 async def deliver_command_response(
     *,
     client: Any,
