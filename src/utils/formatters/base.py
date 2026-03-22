@@ -845,4 +845,7 @@ def text_to_rich_text_blocks(
     if not elements:
         return [{"type": "rich_text", "elements": []}]
 
-    return [{"type": "rich_text", "elements": chunk} for chunk in _chunk_rich_text_elements(elements, max_length)]
+    return [
+        {"type": "rich_text", "elements": chunk}
+        for chunk in _chunk_rich_text_elements(elements, max_length)
+    ]

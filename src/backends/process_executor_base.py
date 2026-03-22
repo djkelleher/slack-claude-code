@@ -62,9 +62,7 @@ class ProcessExecutorBase:
         effective_max_depth = max_depth or cls.DEFAULT_MAX_RECURSION_DEPTH
         if recursion_depth < effective_max_depth:
             return None
-        logger.error(
-            f"{log_prefix}Max recursion depth ({effective_max_depth}) reached, aborting"
-        )
+        logger.error(f"{log_prefix}Max recursion depth ({effective_max_depth}) reached, aborting")
         return f"Max retry depth ({effective_max_depth}) exceeded"
 
     async def start_subprocess(

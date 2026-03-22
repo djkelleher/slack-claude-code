@@ -22,7 +22,7 @@ def test_parse_json_line_with_buffer_handles_partial_complete_and_overflow() -> 
     assert error is None
 
     data, buffer, error = common.parse_json_line_with_buffer(
-        line='1}',
+        line="1}",
         buffer=buffer,
         max_buffer_size=32,
     )

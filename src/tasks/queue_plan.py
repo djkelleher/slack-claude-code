@@ -150,10 +150,7 @@ def parse_queue_plan_submission(
     - ``((at <time>))``: schedule an implicit resume/start at the given time
     """
     current_now_utc = now_utc or datetime.now(timezone.utc)
-    if (
-        current_now_utc.tzinfo is None
-        or current_now_utc.tzinfo.utcoffset(current_now_utc) is None
-    ):
+    if current_now_utc.tzinfo is None or current_now_utc.tzinfo.utcoffset(current_now_utc) is None:
         raise QueuePlanError("now_utc must be timezone-aware")
     current_now_utc = current_now_utc.astimezone(timezone.utc)
     replace_pending = False
@@ -227,8 +224,7 @@ def _parse_queue_timer_directive(
     execute_at_utc = _parse_queue_timer_time(time_text, now_utc)
     if execute_at_utc <= now_utc:
         raise QueuePlanError(
-            f"Scheduled queue control time `{time_text}` is in the past. "
-            "Use a future timestamp."
+            f"Scheduled queue control time `{time_text}` is in the past. " "Use a future timestamp."
         )
     return QueueScheduledControl(action=action, execute_at=execute_at_utc)
 
@@ -254,9 +250,7 @@ def _parse_queue_timer_time(time_text: str, now_utc: datetime) -> datetime:
         hours = int(hhmm_match.group(1))
         minutes = int(hhmm_match.group(2))
         local_now = now_utc.astimezone()
-        local_dt = local_now.replace(
-            hour=hours, minute=minutes, second=0, microsecond=0
-        )
+        local_dt = local_now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
         return local_dt.astimezone(timezone.utc)
 
     raise QueuePlanError(
@@ -312,9 +306,7 @@ async def materialize_queue_plan_prompts(
     current_worktree_path = _find_containing_worktree_path(working_directory, worktrees)
     if current_worktree_path is None:
         current_worktree_path = str(Path(working_directory).resolve())
-    current_subdirectory = _relative_subdirectory(
-        working_directory, current_worktree_path
-    )
+    current_subdirectory = _relative_subdirectory(working_directory, current_worktree_path)
 
     worktree_paths_by_branch: dict[str, str] = {
         worktree.branch: worktree.path for worktree in worktrees if worktree.branch
@@ -355,9 +347,7 @@ def _parse_to_ast(text: str) -> list[_Node]:
     stack: list[_Frame] = [_Frame(kind="root", start_line=0)]
 
     for line_number, line in enumerate(text.splitlines(), start=1):
-        marker, inline_prompt = _parse_marker_with_inline_prompt(
-            line.strip(), strict=True
-        )
+        marker, inline_prompt = _parse_marker_with_inline_prompt(line.strip(), strict=True)
         current = stack[-1]
 
         if marker is None:
@@ -374,11 +364,7 @@ def _parse_to_ast(text: str) -> list[_Node]:
 
         if marker_type == "branch_start":
             branch_name = marker[1]
-            stack.append(
-                _Frame(
-                    kind="branch", start_line=line_number, branch_name=branch_name
-                )
-            )
+            stack.append(_Frame(kind="branch", start_line=line_number, branch_name=branch_name))
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
@@ -398,9 +384,7 @@ def _parse_to_ast(text: str) -> list[_Node]:
             continue
 
         if marker_type == "loop_start":
-            stack.append(
-                _Frame(kind="loop", start_line=line_number, loop_count=marker[1])
-            )
+            stack.append(_Frame(kind="loop", start_line=line_number, loop_count=marker[1]))
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
@@ -424,11 +408,7 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 raise QueuePlanError(
                     f"Line {line_number}: nested parallel blocks are not supported."
                 )
-            stack.append(
-                _Frame(
-                    kind="parallel", start_line=line_number, parallel_limit=marker[1]
-                )
-            )
+            stack.append(_Frame(kind="parallel", start_line=line_number, parallel_limit=marker[1]))
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
@@ -466,9 +446,7 @@ def _close_frame(stack: list[_Frame]) -> None:
         )
         return
     if finished.kind == "loop":
-        stack[-1].nodes.append(
-            _LoopNode(count=finished.loop_count or 1, children=finished.nodes)
-        )
+        stack[-1].nodes.append(_LoopNode(count=finished.loop_count or 1, children=finished.nodes))
         return
     if finished.kind == "parallel":
         stack[-1].nodes.append(
@@ -682,9 +660,7 @@ def _parse_double_paren_block_marker(
     return None
 
 
-def _parse_loop_marker_value(
-    count_text: str, line: str, marker_type: str
-) -> tuple[str, int]:
+def _parse_loop_marker_value(count_text: str, line: str, marker_type: str) -> tuple[str, int]:
     """Parse and validate loop marker payload."""
     count = int(count_text)
     if count < 1:
@@ -702,9 +678,7 @@ def _parse_branch_marker_value(branch_text: str, marker_type: str) -> tuple[str,
     return marker_type, branch_name
 
 
-def _parse_parallel_marker_value(
-    limit_text: Optional[str], line: str
-) -> tuple[str, Optional[int]]:
+def _parse_parallel_marker_value(limit_text: Optional[str], line: str) -> tuple[str, Optional[int]]:
     """Parse and validate parallel marker payload."""
     if limit_text is None:
         return "parallel_start", None
@@ -717,9 +691,7 @@ def _parse_parallel_marker_value(
     return "parallel_start", limit
 
 
-def _find_containing_worktree_path(
-    working_directory: str, worktrees: list
-) -> Optional[str]:
+def _find_containing_worktree_path(working_directory: str, worktrees: list) -> Optional[str]:
     """Return the worktree root containing the current working directory."""
     cwd_path = Path(working_directory).resolve()
     containing_paths = []

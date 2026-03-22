@@ -320,9 +320,7 @@ async def _handle_add(
     stay: bool = False,
 ) -> None:
     """Create a new worktree and optionally switch session to it."""
-    use_claude_native_worktree = (
-        session.get_backend() == "claude" and from_ref is None and not stay
-    )
+    use_claude_native_worktree = session.get_backend() == "claude" and from_ref is None and not stay
     if use_claude_native_worktree:
         worktree_path, claude_session_id = await _create_claude_native_worktree(
             deps,

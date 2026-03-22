@@ -31,36 +31,51 @@ def test_format_tool_input_summary_handles_simple_truncation_rules() -> None:
     }
     display = _display()
 
-    assert format_tool_input_summary(
-        "open_file",
-        {"path": "/very/long/path/to/example.txt"},
-        display,
-        rules,
-    ) == "`...o/example.txt`"
-    assert format_tool_input_summary(
-        "run_command",
-        {"cmd": "echo hello\nworld from codex"},
-        display,
-        rules,
-    ) == "`echo hello worl...`"
-    assert format_tool_input_summary(
-        "search",
-        {"pattern": "0123456789ABC"},
-        display,
-        rules,
-    ) == "`0123456789...`"
-    assert format_tool_input_summary(
-        "write",
-        {"text": "hello brave new world"},
-        display,
-        rules,
-    ) == "`hello brave ...`"
-    assert format_tool_input_summary(
-        "browse",
-        {"url": "https://example.com/very/long/path"},
-        display,
-        rules,
-    ) == "`https://exampl...`"
+    assert (
+        format_tool_input_summary(
+            "open_file",
+            {"path": "/very/long/path/to/example.txt"},
+            display,
+            rules,
+        )
+        == "`...o/example.txt`"
+    )
+    assert (
+        format_tool_input_summary(
+            "run_command",
+            {"cmd": "echo hello\nworld from codex"},
+            display,
+            rules,
+        )
+        == "`echo hello worl...`"
+    )
+    assert (
+        format_tool_input_summary(
+            "search",
+            {"pattern": "0123456789ABC"},
+            display,
+            rules,
+        )
+        == "`0123456789...`"
+    )
+    assert (
+        format_tool_input_summary(
+            "write",
+            {"text": "hello brave new world"},
+            display,
+            rules,
+        )
+        == "`hello brave ...`"
+    )
+    assert (
+        format_tool_input_summary(
+            "browse",
+            {"url": "https://example.com/very/long/path"},
+            display,
+            rules,
+        )
+        == "`https://exampl...`"
+    )
 
 
 def test_format_tool_input_summary_handles_count_lsp_and_first_question_rules() -> None:
@@ -72,24 +87,33 @@ def test_format_tool_input_summary_handles_count_lsp_and_first_question_rules() 
     }
     display = _display()
 
-    assert format_tool_input_summary(
-        "batch",
-        {"items": [1, 2, 3]},
-        display,
-        rules,
-    ) == "`3 files`"
-    assert format_tool_input_summary(
-        "lsp",
-        {"op": "rename", "file": "/tmp/project/src/module.py"},
-        display,
-        rules,
-    ) == "`rename` on `...src/module.py`"
-    assert format_tool_input_summary(
-        "ask",
-        {"questions": [{"question": "Proceed with deploy to production?"}]},
-        display,
-        rules,
-    ) == "`Proceed with...`"
+    assert (
+        format_tool_input_summary(
+            "batch",
+            {"items": [1, 2, 3]},
+            display,
+            rules,
+        )
+        == "`3 files`"
+    )
+    assert (
+        format_tool_input_summary(
+            "lsp",
+            {"op": "rename", "file": "/tmp/project/src/module.py"},
+            display,
+            rules,
+        )
+        == "`rename` on `...src/module.py`"
+    )
+    assert (
+        format_tool_input_summary(
+            "ask",
+            {"questions": [{"question": "Proceed with deploy to production?"}]},
+            display,
+            rules,
+        )
+        == "`Proceed with...`"
+    )
 
 
 def test_format_tool_input_summary_returns_empty_for_missing_or_unusable_rules() -> None:

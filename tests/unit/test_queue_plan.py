@@ -85,9 +85,7 @@ def test_parse_queue_plan_parallel_inside_loop_creates_distinct_groups() -> None
 
 def test_parse_queue_plan_rejects_nested_parallel_blocks() -> None:
     with pytest.raises(QueuePlanError, match="nested parallel blocks"):
-        parse_queue_plan_text(
-            "((parallel))\n((parallel2))\nrun\n((endparallel))\n((endparallel))"
-        )
+        parse_queue_plan_text("((parallel))\n((parallel2))\nrun\n((endparallel))\n((endparallel))")
 
 
 def test_parse_queue_plan_allows_nested_loop_and_branch() -> None:
@@ -126,7 +124,9 @@ def test_parse_queue_plan_allows_unclosed_branch_block_at_eof() -> None:
 
 
 def test_parse_queue_plan_rejects_branch_end_without_open_block() -> None:
-    with pytest.raises(QueuePlanError, match="branch end marker without matching open branch block"):
+    with pytest.raises(
+        QueuePlanError, match="branch end marker without matching open branch block"
+    ):
         parse_queue_plan_text("run\n((endbranch))")
 
 

@@ -69,8 +69,7 @@ async def deliver_command_response(
                             "text": {
                                 "type": "mrkdwn",
                                 "text": (
-                                    f"📋 *Detailed output* "
-                                    f"({len(detail_content):,} chars)"
+                                    f"📋 *Detailed output* " f"({len(detail_content):,} chars)"
                                 ),
                             },
                             "accessory": {

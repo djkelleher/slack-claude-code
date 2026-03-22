@@ -55,9 +55,7 @@ _QUEUE_SAVE_OUTPUT_DIRECTIVE_RE = re.compile(
     r"^\(\(\s*save\s+([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)$",
     re.IGNORECASE,
 )
-_QUEUE_NAMED_OUTPUT_REFERENCE_RE = re.compile(
-    r"\(\(\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)"
-)
+_QUEUE_NAMED_OUTPUT_REFERENCE_RE = re.compile(r"\(\(\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)")
 _QUEUE_COMMAND_USER_ID_PREFIX = "queue-item"
 _QUEUE_SCHEDULE_DISPATCHER_TASK_ID = "queue_schedule_dispatcher"
 _QUEUE_SCHEDULE_DISPATCHER_POLL_SECONDS = 1.0
@@ -78,9 +76,7 @@ _RESUME_TIME_PATTERNS = (
         r"(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?:\s*(?P<tz>[A-Za-z]{1,5}|[+-]\d{2}:?\d{2}))?",
         re.IGNORECASE,
     ),
-    re.compile(
-        r"\b(?P<time>\d{4}-\d{2}-\d{2}[tT]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)\b"
-    ),
+    re.compile(r"\b(?P<time>\d{4}-\d{2}-\d{2}[tT]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)\b"),
 )
 
 
@@ -351,7 +347,9 @@ async def _codex_usage_limit_state(
 
     detail = "Codex usage limit reached."
     if resume_at is not None:
-        detail = f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+        detail = (
+            f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+        )
     else:
         detail = f"{detail} Resume time could not be determined automatically."
     return _QueueUsageLimitState(resume_at=resume_at, detail=detail)
@@ -369,7 +367,9 @@ async def _claude_usage_limit_state(
     resume_at = _parse_resume_time_from_text(result_text)
     detail = "Claude usage limit reached."
     if resume_at is not None:
-        detail = f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+        detail = (
+            f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+        )
     else:
         detail = f"{detail} Resume time could not be determined automatically."
     return _QueueUsageLimitState(resume_at=resume_at, detail=detail)
@@ -478,15 +478,20 @@ def _strip_runtime_directive_lines(prompt: str) -> tuple[str, Optional[str], Opt
         directive_body = match.group(1).strip()
         normalized_model = normalize_model_name(directive_body)
         lowered = directive_body.lower()
-        if normalized_model and lowered not in {
-            "append",
-            "prepend",
-            "replace",
-            "clear",
-            "endbranch",
-            "parallel",
-            "endparallel",
-        } and not lowered.startswith(("branch ", "loop", "endloop", "insert", "at ", "save ")):
+        if (
+            normalized_model
+            and lowered
+            not in {
+                "append",
+                "prepend",
+                "replace",
+                "clear",
+                "endbranch",
+                "parallel",
+                "endparallel",
+            }
+            and not lowered.startswith(("branch ", "loop", "endloop", "insert", "at ", "save "))
+        ):
             model_override = normalized_model
             stripped_lines.pop(0)
             continue
@@ -514,7 +519,9 @@ async def _resolve_queue_runtime_prompt(
     except AttributeError:
         completed_items = []
     completed_outputs_by_position = {
-        queued.position: queued.output or "" for queued in completed_items if queued.position < item.position
+        queued.position: queued.output or ""
+        for queued in completed_items
+        if queued.position < item.position
     }
     saved_outputs_by_name = {
         name: queued.output or ""
@@ -525,7 +532,9 @@ async def _resolve_queue_runtime_prompt(
     def replace_position_output_reference(match: re.Match[str]) -> str:
         position = int(match.group(1))
         if position < 1 or position >= item.position:
-            raise ValueError(f"Queue output reference `((p{position}output))` is not available yet.")
+            raise ValueError(
+                f"Queue output reference `((p{position}output))` is not available yet."
+            )
         if position not in completed_outputs_by_position:
             raise ValueError(f"Queue output reference `((p{position}output))` was not found.")
         return completed_outputs_by_position[position]

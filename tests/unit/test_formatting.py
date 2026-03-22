@@ -248,8 +248,7 @@ class TestTextToRichTextBlocks:
         assert len(blocks) >= 2
         assert all(block["type"] == "rich_text" for block in blocks)
         assert "Paragraph one" in "".join(
-            element.get("text", "")
-            for element in blocks[0]["elements"][0]["elements"]
+            element.get("text", "") for element in blocks[0]["elements"][0]["elements"]
         )
 
     def test_filesystem_markdown_links_render_as_plain_paths(self):

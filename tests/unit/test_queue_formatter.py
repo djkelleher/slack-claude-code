@@ -16,7 +16,9 @@ def test_queue_status_renders_running_scheduled_and_pending_sections() -> None:
             parallel_limit=2,
         )
     ]
-    pending = [SimpleNamespace(id=2, prompt="follow up", parallel_group_id=None, parallel_limit=None)]
+    pending = [
+        SimpleNamespace(id=2, prompt="follow up", parallel_group_id=None, parallel_limit=None)
+    ]
     scheduled = [
         SimpleNamespace(action="resume", execute_at=datetime(2026, 3, 21, 15, 30)),
         SimpleNamespace(action="pause", execute_at=datetime(2026, 3, 21, 16, 0)),

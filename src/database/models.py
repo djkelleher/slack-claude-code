@@ -13,22 +13,16 @@ class Session:
     thread_ts: Optional[str] = None  # Thread timestamp for thread-based sessions
     working_directory: str = "~"
     claude_session_id: Optional[str] = None  # For Claude --resume flag
-    permission_mode: Optional[str] = (
-        None  # Per-session permission mode override (Claude)
-    )
+    permission_mode: Optional[str] = None  # Per-session permission mode override (Claude)
     model: Optional[str] = (
         None  # Model to use (e.g., "sonnet", "claude-opus-4-6[1m]", "gpt-5.3-codex")
     )
-    added_dirs: list[str] = field(
-        default_factory=list
-    )  # Directories added via /add-dir
+    added_dirs: list[str] = field(default_factory=list)  # Directories added via /add-dir
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
     # Codex-specific fields
     codex_session_id: Optional[str] = None  # For Codex resume
-    sandbox_mode: str = (
-        "workspace-write"  # read-only, workspace-write, danger-full-access
-    )
+    sandbox_mode: str = "workspace-write"  # read-only, workspace-write, danger-full-access
     approval_mode: str = "on-request"  # untrusted, on-request, never
 
     @classmethod

@@ -115,9 +115,7 @@ def _sent_messages(process: _DummyProcess) -> list[dict]:
 
 
 def _sent_requests(process: _DummyProcess) -> list[dict]:
-    return [
-        msg for msg in _sent_messages(process) if "method" in msg and "params" in msg
-    ]
+    return [msg for msg in _sent_messages(process) if "method" in msg and "params" in msg]
 
 
 def _sent_responses(process: _DummyProcess) -> list[dict]:
@@ -244,9 +242,7 @@ class TestCodexSubprocessExecutor:
         }
 
     @pytest.mark.asyncio
-    async def test_execute_non_plan_mode_sets_default_collaboration_mode(
-        self, monkeypatch
-    ):
+    async def test_execute_non_plan_mode_sets_default_collaboration_mode(self, monkeypatch):
         """Non-plan modes should explicitly set default collaboration mode."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
@@ -399,9 +395,7 @@ class TestCodexSubprocessExecutor:
         assert result.error is None
 
     @pytest.mark.asyncio
-    async def test_assistant_deltas_preserve_text_and_skip_completed_duplicate(
-        self, monkeypatch
-    ):
+    async def test_assistant_deltas_preserve_text_and_skip_completed_duplicate(self, monkeypatch):
         """Delta chunks should be concatenated verbatim and not replayed by item/completed."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
@@ -530,9 +524,7 @@ class TestCodexSubprocessExecutor:
         assert result.output == "I'm testing formatting."
 
     @pytest.mark.asyncio
-    async def test_agent_message_completed_without_deltas_is_retained(
-        self, monkeypatch
-    ):
+    async def test_agent_message_completed_without_deltas_is_retained(self, monkeypatch):
         """item/completed assistant text should still be captured when no deltas were emitted."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
@@ -584,9 +576,7 @@ class TestCodexSubprocessExecutor:
         assert result.output == "Final assistant message"
 
     @pytest.mark.asyncio
-    async def test_internal_reasoning_and_diff_deltas_are_not_exposed(
-        self, monkeypatch
-    ):
+    async def test_internal_reasoning_and_diff_deltas_are_not_exposed(self, monkeypatch):
         """Reasoning and turn diff notifications should not leak into user output."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
@@ -715,9 +705,7 @@ class TestCodexSubprocessExecutor:
             )
 
         assert result.success is True
-        on_user_input_request.assert_awaited_once_with(
-            "item_1", {"questions": [question]}
-        )
+        on_user_input_request.assert_awaited_once_with("item_1", {"questions": [question]})
 
         response_by_id = {msg["id"]: msg for msg in _sent_responses(process)}
         assert response_by_id[10]["result"] == callback_payload
@@ -838,9 +826,7 @@ class TestCodexSubprocessExecutor:
         response_by_id = {msg["id"]: msg for msg in _sent_responses(process)}
         assert response_by_id[30]["result"]["success"] is False
         assert response_by_id[30]["result"]["contentItems"][0]["type"] == "inputText"
-        assert (
-            "not supported" in response_by_id[30]["result"]["contentItems"][0]["text"]
-        )
+        assert "not supported" in response_by_id[30]["result"]["contentItems"][0]["text"]
 
     @pytest.mark.asyncio
     async def test_legacy_approval_request_methods_are_rejected(self, monkeypatch):
@@ -891,9 +877,7 @@ class TestCodexSubprocessExecutor:
         assert errors_by_id[31]["error"]["code"] == -32601
 
     @pytest.mark.asyncio
-    async def test_default_approval_decision_respects_mode_when_no_callback(
-        self, monkeypatch
-    ):
+    async def test_default_approval_decision_respects_mode_when_no_callback(self, monkeypatch):
         """Without callback, never-mode auto-accepts while on-request declines."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
@@ -954,9 +938,7 @@ class TestCodexSubprocessExecutor:
         assert result_on_request.success is True
 
         response_never = {msg["id"]: msg for msg in _sent_responses(process_never)}[21]
-        response_on_request = {
-            msg["id"]: msg for msg in _sent_responses(process_on_request)
-        }[21]
+        response_on_request = {msg["id"]: msg for msg in _sent_responses(process_on_request)}[21]
         assert response_never["result"] == {"decision": "accept"}
         assert response_on_request["result"] == {"decision": "decline"}
 
@@ -1019,15 +1001,11 @@ class TestCodexSubprocessExecutor:
         assert second_methods == ["initialize", "thread/start", "turn/start"]
 
     @pytest.mark.asyncio
-    async def test_exec_prepends_default_instructions_when_file_exists(
-        self, monkeypatch, tmp_path
-    ):
+    async def test_exec_prepends_default_instructions_when_file_exists(self, monkeypatch, tmp_path):
         """Executor prepends default instructions from file before turn/start input."""
         instructions = tmp_path / "default_instructions.txt"
         instructions.write_text("ALWAYS BE CONCISE", encoding="utf-8")
-        monkeypatch.setattr(
-            config, "CODEX_DEFAULT_INSTRUCTIONS_FILE", str(instructions)
-        )
+        monkeypatch.setattr(config, "CODEX_DEFAULT_INSTRUCTIONS_FILE", str(instructions))
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", True)
 
         process = _DummyProcess(
@@ -1063,10 +1041,7 @@ class TestCodexSubprocessExecutor:
 
         assert result.success is True
         turn_start = _sent_requests(process)[2]
-        assert (
-            turn_start["params"]["input"][0]["text"]
-            == "ALWAYS BE CONCISE\n\ndo a repo review"
-        )
+        assert turn_start["params"]["input"][0]["text"] == "ALWAYS BE CONCISE\n\ndo a repo review"
 
     @pytest.mark.asyncio
     async def test_cancel_resolves_channel_prefixed_track_id(self):
@@ -1187,9 +1162,7 @@ class TestCodexSubprocessExecutor:
         async def consume_once():
             request = await control_queue.get()
             request.future.set_result(
-                TurnControlResult(
-                    success=True, message="interrupt accepted", turn_id="turn-4"
-                )
+                TurnControlResult(success=True, message="interrupt accepted", turn_id="turn-4")
             )
 
         consumer_task = asyncio.create_task(consume_once())
@@ -1244,9 +1217,7 @@ class TestCodexSubprocessExecutor:
         assert event_order == ["interrupt", "settle", "terminate"]
 
     @pytest.mark.asyncio
-    async def test_dual_ready_rpc_and_control_does_not_timeout_control(
-        self, monkeypatch
-    ):
+    async def test_dual_ready_rpc_and_control_does_not_timeout_control(self, monkeypatch):
         """When rpc/control complete together, control should not be dropped and time out."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
@@ -1260,9 +1231,7 @@ class TestCodexSubprocessExecutor:
                         "result": {"thread": {"id": "thread-1"}},
                     }
                 ),
-                _json_line(
-                    {"jsonrpc": "2.0", "id": 3, "result": {"turn": {"id": "turn-1"}}}
-                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {"turn": {"id": "turn-1"}}}),
                 _json_line(
                     {
                         "jsonrpc": "2.0",

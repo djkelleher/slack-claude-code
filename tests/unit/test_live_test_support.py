@@ -52,9 +52,7 @@ def test_load_dotenv_does_not_override_existing_values(tmp_path, monkeypatch) ->
 @pytest.mark.asyncio
 async def test_post_user_message_or_skip_returns_post_response() -> None:
     """Successful post should pass the Slack response through unchanged."""
-    client = SimpleNamespace(
-        chat_postMessage=AsyncMock(return_value={"ok": True, "ts": "123.456"})
-    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock(return_value={"ok": True, "ts": "123.456"}))
 
     response = await test_slack_app_live._post_user_message_or_skip(
         client,

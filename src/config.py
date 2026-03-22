@@ -11,6 +11,7 @@ from src.config_storage import get_storage
 # Global constant for application plan directory
 PLANS_DIR = str(Path.home() / ".slack-claude-code" / "plans")
 
+
 @dataclass(frozen=True)
 class ModelOption:
     """Static metadata for a selectable model option."""
@@ -159,9 +160,7 @@ CODEX_EFFORT_LABELS: dict[str, str] = {
 CLAUDE_MODELS: set[str] = {
     alias for alias, value in CLAUDE_MODEL_ALIASES.items() if alias and value != "sonnet"
 }
-CLAUDE_MODELS.update(
-    option.value for option in CLAUDE_MODEL_OPTIONS if option.value is not None
-)
+CLAUDE_MODELS.update(option.value for option in CLAUDE_MODEL_OPTIONS if option.value is not None)
 CLAUDE_MODELS.update({"sonnet", "haiku"})
 
 CODEX_MODELS: set[str] = {

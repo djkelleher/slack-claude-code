@@ -59,7 +59,11 @@ def format_tool_input_summary(
         display_attr, formatter = _TRUNCATION_FORMATTERS[rule_type]
         value = _first_present(input_dict, keys, "?")
         max_len = getattr(display, display_attr)
-        formatted = formatter(str(value), max_len) if formatter is truncate_cmd else formatter(value, max_len)
+        formatted = (
+            formatter(str(value), max_len)
+            if formatter is truncate_cmd
+            else formatter(value, max_len)
+        )
         return f"`{formatted}`"
 
     if rule_type == "count":

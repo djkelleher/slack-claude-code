@@ -124,7 +124,9 @@ async def test_command_recovers_stale_worktree_session_to_main_repo():
     deps = _deps_for_session(session)
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(side_effect=[False, True, True]),
-        list_worktrees=AsyncMock(return_value=[Worktree(path="/repo", branch="main", is_main=True)]),
+        list_worktrees=AsyncMock(
+            return_value=[Worktree(path="/repo", branch="main", is_main=True)]
+        ),
     )
     app = _FakeApp()
 
@@ -245,9 +247,7 @@ async def test_handle_add_updates_session_by_default():
     deps.db.update_session_cwd.assert_awaited_once_with(
         "C123", "123.456", "/repo-worktrees/feature-x"
     )
-    deps.db.update_session_claude_id.assert_awaited_once_with(
-        "C123", "123.456", "claude-native-1"
-    )
+    deps.db.update_session_claude_id.assert_awaited_once_with("C123", "123.456", "claude-native-1")
     deps.db.clear_session_claude_id.assert_not_called()
     deps.db.clear_session_codex_id.assert_awaited_once_with("C123", "123.456")
 

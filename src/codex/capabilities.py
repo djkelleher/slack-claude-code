@@ -34,9 +34,7 @@ _COMPAT_TO_APPROVAL: dict[str, str] = {
 }
 
 _UNSUPPORTED_COMPAT_MODE_MESSAGES: dict[str, str] = {
-    "accept": (
-        "`/mode accept` maps to Claude file-edit approvals and has no Codex equivalent."
-    ),
+    "accept": ("`/mode accept` maps to Claude file-edit approvals and has no Codex equivalent."),
     "delegate": ("`/mode delegate` is Claude-specific and has no Codex equivalent."),
 }
 

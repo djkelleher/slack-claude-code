@@ -132,10 +132,14 @@ class TestClaudeSubprocessExecutor:
     @pytest.mark.asyncio
     async def test_claude_effort_suffix_is_passed_via_flag(self):
         """Claude effort-bearing model IDs should become separate `--effort` args."""
-        process = _DummyProcess([_json_line({"type": "result", "result": "done", "duration_ms": 1})])
+        process = _DummyProcess(
+            [_json_line({"type": "result", "result": "done", "duration_ms": 1})]
+        )
 
         executor = SubprocessExecutor()
-        with patch.object(executor, "start_subprocess", new=AsyncMock(return_value=(process, None))) as mock_start:
+        with patch.object(
+            executor, "start_subprocess", new=AsyncMock(return_value=(process, None))
+        ) as mock_start:
             result = await executor.execute(
                 prompt="build it",
                 working_directory="/tmp",

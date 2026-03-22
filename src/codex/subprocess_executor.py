@@ -109,9 +109,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         async with self._lock:
             counters = dict(self._metrics)
             active_turns = sum(
-                1
-                for state in self._active_turns_by_scope.values()
-                if not state.done_event.is_set()
+                1 for state in self._active_turns_by_scope.values() if not state.done_event.is_set()
             )
 
         def safe_rate(success_key: str, total_key: str) -> float:
@@ -122,9 +120,7 @@ class SubprocessExecutor(ProcessExecutorBase):
 
         counters["active_turns"] = active_turns
         counters["steer_success_rate"] = safe_rate("steer_successes", "steer_requests")
-        counters["interrupt_success_rate"] = safe_rate(
-            "interrupt_successes", "interrupt_requests"
-        )
+        counters["interrupt_success_rate"] = safe_rate("interrupt_successes", "interrupt_requests")
         counters["queue_fallback_success_rate"] = safe_rate(
             "queue_fallback_successes", "queue_fallback_attempts"
         )
@@ -144,12 +140,8 @@ class SubprocessExecutor(ProcessExecutorBase):
         resume_session_id: Optional[str] = None,
         execution_id: Optional[str] = None,
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]] = None,
-        on_user_input_request: Optional[
-            Callable[[str, dict], Awaitable[Optional[dict]]]
-        ] = None,
-        on_approval_request: Optional[
-            Callable[[str, dict], Awaitable[Optional[dict]]]
-        ] = None,
+        on_user_input_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]] = None,
+        on_approval_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]] = None,
         permission_mode: Optional[str] = None,
         sandbox_mode: Optional[str] = None,
         approval_mode: Optional[str] = None,
@@ -221,9 +213,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         resume_session_id: Optional[str],
         execution_id: Optional[str],
         on_chunk: Optional[Callable[[StreamMessage], Awaitable[None]]],
-        on_user_input_request: Optional[
-            Callable[[str, dict], Awaitable[Optional[dict]]]
-        ],
+        on_user_input_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]],
         on_approval_request: Optional[Callable[[str, dict], Awaitable[Optional[dict]]]],
         permission_mode: Optional[str],
         sandbox_mode: Optional[str],
@@ -272,9 +262,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         )
 
         parser = StreamParser()
-        accumulator = StreamAccumulator(
-            join_assistant_chunks=lambda existing, new: existing + new
-        )
+        accumulator = StreamAccumulator(join_assistant_chunks=lambda existing, new: existing + new)
         result_session_id = resume_session_id
         started_at = time.monotonic()
         next_request_id = 1
@@ -314,9 +302,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             nonlocal result_session_id
 
             if msg.type == "assistant" and msg.content:
-                preview = (
-                    msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
-                )
+                preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
                 logger.debug(f"{log_prefix}Codex: {preview}")
             elif msg.type == "tool_call":
                 for tool in msg.tool_activities:
@@ -332,12 +318,8 @@ class SubprocessExecutor(ProcessExecutorBase):
             elif msg.type == "error":
                 logger.error(f"{log_prefix}Error: {msg.content}")
             elif msg.type == "result":
-                duration_display = (
-                    msg.duration_ms if msg.duration_ms is not None else "?"
-                )
-                logger.info(
-                    f"{log_prefix}Codex Finished - completed in {duration_display}ms"
-                )
+                duration_display = msg.duration_ms if msg.duration_ms is not None else "?"
+                logger.info(f"{log_prefix}Codex Finished - completed in {duration_display}ms")
 
             if msg.session_id:
                 result_session_id = msg.session_id
@@ -433,9 +415,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if thread_id:
                     result_session_id = str(thread_id)
                     msg = parser.parse_line(
-                        json.dumps(
-                            {"type": "thread.started", "thread_id": str(thread_id)}
-                        )
+                        json.dumps({"type": "thread.started", "thread_id": str(thread_id)})
                     )
                     if msg:
                         return await handle_stream_message(msg)
@@ -541,18 +521,14 @@ class SubprocessExecutor(ProcessExecutorBase):
                         else str(turn_error or "Codex turn failed")
                     )
                     msg = parser.parse_line(
-                        json.dumps(
-                            {"type": "turn.failed", "error": {"message": error_text}}
-                        )
+                        json.dumps({"type": "turn.failed", "error": {"message": error_text}})
                     )
                 else:
                     msg = parser.parse_line(
                         json.dumps(
                             {
                                 "type": "turn.completed",
-                                "duration_ms": int(
-                                    (time.monotonic() - started_at) * 1000
-                                ),
+                                "duration_ms": int((time.monotonic() - started_at) * 1000),
                             }
                         )
                     )
@@ -639,9 +615,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             if method == "item/tool/call":
                 tool_name = str(params.get("tool") or "unknown")
                 call_id = str(params.get("callId") or f"request_{request_id}")
-                response_payload = self._dynamic_tool_call_not_supported_response(
-                    tool_name
-                )
+                response_payload = self._dynamic_tool_call_not_supported_response(tool_name)
                 await send_rpc(
                     {
                         "jsonrpc": "2.0",
@@ -776,9 +750,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if control_request:
                     if not control_request.future.done():
                         if rpc.get("error"):
-                            await self._increment_metric(
-                                f"{control_request.kind}_failures"
-                            )
+                            await self._increment_metric(f"{control_request.kind}_failures")
                             logger.warning(
                                 f"{log_prefix}event=turn_{control_request.kind}_result success=false "
                                 f"scope={session_scope} turn_id={current_turn_id or 'unknown'} "
@@ -797,9 +769,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                             if turn_id:
                                 if active_turn_state:
                                     active_turn_state.turn_id = str(turn_id)
-                                await self._increment_metric(
-                                    f"{control_request.kind}_successes"
-                                )
+                                await self._increment_metric(f"{control_request.kind}_successes")
                                 logger.info(
                                     f"{log_prefix}event=turn_{control_request.kind}_result success=true "
                                     f"scope={session_scope} turn_id={turn_id}"
@@ -812,9 +782,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                                     )
                                 )
                             else:
-                                await self._increment_metric(
-                                    f"{control_request.kind}_successes"
-                                )
+                                await self._increment_metric(f"{control_request.kind}_successes")
                                 logger.info(
                                     f"{log_prefix}event=turn_{control_request.kind}_result success=true "
                                     f"scope={session_scope} turn_id={current_turn_id or 'unknown'}"
@@ -895,9 +863,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             if resume_session_id:
                 thread_method = "thread/resume"
                 thread_params["threadId"] = resume_session_id
-                logger.info(
-                    f"{log_prefix}Resuming session via app-server: {resume_session_id}"
-                )
+                logger.info(f"{log_prefix}Resuming session via app-server: {resume_session_id}")
 
             thread_req_id = await send_request(thread_method, thread_params)
             thread_resp = await await_response(thread_req_id)
@@ -1025,9 +991,7 @@ class SubprocessExecutor(ProcessExecutorBase):
 
             success = not accumulator.error_message
             return ExecutionResult(
-                **accumulator.result_fields(
-                    success=success, session_id=result_session_id
-                )
+                **accumulator.result_fields(success=success, session_id=result_session_id)
             )
 
         except asyncio.CancelledError:
@@ -1194,9 +1158,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         try:
             preamble = preamble_path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
-            logger.debug(
-                f"{log_prefix}No default Codex instructions file at {preamble_path}"
-            )
+            logger.debug(f"{log_prefix}No default Codex instructions file at {preamble_path}")
             return prompt
         except Exception as e:
             logger.warning(
@@ -1244,9 +1206,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 logger.debug(
                     f"event=turn_{kind}_enqueue_skipped scope={session_scope} reason=no_active_turn"
                 )
-                return TurnControlResult(
-                    success=False, error="No active turn", turn_id=None
-                )
+                return TurnControlResult(success=False, error="No active turn", turn_id=None)
             loop = asyncio.get_running_loop()
             future: asyncio.Future[TurnControlResult] = loop.create_future()
             request = _ControlRequest(kind=kind, text=text, future=future)
@@ -1283,9 +1243,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         timeout: float = 5.0,
     ) -> TurnControlResult:
         """Send `turn/steer` for the currently active turn in the scope."""
-        return await self._enqueue_control(
-            session_scope, kind="steer", text=text, timeout=timeout
-        )
+        return await self._enqueue_control(session_scope, kind="steer", text=text, timeout=timeout)
 
     async def interrupt_active_turn(
         self,
@@ -1293,9 +1251,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         timeout: float = 5.0,
     ) -> TurnControlResult:
         """Send `turn/interrupt` for the currently active turn in the scope."""
-        return await self._enqueue_control(
-            session_scope, kind="interrupt", timeout=timeout
-        )
+        return await self._enqueue_control(session_scope, kind="interrupt", timeout=timeout)
 
     async def _rpc_call(
         self,
@@ -1314,9 +1270,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             limit=50 * 1024 * 1024,
         )
         if not process:
-            raise RuntimeError(
-                process_start_error or "Failed to start codex app-server"
-            )
+            raise RuntimeError(process_start_error or "Failed to start codex app-server")
         next_request_id = 1
         response_cache: dict[str, dict] = {}
 
@@ -1326,9 +1280,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             process.stdin.write((json.dumps(payload) + "\n").encode("utf-8"))
             await process.stdin.drain()
 
-        async def send_request(
-            request_method: str, request_params: Optional[dict]
-        ) -> int:
+        async def send_request(request_method: str, request_params: Optional[dict]) -> int:
             nonlocal next_request_id
             request_id = next_request_id
             next_request_id += 1
@@ -1457,9 +1409,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             working_directory=working_directory,
         )
 
-    async def thread_rollback(
-        self, thread_id: str, num_turns: int, working_directory: str
-    ) -> dict:
+    async def thread_rollback(self, thread_id: str, num_turns: int, working_directory: str) -> dict:
         """Rollback a thread by dropping the most recent turns."""
         return await self._rpc_call(
             "thread/rollback",
@@ -1467,9 +1417,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             working_directory=working_directory,
         )
 
-    async def thread_compact_start(
-        self, thread_id: str, working_directory: str
-    ) -> dict:
+    async def thread_compact_start(self, thread_id: str, working_directory: str) -> dict:
         """Start context compaction for a thread."""
         return await self._rpc_call(
             "thread/compact/start",
@@ -1477,9 +1425,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             working_directory=working_directory,
         )
 
-    async def review_start(
-        self, thread_id: str, target: dict, working_directory: str
-    ) -> dict:
+    async def review_start(self, thread_id: str, target: dict, working_directory: str) -> dict:
         """Start a Codex review for the current session thread."""
         return await self._rpc_call(
             "review/start",
@@ -1489,15 +1435,11 @@ class SubprocessExecutor(ProcessExecutorBase):
 
     async def model_list(self, working_directory: str) -> dict:
         """Return available models from app-server."""
-        return await self._rpc_call(
-            "model/list", {}, working_directory=working_directory
-        )
+        return await self._rpc_call("model/list", {}, working_directory=working_directory)
 
     async def account_read(self, working_directory: str) -> dict:
         """Return account metadata."""
-        return await self._rpc_call(
-            "account/read", {}, working_directory=working_directory
-        )
+        return await self._rpc_call("account/read", {}, working_directory=working_directory)
 
     async def account_rate_limits_read(self, working_directory: str) -> dict:
         """Return account rate limit metadata."""
@@ -1507,9 +1449,7 @@ class SubprocessExecutor(ProcessExecutorBase):
 
     async def config_read(self, working_directory: str) -> dict:
         """Return resolved config from app-server."""
-        return await self._rpc_call(
-            "config/read", {}, working_directory=working_directory
-        )
+        return await self._rpc_call("config/read", {}, working_directory=working_directory)
 
     async def config_requirements_read(self, working_directory: str) -> dict:
         """Return runtime config requirements from app-server."""
@@ -1525,9 +1465,7 @@ class SubprocessExecutor(ProcessExecutorBase):
 
     async def mcp_server_status_list(self, working_directory: str) -> dict:
         """Return MCP server status from app-server."""
-        return await self._rpc_call(
-            "mcpServerStatus/list", {}, working_directory=working_directory
-        )
+        return await self._rpc_call("mcpServerStatus/list", {}, working_directory=working_directory)
 
     async def cancel(self, execution_id: str) -> bool:
         """Cancel an active execution."""
