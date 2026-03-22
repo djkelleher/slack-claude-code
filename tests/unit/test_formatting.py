@@ -3,6 +3,7 @@
 from src.utils.formatters.base import (
     _parse_inline_elements,
     flatten_text,
+    markdown_to_mrkdwn,
     text_to_rich_text_blocks,
 )
 from src.utils.slack_helpers import _rich_text_to_plain_text
@@ -74,6 +75,16 @@ class TestFlattenText:
         result = flatten_text(text)
         # Blank lines between items should be removed, but preserved around non-list text
         assert result == "Here is a list:\n\n1. Item one\n2. Item two\n\nNow some more text."
+
+    def test_strips_filesystem_markdown_links(self):
+        """Filesystem markdown links should flatten to plain file paths."""
+        text = (
+            "[tests/quant/options/test_thetadata_training_data.py]"
+            "(/home/dan/dev-repos/quantflows/tests/quant/options/"
+            "test_thetadata_training_data.py#L115)"
+        )
+        result = flatten_text(text)
+        assert result == "tests/quant/options/test_thetadata_training_data.py"
 
 
 class TestParseInlineElements:
@@ -240,6 +251,32 @@ class TestTextToRichTextBlocks:
             element.get("text", "")
             for element in blocks[0]["elements"][0]["elements"]
         )
+
+    def test_filesystem_markdown_links_render_as_plain_paths(self):
+        """Filesystem markdown links should not be emitted verbatim in rich text."""
+        text = (
+            "[tests/quant/options/test_thetadata_training_data.py]"
+            "(/home/dan/dev-repos/quantflows/tests/quant/options/"
+            "test_thetadata_training_data.py#L115)"
+        )
+        blocks = text_to_rich_text_blocks(text)
+        elems = blocks[0]["elements"][0]["elements"]
+        assert "".join(elem["text"] for elem in elems) == (
+            "tests/quant/options/test_thetadata_training_data.py"
+        )
+
+
+class TestMarkdownToMrkdwn:
+    """Tests for markdown_to_mrkdwn filesystem link handling."""
+
+    def test_strips_filesystem_markdown_links(self):
+        text = (
+            "[tests/quant/options/test_thetadata_training_data.py]"
+            "(/home/dan/dev-repos/quantflows/tests/quant/options/"
+            "test_thetadata_training_data.py#L115)"
+        )
+        result = markdown_to_mrkdwn(text)
+        assert result == "tests/quant/options/test_thetadata_training_data.py"
 
 
 class TestRichTextToPlainText:

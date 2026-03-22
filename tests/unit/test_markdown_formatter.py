@@ -25,6 +25,19 @@ def test_markdown_to_slack_mrkdwn_preserves_code_and_dunder_names() -> None:
     assert "```python\nprint('__main__')\n```" in formatted
 
 
+def test_markdown_to_slack_mrkdwn_strips_filesystem_markdown_links() -> None:
+    """Filesystem markdown links should render as plain path text."""
+    text = (
+        "[tests/quant/options/test_thetadata_training_data.py]"
+        "(/home/dan/dev-repos/quantflows/tests/quant/options/"
+        "test_thetadata_training_data.py#L115)"
+    )
+
+    formatted = markdown_to_slack_mrkdwn(text)
+
+    assert formatted == "tests/quant/options/test_thetadata_training_data.py"
+
+
 def test_markdown_to_slack_mrkdwn_returns_empty_input_unchanged() -> None:
     """Empty inputs should pass through unchanged."""
     assert markdown_to_slack_mrkdwn("") == ""

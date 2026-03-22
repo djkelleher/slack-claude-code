@@ -11,6 +11,33 @@ FILE_THRESHOLD = config.SLACK_FILE_THRESHOLD
 
 
 _LIST_ITEM_RE = re.compile(r"^(\s*[-*•]\s|^\s*\d+\.\s)")
+_FILESYSTEM_MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((/[^)\n]+)\)")
+
+
+def _strip_filesystem_markdown_links(text: str) -> str:
+    """Collapse filesystem markdown links to their visible label.
+
+    This removes Codex-style clickable file references such as
+    ``[path/to/file.py](/abs/path/to/file.py#L10)`` while preserving the
+    displayed repository-relative path text.
+    """
+    if not text:
+        return text
+
+    protected_content: list[str] = []
+
+    def save_protected(match: re.Match) -> str:
+        protected_content.append(match.group(0))
+        return f"\x00PROTECTEDLINK{len(protected_content) - 1}\x00"
+
+    text = re.sub(r"```[\s\S]*?```", save_protected, text)
+    text = re.sub(r"`[^`\n]+`", save_protected, text)
+    text = _FILESYSTEM_MARKDOWN_LINK_RE.sub(r"\1", text)
+
+    for i, content in enumerate(protected_content):
+        text = text.replace(f"\x00PROTECTEDLINK{i}\x00", content)
+
+    return text
 
 
 def _remove_blank_lines_between_list_items(lines: list[str]) -> list[str]:
@@ -43,6 +70,7 @@ def normalize_terminal_text(text: str) -> str:
     if not text:
         return text
 
+    text = _strip_filesystem_markdown_links(text)
     lines = text.split("\n")
     lines = _remove_blank_lines_between_list_items(lines)
     normalized = "\n".join(lines)
@@ -73,6 +101,8 @@ def flatten_text(text: str) -> str:
     """
     if not text:
         return text
+
+    text = _strip_filesystem_markdown_links(text)
 
     # Protect code blocks by extracting them first
     code_blocks = []
