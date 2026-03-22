@@ -1103,7 +1103,8 @@ async def main():
 
         # Determine which backend to use based on session model
         backend = get_backend_for_model(session.model)
-        logger.info(f"Using backend: {backend} (model: {session.model})")
+        transport = "Claude CLI" if backend == "claude" else "Codex app-server"
+        logger.info(f"Using backend: {backend} via {transport} (model: {session.model})")
 
         # Route to appropriate execution path
         if backend == "codex":

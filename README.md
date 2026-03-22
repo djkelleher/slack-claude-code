@@ -29,7 +29,7 @@
 ### Prerequisites
 - Python 3.10+
 - [Claude Code CLI](https://github.com/anthropics/claude-code) installed and authenticated
-- `codex` CLI installed if you plan to use Codex models (`codex app-server` is used under the hood)
+- `codex` CLI installed if you plan to use Codex models (the bot uses `codex app-server` for Codex sessions)
 
 ### 1. Install the CLI
 ```bash
@@ -78,7 +78,7 @@ Use these when your session model is a Codex model.
 | `/review status [thread_id\|current]` | Inspect latest review/thread lifecycle status (`read` is accepted as an alias) | `/review status`, `/review status current` |
 | `/mcp` | Show Codex MCP server status | `/mcp` |
 
-Codex transport uses `codex app-server` JSON-RPC for all modes.
+Claude sessions use the Claude CLI directly. Codex sessions use `codex app-server` JSON-RPC.
 See [Codex app-server JSON-RPC integration notes](CODEX_APP_SERVER_JSON_RPC.md) for
 the exact request/notification methods this app handles.
 
@@ -426,7 +426,7 @@ src/
 ├── config.py              # Configuration
 ├── database/              # SQLite persistence (models, migrations, repository)
 ├── claude/                # Claude CLI integration (streaming)
-├── codex/                 # Codex app-server JSON-RPC integration
+├── codex/                 # Codex app-server integration
 ├── handlers/              # Slack command handlers
 ├── agents/                # Configurable subagent system (explore, plan, bash, general)
 ├── approval/              # Permission & plan approval handling
