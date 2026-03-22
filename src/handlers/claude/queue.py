@@ -831,18 +831,11 @@ async def _execute_queue_item(
             working_directory = item.working_directory_override or base_session.working_directory
             session_scope_override = f"{scope}:parallel:{parallel_config.group_id}:{item.id}"
             if effective_session.get_backend() == "codex":
-                codex_thread_id = None
-                if parallel_config.codex_base_thread_id and deps.codex_executor:
-                    fork_response = await deps.codex_executor.thread_fork(
-                        thread_id=parallel_config.codex_base_thread_id,
-                        working_directory=working_directory,
-                    )
-                    codex_thread_id = _extract_codex_thread_id(fork_response)
                 effective_session = replace(
                     base_session,
                     working_directory=working_directory,
                     claude_session_id=None,
-                    codex_session_id=codex_thread_id,
+                    codex_session_id=None,
                 )
             else:
                 effective_prompt = _build_parallel_prompt(

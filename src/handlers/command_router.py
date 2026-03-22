@@ -279,52 +279,13 @@ async def _execute_codex_backend(
     tool_id_namespace = f"turn{codex_turn_index}:"
 
     async def resolve_initial_resume_session_id() -> Optional[str]:
-        """Fork inherited channel thread IDs when entering a new Slack thread scope."""
-        if not persist_session_ids:
-            return session.codex_session_id
-        if thread_ts is None or session.codex_session_id is None:
-            return session.codex_session_id
-
-        channel_session = await deps.db.get_or_create_session(
-            channel_id,
-            thread_ts=None,
-            default_cwd=config.DEFAULT_WORKING_DIR,
-        )
-        if channel_session.codex_session_id != session.codex_session_id:
-            return session.codex_session_id
-
-        try:
-            fork_response = await deps.codex_executor.thread_fork(
-                thread_id=session.codex_session_id,
-                working_directory=session.working_directory,
-            )
-        except Exception as e:
-            if logger:
-                logger.warning(
-                    "Failed to fork inherited Codex thread "
-                    f"{session.codex_session_id} for scope {session_scope}: {e}"
-                )
-            return session.codex_session_id
-
-        forked_thread_id = _extract_codex_thread_id(fork_response)
-        if not forked_thread_id:
-            if logger:
-                logger.warning(
-                    "Codex thread fork returned no thread ID for scope "
-                    f"{session_scope}; continuing with inherited thread "
-                    f"{session.codex_session_id}"
-                )
-            return session.codex_session_id
-
-        if persist_session_ids:
-            await deps.db.update_session_codex_id(channel_id, thread_ts, forked_thread_id)
-            session.codex_session_id = forked_thread_id
-        if logger:
+        """Reuse the existing Codex session ID in CLI mode."""
+        if logger and thread_ts is not None and session.codex_session_id is not None:
             logger.info(
-                f"Forked inherited Codex thread {channel_session.codex_session_id} "
-                f"to {forked_thread_id} for scope {session_scope}"
+                "Codex CLI mode does not support thread forking; "
+                f"reusing session {session.codex_session_id} for scope {session_scope}"
             )
-        return forked_thread_id
+        return session.codex_session_id
 
     async def wrapped_on_chunk(msg: Any) -> None:
         if msg.tool_activities:

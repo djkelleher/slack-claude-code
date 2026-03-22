@@ -14,7 +14,6 @@ from src.config import (
 )
 from src.handlers.codex_command_adapter import (
     build_codex_status_summary,
-    format_codex_review_status,
     get_codex_mcp_summary,
     unsupported_claude_slash_command_message,
 )
@@ -649,59 +648,17 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     blocks=error_message("Codex executor is not configured."),
                 )
                 return
-            if not session.codex_session_id:
+            tokens = ctx.text.split() if ctx.text else []
+            if tokens and tokens[0].lower() in {"status", "read"}:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
-                    text="No active Codex session.",
+                    text="Codex review status unavailable",
                     blocks=error_message(
-                        "No active Codex thread for this session yet. Send a Codex message first."
+                        "Codex CLI mode does not expose review-thread status. "
+                        "Run `/review` again to create a fresh review."
                     ),
                 )
-                return
-
-            tokens = ctx.text.split() if ctx.text else []
-            if tokens and tokens[0].lower() in {"status", "read"}:
-                thread_arg = tokens[1] if len(tokens) > 1 else "current"
-                thread_id = (
-                    session.codex_session_id if thread_arg == "current" else thread_arg.strip()
-                )
-                if not thread_id:
-                    await ctx.client.chat_postMessage(
-                        channel=ctx.channel_id,
-                        thread_ts=ctx.thread_ts,
-                        text="No active Codex session.",
-                        blocks=error_message(
-                            "No active Codex thread for this session yet. Send a Codex message first."
-                        ),
-                    )
-                    return
-                try:
-                    result = await deps.codex_executor.thread_read(
-                        thread_id=thread_id,
-                        working_directory=session.working_directory,
-                        include_turns=True,
-                    )
-                    thread = result.get("thread", {})
-                    summary = format_codex_review_status(thread, thread_id)
-                    await ctx.client.chat_postMessage(
-                        channel=ctx.channel_id,
-                        thread_ts=ctx.thread_ts,
-                        text="Codex review status",
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {"type": "mrkdwn", "text": summary},
-                            }
-                        ],
-                    )
-                except Exception as e:
-                    await ctx.client.chat_postMessage(
-                        channel=ctx.channel_id,
-                        thread_ts=ctx.thread_ts,
-                        text=f"Failed to fetch review status: {e}",
-                        blocks=error_message(str(e)),
-                    )
                 return
 
             target: dict
@@ -712,24 +669,13 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
             try:
                 result = await deps.codex_executor.review_start(
-                    thread_id=session.codex_session_id,
+                    thread_id=session.codex_session_id or "",
                     target=target,
                     working_directory=session.working_directory,
                 )
-                review_thread_id = result.get("reviewThreadId")
                 turn = result.get("turn", {})
                 turn_id = turn.get("id", "unknown")
-                review_summary = (
-                    f":mag: Started Codex review for thread `{session.codex_session_id}`.\n"
-                    f"Turn: `{turn_id}`"
-                )
-                if review_thread_id:
-                    review_summary += f"\nReview thread: `{review_thread_id}`"
-                    review_summary += (
-                        f"\nUse `/review status {review_thread_id}` to inspect progress."
-                    )
-                else:
-                    review_summary += "\nUse `/review status` to inspect latest turn status."
+                review_summary = f":mag: Started Codex CLI review.\nTurn: `{turn_id}`"
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,

@@ -563,8 +563,8 @@ class TestCommandRouter:
         assert replacement_on_chunk.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_execute_for_session_codex_thread_forks_inherited_channel_thread(self):
-        """Thread-scoped Codex sessions should fork inherited channel thread IDs."""
+    async def test_execute_for_session_codex_reuses_inherited_channel_thread(self):
+        """Thread-scoped Codex sessions should reuse the inherited CLI session ID."""
         deps = SimpleNamespace(
             db=SimpleNamespace(
                 update_session_claude_id=AsyncMock(),
@@ -576,9 +576,8 @@ class TestCommandRouter:
             executor=SimpleNamespace(execute=AsyncMock()),
             codex_executor=SimpleNamespace(
                 execute=AsyncMock(
-                    return_value=SimpleNamespace(session_id="codex-forked", success=True, output="")
+                    return_value=SimpleNamespace(session_id="codex-shared", success=True, output="")
                 ),
-                thread_fork=AsyncMock(return_value={"thread": {"id": "codex-forked"}}),
             ),
         )
 
@@ -600,21 +599,17 @@ class TestCommandRouter:
             execution_id="exec-7",
         )
 
-        deps.codex_executor.thread_fork.assert_awaited_once_with(
-            thread_id="codex-shared",
-            working_directory="/tmp",
-        )
-        assert deps.codex_executor.execute.await_args.kwargs["resume_session_id"] == "codex-forked"
+        assert deps.codex_executor.execute.await_args.kwargs["resume_session_id"] == "codex-shared"
         assert deps.db.update_session_codex_id.await_args_list[0].args == (
             "C123",
             "123.4",
-            "codex-forked",
+            "codex-shared",
         )
-        assert session.codex_session_id == "codex-forked"
+        assert session.codex_session_id == "codex-shared"
 
     @pytest.mark.asyncio
-    async def test_execute_for_session_codex_thread_fork_failure_uses_inherited_thread(self):
-        """Fork failures should not block execution for thread-scoped Codex sessions."""
+    async def test_execute_for_session_codex_thread_scope_logs_session_reuse(self):
+        """Thread-scoped Codex sessions should log that CLI mode reuses the session."""
         deps = SimpleNamespace(
             db=SimpleNamespace(
                 update_session_claude_id=AsyncMock(),
@@ -628,7 +623,6 @@ class TestCommandRouter:
                 execute=AsyncMock(
                     return_value=SimpleNamespace(session_id="codex-shared", success=True, output="")
                 ),
-                thread_fork=AsyncMock(side_effect=RuntimeError("fork unavailable")),
             ),
         )
 
@@ -653,6 +647,7 @@ class TestCommandRouter:
         )
 
         assert deps.codex_executor.execute.await_args.kwargs["resume_session_id"] == "codex-shared"
+        logger.info.assert_called()
 
     @pytest.mark.asyncio
     async def test_codex_question_limit_does_not_fail_on_exact_limit(self):

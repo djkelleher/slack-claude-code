@@ -1,4 +1,4 @@
-"""Codex app-server execution layer."""
+"""Codex CLI execution layer."""
 
 from .capabilities import codex_mode_alias_for_approval as codex_mode_alias_for_approval
 from .capabilities import (
