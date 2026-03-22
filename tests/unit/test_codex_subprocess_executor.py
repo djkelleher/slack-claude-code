@@ -20,13 +20,45 @@ from src.utils.process_utils import terminate_process_safely
 class _DummyStdout:
     """Simple async stdout stream for subprocess mocks."""
 
-    def __init__(self, lines: list[str]) -> None:
-        self._lines = [line + "\n" for line in lines]
+    def __init__(self, lines: list[str], keep_open: bool = False) -> None:
+        self._keep_open = keep_open
+        self._closed = False
+        self._available: asyncio.Queue[bytes] = asyncio.Queue()
+        self._pending_batches: list[list[bytes]] = []
+        self.add_lines(lines)
 
     async def readline(self) -> bytes:
-        if not self._lines:
-            return b""
-        return self._lines.pop(0).encode("utf-8")
+        while True:
+            if not self._available.empty():
+                return await self._available.get()
+            if not self._pending_batches and not self._keep_open:
+                return b""
+            if self._closed:
+                return b""
+            await asyncio.sleep(0)
+
+    def add_lines(self, lines: list[str]) -> None:
+        """Append more stdout lines for persistent-process tests."""
+        if not lines:
+            return
+        if any(isinstance(line, list) for line in lines):
+            batches = [batch if isinstance(batch, list) else [batch] for batch in lines]
+        elif len(lines) >= 3:
+            batches = [[lines[0]], [lines[1]], lines[2:]]
+        else:
+            batches = [lines]
+        for batch in batches:
+            self._pending_batches.append([(line + "\n").encode("utf-8") for line in batch])
+
+    def release_next_batch(self) -> None:
+        """Expose the next scripted stdout batch after a client write."""
+        if not self._pending_batches:
+            return
+        for line in self._pending_batches.pop(0):
+            self._available.put_nowait(line)
+
+    def close(self) -> None:
+        self._closed = True
 
 
 class _DummyStderr:
@@ -39,11 +71,13 @@ class _DummyStderr:
 class _DummyStdin:
     """Capture JSON-RPC writes sent to app-server stdin."""
 
-    def __init__(self) -> None:
+    def __init__(self, stdout: _DummyStdout) -> None:
         self.writes: list[str] = []
+        self._stdout = stdout
 
     def write(self, data: bytes) -> None:
         self.writes.append(data.decode("utf-8"))
+        self._stdout.release_next_batch()
 
     async def drain(self) -> None:
         return None
@@ -52,9 +86,9 @@ class _DummyStdin:
 class _DummyProcess:
     """Simple subprocess mock compatible with asyncio interfaces."""
 
-    def __init__(self, lines: list[str]) -> None:
-        self.stdin = _DummyStdin()
-        self.stdout = _DummyStdout(lines)
+    def __init__(self, lines: list[str], keep_open: bool = False) -> None:
+        self.stdout = _DummyStdout(lines, keep_open=keep_open)
+        self.stdin = _DummyStdin(self.stdout)
         self.stderr = _DummyStderr()
         self.returncode = None
         self.signals: list[signal.Signals] = []
@@ -67,12 +101,15 @@ class _DummyProcess:
     def send_signal(self, sig: signal.Signals) -> None:
         self.signals.append(sig)
         self.returncode = 0
+        self.stdout.close()
 
     def terminate(self) -> None:
         self.returncode = 0
+        self.stdout.close()
 
     def kill(self) -> None:
         self.returncode = -9
+        self.stdout.close()
 
 
 class _HangingProcess:
@@ -267,7 +304,8 @@ class TestCodexSubprocessExecutor:
                         "params": {"turn": {"id": "turn-123"}},
                     }
                 ),
-            ]
+            ],
+            keep_open=True,
         )
 
         executor = SubprocessExecutor()
@@ -295,6 +333,7 @@ class TestCodexSubprocessExecutor:
 
             task.cancel()
             await asyncio.wait_for(task, timeout=1.0)
+            await executor.shutdown()
 
     @pytest.mark.asyncio
     async def test_execute_non_plan_mode_sets_default_collaboration_mode(self, monkeypatch):
@@ -726,22 +765,26 @@ class TestCodexSubprocessExecutor:
                         "result": {"thread": {"id": "thread-1"}},
                     }
                 ),
-                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 10,
-                        "method": "item/tool/requestUserInput",
-                        "params": {"itemId": "item_1", "questions": [question]},
-                    }
-                ),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "turn/completed",
-                        "params": {"turn": {"status": "completed"}},
-                    }
-                ),
+                [
+                    _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 10,
+                            "method": "item/tool/requestUserInput",
+                            "params": {"itemId": "item_1", "questions": [question]},
+                        }
+                    ),
+                ],
+                [
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "turn/completed",
+                            "params": {"turn": {"status": "completed"}},
+                        }
+                    )
+                ],
             ]
         )
 
@@ -786,22 +829,26 @@ class TestCodexSubprocessExecutor:
                         "result": {"thread": {"id": "thread-1"}},
                     }
                 ),
-                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 20,
-                        "method": "item/commandExecution/requestApproval",
-                        "params": approval_params,
-                    }
-                ),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "turn/completed",
-                        "params": {"turn": {"status": "completed"}},
-                    }
-                ),
+                [
+                    _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 20,
+                            "method": "item/commandExecution/requestApproval",
+                            "params": approval_params,
+                        }
+                    ),
+                ],
+                [
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "turn/completed",
+                            "params": {"turn": {"status": "completed"}},
+                        }
+                    )
+                ],
             ]
         )
 
@@ -848,22 +895,26 @@ class TestCodexSubprocessExecutor:
                         "result": {"thread": {"id": "thread-1"}},
                     }
                 ),
-                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 30,
-                        "method": "item/tool/call",
-                        "params": params,
-                    }
-                ),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "turn/completed",
-                        "params": {"turn": {"status": "completed"}},
-                    }
-                ),
+                [
+                    _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 30,
+                            "method": "item/tool/call",
+                            "params": params,
+                        }
+                    ),
+                ],
+                [
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "turn/completed",
+                            "params": {"turn": {"status": "completed"}},
+                        }
+                    )
+                ],
             ]
         )
 
@@ -898,22 +949,26 @@ class TestCodexSubprocessExecutor:
                         "result": {"thread": {"id": "thread-1"}},
                     }
                 ),
-                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 31,
-                        "method": "skill/requestApproval",
-                        "params": {"skillName": "legacy"},
-                    }
-                ),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "turn/completed",
-                        "params": {"turn": {"status": "completed"}},
-                    }
-                ),
+                [
+                    _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 31,
+                            "method": "skill/requestApproval",
+                            "params": {"skillName": "legacy"},
+                        }
+                    ),
+                ],
+                [
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "turn/completed",
+                            "params": {"turn": {"status": "completed"}},
+                        }
+                    )
+                ],
             ]
         )
 
@@ -936,52 +991,84 @@ class TestCodexSubprocessExecutor:
         """Without callback, never-mode auto-accepts while on-request declines."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
-        def build_process() -> _DummyProcess:
-            return _DummyProcess(
-                [
-                    _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
-                    _json_line(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": 2,
-                            "result": {"thread": {"id": "thread-1"}},
-                        }
-                    ),
-                    _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
-                    _json_line(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": 21,
-                            "method": "item/fileChange/requestApproval",
-                            "params": {
-                                "itemId": "item_3",
-                                "threadId": "thread-1",
-                                "turnId": "turn-1",
-                            },
-                        }
-                    ),
-                    _json_line(
-                        {
-                            "jsonrpc": "2.0",
-                            "method": "turn/completed",
-                            "params": {"turn": {"status": "completed"}},
-                        }
-                    ),
-                ]
-            )
-
-        process_never = build_process()
-        process_on_request = build_process()
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 21,
+                        "method": "item/fileChange/requestApproval",
+                        "params": {
+                            "itemId": "item_3",
+                            "threadId": "thread-1",
+                            "turnId": "turn-1",
+                        },
+                    }
+                ),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ],
+            keep_open=True,
+        )
 
         executor = SubprocessExecutor()
         with patch(
             "asyncio.create_subprocess_exec",
-            new=AsyncMock(side_effect=[process_never, process_on_request]),
+            new=AsyncMock(return_value=process),
         ):
             result_never = await executor.execute(
                 prompt="p1",
                 working_directory="/tmp/workspace",
                 approval_mode="never",
+            )
+            process.stdout.add_lines(
+                [
+                    [
+                        _json_line(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": 4,
+                                "result": {"thread": {"id": "thread-2"}},
+                            }
+                        )
+                    ],
+                    [
+                        _json_line({"jsonrpc": "2.0", "id": 5, "result": {}}),
+                        _json_line(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": 22,
+                                "method": "item/fileChange/requestApproval",
+                                "params": {
+                                    "itemId": "item_4",
+                                    "threadId": "thread-2",
+                                    "turnId": "turn-2",
+                                },
+                            }
+                        ),
+                        _json_line(
+                            {
+                                "jsonrpc": "2.0",
+                                "method": "turn/completed",
+                                "params": {"turn": {"status": "completed"}},
+                            }
+                        ),
+                    ],
+                ]
             )
             result_on_request = await executor.execute(
                 prompt="p2",
@@ -992,53 +1079,56 @@ class TestCodexSubprocessExecutor:
         assert result_never.success is True
         assert result_on_request.success is True
 
-        response_never = {msg["id"]: msg for msg in _sent_responses(process_never)}[21]
-        response_on_request = {msg["id"]: msg for msg in _sent_responses(process_on_request)}[21]
+        responses = {msg["id"]: msg for msg in _sent_responses(process)}
+        response_never = responses[21]
+        response_on_request = responses[22]
         assert response_never["result"] == {"decision": "accept"}
         assert response_on_request["result"] == {"decision": "decline"}
+        await executor.shutdown()
 
     @pytest.mark.asyncio
     async def test_resume_missing_thread_retries_with_new_thread(self, monkeypatch):
         """Missing resume thread should retry with thread/start."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
-        process_resume_fail = _DummyProcess(
+        process = _DummyProcess(
             [
-                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "error": {"message": "thread not found"},
-                    }
-                ),
-            ]
-        )
-        process_fresh_start = _DummyProcess(
-            [
-                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "result": {"thread": {"id": "thread-2"}},
-                    }
-                ),
-                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
-                _json_line(
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "turn/completed",
-                        "params": {"turn": {"status": "completed"}},
-                    }
-                ),
+                [_json_line({"jsonrpc": "2.0", "id": 1, "result": {}})],
+                [
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 2,
+                            "error": {"message": "thread not found"},
+                        }
+                    )
+                ],
+                [
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 3,
+                            "result": {"thread": {"id": "thread-2"}},
+                        }
+                    )
+                ],
+                [
+                    _json_line({"jsonrpc": "2.0", "id": 4, "result": {}}),
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "turn/completed",
+                            "params": {"turn": {"status": "completed"}},
+                        }
+                    ),
+                ],
             ]
         )
 
         executor = SubprocessExecutor()
         with patch(
             "asyncio.create_subprocess_exec",
-            new=AsyncMock(side_effect=[process_resume_fail, process_fresh_start]),
+            new=AsyncMock(return_value=process),
         ) as mock_exec:
             result = await executor.execute(
                 prompt="retry me",
@@ -1046,14 +1136,12 @@ class TestCodexSubprocessExecutor:
                 resume_session_id="old-thread",
             )
 
-        assert mock_exec.await_count == 2
+        assert mock_exec.await_count == 1
         assert result.success is True
         assert result.session_id == "thread-2"
 
-        first_methods = [req["method"] for req in _sent_requests(process_resume_fail)]
-        second_methods = [req["method"] for req in _sent_requests(process_fresh_start)]
-        assert first_methods == ["initialize", "thread/resume"]
-        assert second_methods == ["initialize", "thread/start", "turn/start"]
+        methods = [req["method"] for req in _sent_requests(process)]
+        assert methods == ["initialize", "thread/resume", "thread/start", "turn/start"]
 
     @pytest.mark.asyncio
     async def test_exec_prepends_default_instructions_when_file_exists(self, monkeypatch, tmp_path):
@@ -1228,48 +1316,116 @@ class TestCodexSubprocessExecutor:
         assert result.turn_id == "turn-4"
 
     @pytest.mark.asyncio
-    async def test_cancel_interrupts_before_terminate(self):
-        """cancel() should request turn interrupt before terminating subprocess."""
+    async def test_cancel_interrupts_without_terminating_when_turn_settles(self):
+        """cancel() should preserve the pooled process when the turn settles cleanly."""
         process = _DummyProcess([])
         executor = SubprocessExecutor()
         executor._registry.active_processes["exec-1"] = process
         executor._registry.process_scopes["exec-1"] = "scope-cancel"
 
-        event_order: list[str] = []
-
-        async def interrupt_side_effect(*args, **kwargs):
-            event_order.append("interrupt")
-            return TurnControlResult(success=True, turn_id="turn-cancel")
-
-        async def settle_side_effect(*args, **kwargs):
-            event_order.append("settle")
-            return True
-
-        async def terminate_side_effect(*args, **kwargs):
-            event_order.append("terminate")
-            return None
-
         with patch.object(
             executor,
             "interrupt_active_turn",
-            new=AsyncMock(side_effect=interrupt_side_effect),
+            new=AsyncMock(return_value=TurnControlResult(success=True, turn_id="turn-cancel")),
         ) as mock_interrupt:
             with patch.object(
                 executor,
                 "_wait_for_turn_settle",
-                new=AsyncMock(side_effect=settle_side_effect),
+                new=AsyncMock(return_value=True),
             ) as mock_settle:
                 with patch(
                     "src.codex.subprocess_executor.terminate_process_safely",
-                    new=AsyncMock(side_effect=terminate_side_effect),
+                    new=AsyncMock(),
                 ) as mock_terminate:
                     cancelled = await executor.cancel("exec-1")
 
         assert cancelled is True
         mock_interrupt.assert_awaited_once_with("scope-cancel", timeout=1.0)
         mock_settle.assert_awaited_once_with("scope-cancel", timeout=1.5)
-        mock_terminate.assert_awaited_once()
-        assert event_order == ["interrupt", "settle", "terminate"]
+        mock_terminate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execute_reuses_session_connection_for_same_scope(self, monkeypatch):
+        """Repeated turns in the same scope should reuse one app-server process."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ],
+            keep_open=True,
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ) as mock_exec:
+            first = await executor.execute(
+                prompt="first",
+                working_directory="/tmp/workspace",
+                channel_id="C123",
+                thread_ts="123.456",
+            )
+            process.stdout.add_lines(
+                [
+                    [
+                        _json_line(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": 4,
+                                "result": {"thread": {"id": "thread-1"}},
+                            }
+                        )
+                    ],
+                    [
+                        _json_line({"jsonrpc": "2.0", "id": 5, "result": {}}),
+                        _json_line(
+                            {
+                                "jsonrpc": "2.0",
+                                "method": "turn/completed",
+                                "params": {"turn": {"status": "completed"}},
+                            }
+                        ),
+                    ],
+                ]
+            )
+            second = await executor.execute(
+                prompt="second",
+                working_directory="/tmp/workspace",
+                channel_id="C123",
+                thread_ts="123.456",
+                resume_session_id=first.session_id,
+            )
+
+        assert first.success is True
+        assert second.success is True
+        assert mock_exec.await_count == 1
+
+        methods = [req["method"] for req in _sent_requests(process)]
+        assert methods == [
+            "initialize",
+            "thread/start",
+            "turn/start",
+            "thread/resume",
+            "turn/start",
+        ]
+        await executor.shutdown()
 
     @pytest.mark.asyncio
     async def test_dual_ready_rpc_and_control_does_not_timeout_control(self, monkeypatch):

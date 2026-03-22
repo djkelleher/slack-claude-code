@@ -61,6 +61,259 @@ class _ActiveTurnState:
     started_at: float = field(default_factory=time.monotonic)
 
 
+class _AppServerConnection:
+    """Persistent Codex app-server JSON-RPC connection."""
+
+    def __init__(
+        self,
+        process: asyncio.subprocess.Process,
+        working_directory: str,
+        pool_key: str,
+    ) -> None:
+        self.process = process
+        self.working_directory = working_directory
+        self.pool_key = pool_key
+        self._next_request_id = 1
+        self._response_futures: dict[str, asyncio.Future[dict]] = {}
+        self._notification_queue: Optional[asyncio.Queue[Any]] = None
+        self._server_request_handler: Optional[Callable[[dict], Awaitable[None]]] = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._state_lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
+        self._turn_lock = asyncio.Lock()
+        self._closed = False
+        self._terminal_error: Optional[BaseException] = None
+        self._reader_task = asyncio.create_task(self._reader_loop())
+
+    @classmethod
+    async def create(
+        cls,
+        executor: "SubprocessExecutor",
+        *,
+        working_directory: str,
+        pool_key: str,
+        log_prefix: str,
+        limit: Optional[int] = None,
+    ) -> "_AppServerConnection":
+        """Start and initialize a persistent Codex app-server connection."""
+        cmd = ["codex", "app-server", "--listen", "stdio://"]
+        process, process_start_error = await executor.start_subprocess(
+            cmd=cmd,
+            working_directory=working_directory,
+            process_label="codex app-server",
+            log_prefix=log_prefix,
+            include_stdin=True,
+            limit=limit,
+        )
+        if not process:
+            raise RuntimeError(process_start_error or "Failed to start codex app-server")
+
+        connection = cls(process=process, working_directory=working_directory, pool_key=pool_key)
+        try:
+            init_response = await connection.send_request(
+                "initialize",
+                {
+                    "clientInfo": {"name": "slack-claude-code", "version": "1.0"},
+                    "capabilities": {"experimentalApi": True},
+                },
+            )
+            if init_response.get("error"):
+                raise RuntimeError(f"initialize failed: {init_response['error']}")
+            return connection
+        except Exception:
+            await connection.close()
+            raise
+
+    async def acquire_turn(self) -> None:
+        """Reserve the connection for a single active turn."""
+        await self._turn_lock.acquire()
+
+    def release_turn(self) -> None:
+        """Release the active turn reservation."""
+        if self._turn_lock.locked():
+            self._turn_lock.release()
+
+    async def set_turn_routing(
+        self,
+        *,
+        notification_queue: asyncio.Queue[Any],
+        server_request_handler: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        """Attach per-turn notification/request routing callbacks."""
+        async with self._state_lock:
+            self._notification_queue = notification_queue
+            self._server_request_handler = server_request_handler
+
+    async def clear_turn_routing(self) -> None:
+        """Remove per-turn notification/request routing callbacks."""
+        async with self._state_lock:
+            self._notification_queue = None
+            self._server_request_handler = None
+
+    def is_usable(self, working_directory: Optional[str] = None) -> bool:
+        """Return True when the connection is healthy for reuse."""
+        if working_directory is not None and self.working_directory != working_directory:
+            return False
+        if self._closed or self.process.returncode is not None:
+            return False
+        if self._terminal_error is not None:
+            return False
+        return not self._reader_task.done()
+
+    async def send_request(self, method: str, params: Optional[dict]) -> dict:
+        """Send a JSON-RPC request and await its response."""
+        self._raise_if_unusable()
+        loop = asyncio.get_running_loop()
+        async with self._state_lock:
+            request_id = self._next_request_id
+            self._next_request_id += 1
+            future: asyncio.Future[dict] = loop.create_future()
+            self._response_futures[str(request_id)] = future
+
+        try:
+            await self._send_rpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": method,
+                    "params": params,
+                }
+            )
+        except Exception:
+            async with self._state_lock:
+                self._response_futures.pop(str(request_id), None)
+            raise
+
+        return await future
+
+    async def send_result(self, request_id: int, payload: dict) -> None:
+        """Send a JSON-RPC success response."""
+        await self._send_rpc({"jsonrpc": "2.0", "id": request_id, "result": payload})
+
+    async def send_error(self, request_id: int, code: int, message: str) -> None:
+        """Send a JSON-RPC error response."""
+        await self._send_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": code, "message": message},
+            }
+        )
+
+    async def close(self) -> None:
+        """Close the persistent app-server process and reader task."""
+        if self._closed:
+            return
+        self._closed = True
+        await self.clear_turn_routing()
+        await terminate_process_safely(self.process, timeout=2.0)
+        try:
+            await asyncio.wait_for(self._reader_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            self._reader_task.cancel()
+        except Exception:
+            pass
+        for task in list(self._background_tasks):
+            task.cancel()
+        if self.process.stderr:
+            stderr = await self.process.stderr.read()
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+            if stderr_str:
+                logger.warning(f"codex app-server stderr [{self.pool_key}]: {stderr_str}")
+
+    async def _send_rpc(self, payload: dict) -> None:
+        """Write a JSON-RPC message to the app-server stdin."""
+        self._raise_if_unusable()
+        if self.process.stdin is None:
+            raise RuntimeError("app-server stdin is unavailable")
+        async with self._write_lock:
+            self.process.stdin.write((json.dumps(payload) + "\n").encode("utf-8"))
+            await self.process.stdin.drain()
+
+    async def _reader_loop(self) -> None:
+        """Read and route JSON-RPC messages from the app-server."""
+        try:
+            if self.process.stdout is None:
+                raise RuntimeError("app-server stdout is unavailable")
+            while True:
+                line = await self.process.stdout.readline()
+                if not line:
+                    if self._closed:
+                        return
+                    raise RuntimeError("codex app-server closed the stream unexpectedly")
+                line_str = line.decode("utf-8", errors="replace").strip()
+                if not line_str:
+                    continue
+                try:
+                    rpc = json.loads(line_str)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse app-server JSON line [{self.pool_key}]: {e}")
+                    continue
+                await self._route_rpc_message(rpc)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            await self._fail_connection(e)
+
+    async def _route_rpc_message(self, rpc: dict) -> None:
+        """Route a parsed RPC message to the waiting consumer."""
+        response_id = rpc.get("id")
+        if response_id is not None and ("result" in rpc or "error" in rpc):
+            future: Optional[asyncio.Future[dict]]
+            async with self._state_lock:
+                future = self._response_futures.pop(str(response_id), None)
+            if future and not future.done():
+                future.set_result(rpc)
+            return
+
+        method = rpc.get("method")
+        if not method or method.startswith("codex/event/"):
+            return
+
+        if response_id is not None and "params" in rpc:
+            async with self._state_lock:
+                handler = self._server_request_handler
+            if handler is None:
+                await self.send_error(
+                    int(response_id),
+                    -32601,
+                    f"Unsupported app-server request method: {method}",
+                )
+                return
+            task = asyncio.create_task(handler(rpc))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            return
+
+        async with self._state_lock:
+            notification_queue = self._notification_queue
+        if notification_queue is not None:
+            await notification_queue.put(rpc)
+
+    async def _fail_connection(self, error: BaseException) -> None:
+        """Fail all waiters and mark the connection unusable."""
+        if self._terminal_error is None:
+            self._terminal_error = error
+        async with self._state_lock:
+            response_futures = list(self._response_futures.values())
+            self._response_futures.clear()
+            notification_queue = self._notification_queue
+        for future in response_futures:
+            if not future.done():
+                future.set_exception(error)
+        if notification_queue is not None and notification_queue.empty():
+            await notification_queue.put(error)
+
+    def _raise_if_unusable(self) -> None:
+        """Raise the terminal connection error when the process is not reusable."""
+        if self._terminal_error is not None:
+            raise RuntimeError(str(self._terminal_error))
+        if self._closed:
+            raise RuntimeError("codex app-server connection is closed")
+        if self.process.returncode is not None:
+            raise RuntimeError("codex app-server process is not running")
+
+
 class SubprocessExecutor(ProcessExecutorBase):
     """Execute Codex via `codex app-server` JSON-RPC over stdio."""
 
@@ -69,6 +322,8 @@ class SubprocessExecutor(ProcessExecutorBase):
         db: Optional["DatabaseRepository"] = None,
     ) -> None:
         super().__init__()
+        self._session_connections: dict[str, _AppServerConnection] = {}
+        self._rpc_connections: dict[str, _AppServerConnection] = {}
         self._active_turns_by_scope: dict[str, _ActiveTurnState] = {}
         self._active_turns_by_track: dict[str, _ActiveTurnState] = {}
         self._metrics: dict[str, int] = {
@@ -88,6 +343,67 @@ class SubprocessExecutor(ProcessExecutorBase):
         }
         self._lock: asyncio.Lock = asyncio.Lock()
         self.db = db
+
+    async def _get_or_create_session_connection(
+        self,
+        *,
+        session_scope: str,
+        working_directory: str,
+        log_prefix: str,
+    ) -> _AppServerConnection:
+        """Return a persistent app-server connection for a session scope."""
+        async with self._lock:
+            existing = self._session_connections.get(session_scope)
+        if existing and existing.is_usable(working_directory):
+            return existing
+        if existing:
+            await existing.close()
+            async with self._lock:
+                if self._session_connections.get(session_scope) is existing:
+                    self._session_connections.pop(session_scope, None)
+
+        connection = await _AppServerConnection.create(
+            self,
+            working_directory=working_directory,
+            pool_key=f"session:{session_scope}",
+            log_prefix=log_prefix,
+        )
+        async with self._lock:
+            self._session_connections[session_scope] = connection
+        return connection
+
+    async def _get_or_create_rpc_connection(self, working_directory: str) -> _AppServerConnection:
+        """Return a persistent app-server connection for metadata RPC calls."""
+        async with self._lock:
+            existing = self._rpc_connections.get(working_directory)
+        if existing and existing.is_usable(working_directory):
+            return existing
+        if existing:
+            await existing.close()
+            async with self._lock:
+                if self._rpc_connections.get(working_directory) is existing:
+                    self._rpc_connections.pop(working_directory, None)
+
+        connection = await _AppServerConnection.create(
+            self,
+            working_directory=working_directory,
+            pool_key=f"rpc:{working_directory}",
+            log_prefix="",
+            limit=50 * 1024 * 1024,
+        )
+        async with self._lock:
+            self._rpc_connections[working_directory] = connection
+        return connection
+
+    async def _discard_connection(self, connection: _AppServerConnection) -> None:
+        """Remove a pooled connection when it becomes unusable."""
+        async with self._lock:
+            for scope, existing in list(self._session_connections.items()):
+                if existing is connection:
+                    self._session_connections.pop(scope, None)
+            for workdir, existing in list(self._rpc_connections.items()):
+                if existing is connection:
+                    self._rpc_connections.pop(workdir, None)
 
     async def _increment_metric(self, metric_name: str, count: int = 1) -> None:
         """Increment a named runtime metric counter."""
@@ -231,21 +547,6 @@ class SubprocessExecutor(ProcessExecutorBase):
         approval = self._resolve_approval_mode(approval_mode, log_prefix)
         sandbox = self._resolve_sandbox_mode(sandbox_mode, log_prefix)
 
-        cmd = ["codex", "app-server", "--listen", "stdio://"]
-        process, process_start_error = await self.start_subprocess(
-            cmd=cmd,
-            working_directory=working_directory,
-            process_label="codex app-server",
-            log_prefix=log_prefix,
-            include_stdin=True,
-        )
-        if not process:
-            return ExecutionResult(
-                success=False,
-                output="",
-                error=process_start_error or "Failed to start codex app-server",
-            )
-
         tracking = self.create_tracking_context(
             execution_id=execution_id,
             session_id=session_id,
@@ -254,9 +555,15 @@ class SubprocessExecutor(ProcessExecutorBase):
         )
         track_id = tracking.track_id
         session_scope = tracking.session_scope
+        connection = await self._get_or_create_session_connection(
+            session_scope=session_scope,
+            working_directory=working_directory,
+            log_prefix=log_prefix,
+        )
+        await connection.acquire_turn()
         await self.register_process(
             context=tracking,
-            process=process,
+            process=connection.process,
             channel_id=channel_id,
             execution_id=execution_id,
         )
@@ -265,10 +572,8 @@ class SubprocessExecutor(ProcessExecutorBase):
         accumulator = StreamAccumulator(join_assistant_chunks=lambda existing, new: existing + new)
         result_session_id = resume_session_id
         started_at = time.monotonic()
-        next_request_id = 1
-        response_cache: dict[str, dict] = {}
-        pending_control_responses: dict[str, _ControlRequest] = {}
         control_queue: asyncio.Queue[_ControlRequest] = asyncio.Queue()
+        notification_queue: asyncio.Queue[Any] = asyncio.Queue()
         active_turn_state: Optional[_ActiveTurnState] = None
         current_turn_id: Optional[str] = None
         assistant_delta_item_ids: set[str] = set()
@@ -307,26 +612,6 @@ class SubprocessExecutor(ProcessExecutorBase):
                 f"{log_prefix}event=turn_start_registered scope={session_scope} "
                 f"thread_id={result_session_id} turn_id={normalized_turn_id} track_id={track_id}"
             )
-
-        async def send_rpc(payload: dict) -> None:
-            if process.stdin is None:
-                raise RuntimeError("app-server stdin is unavailable")
-            process.stdin.write((json.dumps(payload) + "\n").encode("utf-8"))
-            await process.stdin.drain()
-
-        async def send_request(method: str, params: dict) -> int:
-            nonlocal next_request_id
-            request_id = next_request_id
-            next_request_id += 1
-            await send_rpc(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "method": method,
-                    "params": params,
-                }
-            )
-            return request_id
 
         async def handle_stream_message(msg: StreamMessage) -> bool:
             nonlocal result_session_id
@@ -618,13 +903,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if not isinstance(response_payload, dict):
                     response_payload = self._empty_user_input_response(questions)
 
-                await send_rpc(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": response_payload,
-                    }
-                )
+                await connection.send_result(int(request_id), response_payload)
 
                 tool_result_msg = parser.parse_line(
                     json.dumps(
@@ -644,13 +923,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 tool_name = str(params.get("tool") or "unknown")
                 call_id = str(params.get("callId") or f"request_{request_id}")
                 response_payload = self._dynamic_tool_call_not_supported_response(tool_name)
-                await send_rpc(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": response_payload,
-                    }
-                )
+                await connection.send_result(int(request_id), response_payload)
 
                 tool_result_msg = parser.parse_line(
                     json.dumps(
@@ -677,24 +950,13 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if not self._is_valid_approval_response(method, response_payload):
                     response_payload = default_approval_payload(method, approval)
 
-                await send_rpc(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": response_payload,
-                    }
-                )
+                await connection.send_result(int(request_id), response_payload)
                 return
 
-            await send_rpc(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {
-                        "code": -32601,
-                        "message": f"Unsupported app-server request method: {method}",
-                    },
-                }
+            await connection.send_error(
+                int(request_id),
+                -32601,
+                f"Unsupported app-server request method: {method}",
             )
 
         async def handle_control_request(request: _ControlRequest) -> None:
@@ -721,7 +983,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                     )
                     return
                 steer_input = request.text or ""
-                request_id = await send_request(
+                response = await connection.send_request(
                     "turn/steer",
                     {
                         "threadId": result_session_id,
@@ -729,7 +991,53 @@ class SubprocessExecutor(ProcessExecutorBase):
                         "input": [{"type": "text", "text": steer_input}],
                     },
                 )
-                pending_control_responses[str(request_id)] = request
+                if request.future.done():
+                    return
+                if response.get("error"):
+                    await self._increment_metric("steer_failures")
+                    logger.warning(
+                        f"{log_prefix}event=turn_steer_result success=false "
+                        f"scope={session_scope} turn_id={current_turn_id or 'unknown'} "
+                        f"error={response.get('error')}"
+                    )
+                    request.future.set_result(
+                        TurnControlResult(
+                            success=False,
+                            error=str(response.get("error")),
+                            turn_id=current_turn_id,
+                        )
+                    )
+                    return
+                result_payload = response.get("result", {})
+                turn_id = result_payload.get("turnId") or current_turn_id
+                if turn_id:
+                    if active_turn_state:
+                        active_turn_state.turn_id = str(turn_id)
+                    await self._increment_metric("steer_successes")
+                    logger.info(
+                        f"{log_prefix}event=turn_steer_result success=true "
+                        f"scope={session_scope} turn_id={turn_id}"
+                    )
+                    request.future.set_result(
+                        TurnControlResult(
+                            success=True,
+                            message="steer accepted",
+                            turn_id=str(turn_id),
+                        )
+                    )
+                    return
+                await self._increment_metric("steer_successes")
+                logger.info(
+                    f"{log_prefix}event=turn_steer_result success=true "
+                    f"scope={session_scope} turn_id={current_turn_id or 'unknown'}"
+                )
+                request.future.set_result(
+                    TurnControlResult(
+                        success=True,
+                        message="steer accepted",
+                        turn_id=current_turn_id,
+                    )
+                )
                 return
 
             if request.kind == "interrupt":
@@ -753,14 +1061,60 @@ class SubprocessExecutor(ProcessExecutorBase):
                         "reason=no_active_turn"
                     )
                     return
-                request_id = await send_request(
+                response = await connection.send_request(
                     "turn/interrupt",
                     {
                         "threadId": result_session_id,
                         "turnId": current_turn_id,
                     },
                 )
-                pending_control_responses[str(request_id)] = request
+                if request.future.done():
+                    return
+                if response.get("error"):
+                    await self._increment_metric("interrupt_failures")
+                    logger.warning(
+                        f"{log_prefix}event=turn_interrupt_result success=false "
+                        f"scope={session_scope} turn_id={current_turn_id or 'unknown'} "
+                        f"error={response.get('error')}"
+                    )
+                    request.future.set_result(
+                        TurnControlResult(
+                            success=False,
+                            error=str(response.get("error")),
+                            turn_id=current_turn_id,
+                        )
+                    )
+                    return
+                result_payload = response.get("result", {})
+                turn_id = result_payload.get("turnId") or current_turn_id
+                if turn_id:
+                    if active_turn_state:
+                        active_turn_state.turn_id = str(turn_id)
+                    await self._increment_metric("interrupt_successes")
+                    logger.info(
+                        f"{log_prefix}event=turn_interrupt_result success=true "
+                        f"scope={session_scope} turn_id={turn_id}"
+                    )
+                    request.future.set_result(
+                        TurnControlResult(
+                            success=True,
+                            message="interrupt accepted",
+                            turn_id=str(turn_id),
+                        )
+                    )
+                    return
+                await self._increment_metric("interrupt_successes")
+                logger.info(
+                    f"{log_prefix}event=turn_interrupt_result success=true "
+                    f"scope={session_scope} turn_id={current_turn_id or 'unknown'}"
+                )
+                request.future.set_result(
+                    TurnControlResult(
+                        success=True,
+                        message="interrupt accepted",
+                        turn_id=current_turn_id,
+                    )
+                )
                 return
 
             if not request.future.done():
@@ -770,114 +1124,11 @@ class SubprocessExecutor(ProcessExecutorBase):
                     )
                 )
 
-        async def process_rpc_message(rpc: dict) -> bool:
-            response_id = rpc.get("id")
-            if response_id is not None and ("result" in rpc or "error" in rpc):
-                cache_key = str(response_id)
-                control_request = pending_control_responses.pop(cache_key, None)
-                if control_request:
-                    if not control_request.future.done():
-                        if rpc.get("error"):
-                            await self._increment_metric(f"{control_request.kind}_failures")
-                            logger.warning(
-                                f"{log_prefix}event=turn_{control_request.kind}_result success=false "
-                                f"scope={session_scope} turn_id={current_turn_id or 'unknown'} "
-                                f"error={rpc.get('error')}"
-                            )
-                            control_request.future.set_result(
-                                TurnControlResult(
-                                    success=False,
-                                    error=str(rpc.get("error")),
-                                    turn_id=current_turn_id,
-                                )
-                            )
-                        else:
-                            result_payload = rpc.get("result", {})
-                            turn_id = result_payload.get("turnId") or current_turn_id
-                            if turn_id:
-                                if active_turn_state:
-                                    active_turn_state.turn_id = str(turn_id)
-                                await self._increment_metric(f"{control_request.kind}_successes")
-                                logger.info(
-                                    f"{log_prefix}event=turn_{control_request.kind}_result success=true "
-                                    f"scope={session_scope} turn_id={turn_id}"
-                                )
-                                control_request.future.set_result(
-                                    TurnControlResult(
-                                        success=True,
-                                        message=f"{control_request.kind} accepted",
-                                        turn_id=str(turn_id),
-                                    )
-                                )
-                            else:
-                                await self._increment_metric(f"{control_request.kind}_successes")
-                                logger.info(
-                                    f"{log_prefix}event=turn_{control_request.kind}_result success=true "
-                                    f"scope={session_scope} turn_id={current_turn_id or 'unknown'}"
-                                )
-                                control_request.future.set_result(
-                                    TurnControlResult(
-                                        success=True,
-                                        message=f"{control_request.kind} accepted",
-                                        turn_id=current_turn_id,
-                                    )
-                                )
-                    return False
-                response_cache[cache_key] = rpc
-                return False
-
-            method = rpc.get("method")
-            if not method:
-                return False
-
-            if response_id is not None and "params" in rpc:
-                await handle_server_request(rpc)
-                return False
-
-            if method.startswith("codex/event/"):
-                return False
-
-            return await handle_notification(method, rpc.get("params", {}))
-
-        async def read_rpc_line() -> dict:
-            if process.stdout is None:
-                raise RuntimeError("app-server stdout is unavailable")
-            line = await process.stdout.readline()
-            if not line:
-                raise RuntimeError("codex app-server closed the stream unexpectedly")
-            line_str = line.decode("utf-8", errors="replace").strip()
-            if not line_str:
-                return {}
-            try:
-                return json.loads(line_str)
-            except json.JSONDecodeError as e:
-                logger.warning(f"{log_prefix}Failed to parse app-server JSON line: {e}")
-                return {}
-
-        async def await_response(request_id: int) -> dict:
-            while True:
-                cache_key = str(request_id)
-                if cache_key in response_cache:
-                    return response_cache.pop(cache_key)
-                rpc = await read_rpc_line()
-                if not rpc:
-                    continue
-                await process_rpc_message(rpc)
-
         try:
-            init_req_id = await send_request(
-                "initialize",
-                {
-                    "clientInfo": {
-                        "name": "slack-claude-code",
-                        "version": "1.0",
-                    },
-                    "capabilities": {"experimentalApi": True},
-                },
+            await connection.set_turn_routing(
+                notification_queue=notification_queue,
+                server_request_handler=handle_server_request,
             )
-            init_resp = await await_response(init_req_id)
-            if init_resp.get("error"):
-                raise RuntimeError(f"initialize failed: {init_resp['error']}")
 
             thread_params: dict[str, Any] = {
                 "cwd": working_directory,
@@ -893,8 +1144,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 thread_params["threadId"] = resume_session_id
                 logger.info(f"{log_prefix}Resuming session via app-server: {resume_session_id}")
 
-            thread_req_id = await send_request(thread_method, thread_params)
-            thread_resp = await await_response(thread_req_id)
+            thread_resp = await connection.send_request(thread_method, thread_params)
 
             if (
                 thread_resp.get("error")
@@ -905,25 +1155,8 @@ class SubprocessExecutor(ProcessExecutorBase):
                     f"{log_prefix}Session {resume_session_id} not found, "
                     "retrying with a new thread"
                 )
-                await terminate_process_safely(process, timeout=2.0)
-                return await self.execute(
-                    prompt=prompt,
-                    working_directory=working_directory,
-                    session_id=session_id,
-                    resume_session_id=None,
-                    execution_id=execution_id,
-                    on_chunk=on_chunk,
-                    on_user_input_request=on_user_input_request,
-                    on_approval_request=on_approval_request,
-                    permission_mode=permission_mode,
-                    sandbox_mode=sandbox,
-                    approval_mode=approval,
-                    db_session_id=db_session_id,
-                    model=model,
-                    channel_id=channel_id,
-                    thread_ts=thread_ts,
-                    _recursion_depth=_recursion_depth + 1,
-                )
+                thread_params.pop("threadId", None)
+                thread_resp = await connection.send_request("thread/start", thread_params)
 
             if thread_resp.get("error"):
                 raise RuntimeError(f"{thread_method} failed: {thread_resp['error']}")
@@ -964,8 +1197,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                         "settings": collaboration_settings,
                     }
 
-            turn_req_id = await send_request("turn/start", turn_params)
-            turn_resp = await await_response(turn_req_id)
+            turn_resp = await connection.send_request("turn/start", turn_params)
             if turn_resp.get("error"):
                 raise RuntimeError(f"turn/start failed: {turn_resp['error']}")
 
@@ -979,7 +1211,7 @@ class SubprocessExecutor(ProcessExecutorBase):
 
             is_final = False
             while not is_final:
-                rpc_task = asyncio.create_task(read_rpc_line())
+                rpc_task = asyncio.create_task(notification_queue.get())
                 control_task = asyncio.create_task(control_queue.get())
                 done, pending = await asyncio.wait(
                     {rpc_task, control_task},
@@ -989,19 +1221,17 @@ class SubprocessExecutor(ProcessExecutorBase):
                     pending_task.cancel()
                 if rpc_task in done:
                     rpc = rpc_task.result()
-                    if rpc:
-                        is_final = await process_rpc_message(rpc)
+                    if isinstance(rpc, BaseException):
+                        raise RuntimeError(str(rpc))
+                    is_final = await handle_notification(
+                        str(rpc.get("method") or ""),
+                        rpc.get("params", {}),
+                    )
+                    if not is_final and notification_queue.empty() and not connection.is_usable():
+                        connection._raise_if_unusable()
                 if control_task in done:
                     control_request = control_task.result()
                     await handle_control_request(control_request)
-
-            await terminate_process_safely(process, timeout=2.0)
-
-            stderr = await process.stderr.read() if process.stderr else b""
-            if stderr:
-                stderr_str = stderr.decode("utf-8", errors="replace").strip()
-                if stderr_str:
-                    logger.warning(f"{log_prefix}codex app-server stderr: {stderr_str}")
 
             success = not accumulator.error_message
             return ExecutionResult(
@@ -1009,7 +1239,8 @@ class SubprocessExecutor(ProcessExecutorBase):
             )
 
         except asyncio.CancelledError:
-            for request in pending_control_responses.values():
+            while not control_queue.empty():
+                request = await control_queue.get()
                 if not request.future.done():
                     request.future.set_result(
                         TurnControlResult(
@@ -1018,7 +1249,6 @@ class SubprocessExecutor(ProcessExecutorBase):
                             turn_id=current_turn_id,
                         )
                     )
-            await terminate_process_safely(process)
             return ExecutionResult(
                 **accumulator.result_fields(
                     success=False,
@@ -1029,7 +1259,8 @@ class SubprocessExecutor(ProcessExecutorBase):
             )
         except Exception as e:
             logger.error(f"{log_prefix}Error during app-server execution: {e}")
-            for request in pending_control_responses.values():
+            while not control_queue.empty():
+                request = await control_queue.get()
                 if not request.future.done():
                     request.future.set_result(
                         TurnControlResult(
@@ -1038,7 +1269,6 @@ class SubprocessExecutor(ProcessExecutorBase):
                             turn_id=current_turn_id,
                         )
                     )
-            await terminate_process_safely(process)
             return ExecutionResult(
                 **accumulator.result_fields(
                     success=False,
@@ -1047,7 +1277,8 @@ class SubprocessExecutor(ProcessExecutorBase):
                 )
             )
         finally:
-            for request in pending_control_responses.values():
+            while not control_queue.empty():
+                request = await control_queue.get()
                 if not request.future.done():
                     request.future.set_result(
                         TurnControlResult(
@@ -1056,6 +1287,8 @@ class SubprocessExecutor(ProcessExecutorBase):
                             turn_id=current_turn_id,
                         )
                     )
+            await connection.clear_turn_routing()
+            connection.release_turn()
             await self.unregister_process(
                 context=tracking,
                 execution_id=execution_id,
@@ -1074,6 +1307,9 @@ class SubprocessExecutor(ProcessExecutorBase):
                     f"thread_id={active_turn_state.thread_id} "
                     f"turn_id={active_turn_state.turn_id} track_id={track_id}"
                 )
+            if not connection.is_usable():
+                await self._discard_connection(connection)
+                await connection.close()
 
     @staticmethod
     def _resolve_sandbox_mode(mode: Optional[str], log_prefix: str) -> str:
@@ -1274,104 +1510,17 @@ class SubprocessExecutor(ProcessExecutorBase):
         working_directory: str = "~",
     ) -> dict:
         """Execute a single app-server RPC method call and return its result payload."""
-        cmd = ["codex", "app-server", "--listen", "stdio://"]
-        process, process_start_error = await self.start_subprocess(
-            cmd=cmd,
-            working_directory=working_directory,
-            process_label="codex app-server",
-            log_prefix="",
-            include_stdin=True,
-            limit=50 * 1024 * 1024,
-        )
-        if not process:
-            raise RuntimeError(process_start_error or "Failed to start codex app-server")
-        next_request_id = 1
-        response_cache: dict[str, dict] = {}
-
-        async def send_rpc(payload: dict) -> None:
-            if process.stdin is None:
-                raise RuntimeError("app-server stdin is unavailable")
-            process.stdin.write((json.dumps(payload) + "\n").encode("utf-8"))
-            await process.stdin.drain()
-
-        async def send_request(request_method: str, request_params: Optional[dict]) -> int:
-            nonlocal next_request_id
-            request_id = next_request_id
-            next_request_id += 1
-            await send_rpc(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "method": request_method,
-                    "params": request_params,
-                }
-            )
-            return request_id
-
-        async def read_rpc_line() -> dict:
-            if process.stdout is None:
-                raise RuntimeError("app-server stdout is unavailable")
-            line = await process.stdout.readline()
-            if not line:
-                raise RuntimeError("codex app-server closed the stream unexpectedly")
-            line_str = line.decode("utf-8", errors="replace").strip()
-            if not line_str:
-                return {}
-            try:
-                return json.loads(line_str)
-            except json.JSONDecodeError:
-                return {}
-
-        async def process_rpc_message(rpc: dict) -> None:
-            response_id = rpc.get("id")
-            if response_id is not None and ("result" in rpc or "error" in rpc):
-                response_cache[str(response_id)] = rpc
-                return
-            method_name = rpc.get("method")
-            if not method_name:
-                return
-            if response_id is not None and "params" in rpc:
-                # This executor path is metadata/introspection only; reject server requests.
-                await send_rpc(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": response_id,
-                        "error": {
-                            "code": -32601,
-                            "message": f"Unsupported app-server request method: {method_name}",
-                        },
-                    }
-                )
-
-        async def await_response(request_id: int) -> dict:
-            cache_key = str(request_id)
-            while True:
-                if cache_key in response_cache:
-                    return response_cache.pop(cache_key)
-                rpc = await read_rpc_line()
-                if not rpc:
-                    continue
-                await process_rpc_message(rpc)
-
+        connection = await self._get_or_create_rpc_connection(working_directory)
         try:
-            init_id = await send_request(
-                "initialize",
-                {
-                    "clientInfo": {"name": "slack-claude-code", "version": "1.0"},
-                    "capabilities": {"experimentalApi": True},
-                },
-            )
-            init_response = await await_response(init_id)
-            if init_response.get("error"):
-                raise RuntimeError(f"initialize failed: {init_response['error']}")
-
-            request_id = await send_request(method, params)
-            response = await await_response(request_id)
+            response = await connection.send_request(method, params)
             if response.get("error"):
                 raise RuntimeError(str(response["error"]))
             return response.get("result", {})
-        finally:
-            await terminate_process_safely(process, timeout=2.0)
+        except Exception:
+            if not connection.is_usable():
+                await self._discard_connection(connection)
+                await connection.close()
+            raise
 
     async def thread_list(
         self,
@@ -1488,9 +1637,10 @@ class SubprocessExecutor(ProcessExecutorBase):
             return False
 
         scope = tracked.session_scope
+        settled = False
         if scope:
             await self.interrupt_active_turn(scope, timeout=1.0)
-            await self._wait_for_turn_settle(scope, timeout=1.5)
+            settled = await self._wait_for_turn_settle(scope, timeout=1.5)
 
         async with self._lock:
             active_turn = self._active_turns_by_track.pop(tracked.track_id, None)
@@ -1500,14 +1650,15 @@ class SubprocessExecutor(ProcessExecutorBase):
                     self._active_turns_by_scope.pop(active_turn.scope, None)
                 active_turn.done_event.set()
 
-        await terminate_process_safely(tracked.process)
+        if not settled:
+            await terminate_process_safely(tracked.process)
         return True
 
     async def cancel_by_scope(self, session_scope: str) -> int:
         """Cancel active executions for a channel/thread session scope."""
         initial_count = await self._registry.count_for_scope(session_scope)
         await self.interrupt_active_turn(session_scope, timeout=1.0)
-        await self._wait_for_turn_settle(session_scope, timeout=1.5)
+        settled = await self._wait_for_turn_settle(session_scope, timeout=1.5)
 
         tracked = await self._registry.pop_for_scope(session_scope)
         async with self._lock:
@@ -1519,7 +1670,8 @@ class SubprocessExecutor(ProcessExecutorBase):
                     if scope_state and scope_state.track_id == entry.track_id:
                         self._active_turns_by_scope.pop(active_turn.scope, None)
 
-        await terminate_processes(entry.process for entry in tracked)
+        if not settled:
+            await terminate_processes(entry.process for entry in tracked)
         return max(len(tracked), initial_count)
 
     async def cancel_by_channel(self, channel_id: str) -> int:
@@ -1533,9 +1685,11 @@ class SubprocessExecutor(ProcessExecutorBase):
         """
         initial_count = await self._registry.count_for_channel(channel_id)
         channel_scopes = await self._registry.scopes_for_channel(channel_id)
+        unsettled_scopes: set[str] = set()
         for scope in channel_scopes:
             await self.interrupt_active_turn(scope, timeout=1.0)
-            await self._wait_for_turn_settle(scope, timeout=1.5)
+            if not await self._wait_for_turn_settle(scope, timeout=1.5):
+                unsettled_scopes.add(scope)
 
         tracked = await self._registry.pop_for_channel(channel_id)
         async with self._lock:
@@ -1547,16 +1701,20 @@ class SubprocessExecutor(ProcessExecutorBase):
                     if scope_state and scope_state.track_id == entry.track_id:
                         self._active_turns_by_scope.pop(active_turn.scope, None)
 
-        await terminate_processes(entry.process for entry in tracked)
+        await terminate_processes(
+            entry.process for entry in tracked if entry.session_scope in unsettled_scopes
+        )
         return max(len(tracked), initial_count)
 
     async def cancel_all(self) -> int:
         """Cancel all active executions."""
         initial_count = await self._registry.count_all()
         active_scopes = list(self._active_turns_by_scope.keys())
+        unsettled_scopes: set[str] = set()
         for scope in active_scopes:
             await self.interrupt_active_turn(scope, timeout=1.0)
-            await self._wait_for_turn_settle(scope, timeout=1.5)
+            if not await self._wait_for_turn_settle(scope, timeout=1.5):
+                unsettled_scopes.add(scope)
 
         tracked = await self._registry.pop_all()
         async with self._lock:
@@ -1564,9 +1722,22 @@ class SubprocessExecutor(ProcessExecutorBase):
                 active_turn.done_event.set()
             self._active_turns_by_scope.clear()
             self._active_turns_by_track.clear()
-        await terminate_processes(entry.process for entry in tracked)
+        await terminate_processes(
+            entry.process for entry in tracked if entry.session_scope in unsettled_scopes
+        )
         return max(len(tracked), initial_count)
 
     async def shutdown(self) -> None:
         """Shutdown and cancel all active executions."""
         await self.cancel_all()
+        async with self._lock:
+            pooled_connections = [
+                *self._session_connections.values(),
+                *self._rpc_connections.values(),
+            ]
+            self._session_connections.clear()
+            self._rpc_connections.clear()
+        await asyncio.gather(
+            *(connection.close() for connection in pooled_connections),
+            return_exceptions=True,
+        )
