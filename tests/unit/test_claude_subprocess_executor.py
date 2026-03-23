@@ -28,12 +28,33 @@ class _DummyStderr:
         return b""
 
 
+class _DummyStdin:
+    """Simple async stdin stream for subprocess mocks."""
+
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
+
+
 class _DummyProcess:
     """Simple subprocess mock compatible with asyncio interfaces."""
 
     def __init__(self, lines: list[str]) -> None:
         self.stdout = _DummyStdout(lines)
         self.stderr = _DummyStderr()
+        self.stdin = _DummyStdin()
         self.returncode = None
         self.signals: list[signal.Signals] = []
         self.terminated = False
@@ -149,7 +170,11 @@ class TestClaudeSubprocessExecutor:
 
         assert result.success is True
         cmd = mock_start.await_args.kwargs["cmd"]
+        assert mock_start.await_args.kwargs["include_stdin"] is True
         assert "--model" in cmd
         assert "claude-opus-4-6" in cmd
         assert "--effort" in cmd
         assert "high" in cmd
+        assert "build it" not in cmd
+        assert bytes(process.stdin.buffer) == b"build it"
+        assert process.stdin.closed is True

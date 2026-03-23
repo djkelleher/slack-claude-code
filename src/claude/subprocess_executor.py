@@ -75,6 +75,8 @@ class SubprocessExecutor(ProcessExecutorBase):
     """Execute Claude Code via subprocess with stream-json output.
 
     Uses `claude -p --output-format stream-json` for reliable non-interactive execution.
+    Prompts are sent via stdin because current Claude CLI `--print` mode rejects
+    positional prompt arguments.
     Supports session resume via --resume flag.
     """
 
@@ -148,6 +150,27 @@ class SubprocessExecutor(ProcessExecutorBase):
         if not session:
             return []
         return [str(path).strip() for path in session.added_dirs if str(path).strip()]
+
+    @staticmethod
+    async def _write_prompt_to_stdin(
+        process: asyncio.subprocess.Process, prompt: str, log_prefix: str
+    ) -> Optional[str]:
+        """Write the prompt to stdin and close the stream."""
+        if process.stdin is None:
+            return "Claude stdin is unavailable"
+
+        try:
+            process.stdin.write(prompt.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
+            wait_closed = getattr(process.stdin, "wait_closed", None)
+            if callable(wait_closed):
+                await wait_closed()
+            return None
+        except Exception as e:
+            logger.error(f"{log_prefix}Failed writing prompt to Claude stdin: {e}")
+            await terminate_process_safely(process)
+            return f"Failed to write prompt to Claude stdin: {e}"
 
     async def execute(
         self,
@@ -262,19 +285,20 @@ class SubprocessExecutor(ProcessExecutorBase):
         elif resume_session_id:
             logger.warning(f"{log_prefix}Invalid session ID format (not UUID): {resume_session_id}")
 
-        # Add the prompt
-        cmd.append(prompt)
-
-        # Log full command with all flags, but truncate prompt for readability
-        cmd_without_prompt = " ".join(cmd[:-1])
+        # Log full command with all flags and note prompt transport separately.
+        cmd_without_prompt = " ".join(cmd)
         prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
-        logger.info(f"{log_prefix}Executing: {cmd_without_prompt} '{prompt_preview}'")
+        logger.info(
+            f"{log_prefix}Executing: {cmd_without_prompt} "
+            f"[prompt via stdin: '{prompt_preview}']"
+        )
 
         process, process_start_error = await self.start_subprocess(
             cmd=cmd,
             working_directory=working_directory,
             process_label="Claude",
             log_prefix=log_prefix,
+            include_stdin=True,
         )
         if not process:
             return ExecutionResult(
@@ -282,6 +306,10 @@ class SubprocessExecutor(ProcessExecutorBase):
                 output="",
                 error=process_start_error or "Failed to start Claude",
             )
+
+        stdin_error = await self._write_prompt_to_stdin(process, prompt, log_prefix)
+        if stdin_error:
+            return ExecutionResult(success=False, output="", error=stdin_error)
 
         # Track process for cancellation (track_id already defined above)
         await self.register_process(
