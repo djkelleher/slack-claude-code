@@ -200,17 +200,16 @@ async def test_resolve_queue_runtime_prompt_rejects_unavailable_absolute_output_
         )
 
 
-def test_queue_processing_log_line_preserves_prompt_tail() -> None:
-    """Long processing previews should retain the tail of path-heavy prompts."""
+def test_queue_processing_log_line_keeps_full_prompt() -> None:
+    """Processing log lines should include the full normalized prompt text."""
     prompt = (
         "how can we improve the logic, algorithmic edge, mathematical edge of this module " * 8
     ) + "/home/dan/dev-repos/slack-claude-code/src/handlers/claude/queue.py"
 
     line = _queue_processing_log_line(7, prompt)
+    normalized_prompt = " ".join(prompt.split())
 
-    assert line.startswith("Processing queue item 7: how can we improve")
-    assert line.endswith("/src/handlers/claude/queue.py")
-    assert "..." in line
+    assert line == f"Processing queue item 7: {normalized_prompt}"
 
 
 def test_parse_resume_time_from_text_preserves_utc_timezone() -> None:
@@ -953,6 +952,81 @@ async def test_execute_queue_item_pauses_and_requeues_on_codex_usage_limit():
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
     deps.db.add_queue_scheduled_events.assert_awaited_once()
     mock_dispatcher.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_queue_item_pauses_queue_on_prompt_policy_block():
+    """Prompt-policy failures should fail the item and pause later queue work."""
+    item = _queue_item(91, "ship fix")
+    session = Session(id=1, channel_id="C123", model="gpt-5.4")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, True]),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+        ),
+        codex_executor=None,
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.001"}),
+        chat_update=AsyncMock(),
+    )
+
+    class _FakeStreamingState:
+        def __init__(self, **kwargs):
+            self.message_ts = kwargs["message_ts"]
+            self.accumulated_output = ""
+
+        def start_heartbeat(self):
+            return None
+
+        async def finalize(self, is_error: bool = False):
+            return None
+
+        async def stop_heartbeat(self):
+            return None
+
+    route_result = SimpleNamespace(
+        backend="codex",
+        result=SimpleNamespace(
+            success=False,
+            output="",
+            error=(
+                "Invalid prompt: your prompt was flagged as potentially violating our "
+                "usage policy. codexErrorInfo=other"
+            ),
+            session_id=None,
+        ),
+    )
+
+    with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
+        with patch(
+            "src.handlers.claude.queue.create_streaming_callback",
+            side_effect=lambda _state: AsyncMock(),
+        ):
+            with patch(
+                "src.handlers.claude.queue.execute_for_session",
+                new=AsyncMock(return_value=route_result),
+            ):
+                result = await _execute_queue_item(
+                    item,
+                    channel_id="C123",
+                    thread_ts=None,
+                    scope="C123:channel",
+                    deps=deps,
+                    client=client,
+                    log=MagicMock(),
+                    base_session=session,
+                    sequence_label="1",
+                    override_resume_ids={},
+                )
+
+    assert result == "failed"
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
+    assert statuses == ["running", "failed"]
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
+    assert client.chat_postMessage.await_count == 2
+    pause_notice = client.chat_postMessage.await_args_list[1].kwargs
+    assert "blocked by prompt policy" in pause_notice["text"]
 
 
 @pytest.mark.asyncio

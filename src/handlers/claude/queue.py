@@ -70,6 +70,10 @@ _CLAUDE_USAGE_LIMIT_SIGNAL_RE = re.compile(
     r"(usage limit|quota exceeded|try again|retry|available again|resets?)",
     re.IGNORECASE,
 )
+_PROMPT_POLICY_BLOCK_RE = re.compile(
+    r"(invalid prompt|flagged as potentially violating our usage policy|usage policy)",
+    re.IGNORECASE,
+)
 _RESUME_TIME_PATTERNS = (
     re.compile(
         r"\b(?:try again|retry|resumes?|reset(?:s)?|available again)\s+(?:at|after)\s+"
@@ -168,24 +172,19 @@ async def _cleanup_queue_start_lock(task_id: str) -> None:
             _QUEUE_START_LOCKS.pop(task_id, None)
 
 
-def _prompt_preview(prompt: str, limit: int = 320) -> str:
-    """Return a compact, single-line prompt preview for status text."""
-    flattened = " ".join(prompt.split())
-    if len(flattened) <= limit:
-        return flattened
-    head = max(1, int(limit * 0.65))
-    tail = max(1, limit - head - 3)
-    return f"{flattened[:head]}...{flattened[-tail:]}"
+def _status_prompt_text(prompt: str) -> str:
+    """Return a single-line prompt for queue processing status text."""
+    return " ".join(prompt.split())
 
 
 def _queue_processing_log_line(sequence_number: int, prompt: str) -> str:
     """Build queue processing log text for Slack + logger output."""
-    return f"Processing queue item {sequence_number}: {_prompt_preview(prompt)}"
+    return f"Processing queue item {sequence_number}: {_status_prompt_text(prompt)}"
 
 
 def _parallel_processing_log_line(item_id: int, group_id: str, prompt: str) -> str:
     """Build queue processing log text for parallel queue items."""
-    return f"Processing parallel queue item #{item_id} ({group_id}): {_prompt_preview(prompt)}"
+    return f"Processing parallel queue item #{item_id} ({group_id}): {_status_prompt_text(prompt)}"
 
 
 def _build_queue_completion_text(status_counts: dict[str, int]) -> str:
@@ -426,6 +425,43 @@ async def _pause_queue_for_usage_limit(
         thread_ts=thread_ts,
         text=text,
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
+    )
+
+
+def _is_prompt_policy_block(result_output: Optional[str], result_error: Optional[str]) -> bool:
+    """Return True when backend output indicates prompt policy rejection."""
+    result_text = _result_text_for_limit_detection(result_output, result_error)
+    if not result_text:
+        return False
+    return _PROMPT_POLICY_BLOCK_RE.search(result_text) is not None
+
+
+async def _pause_queue_for_prompt_policy_block(
+    *,
+    item,
+    channel_id: str,
+    thread_ts: Optional[str],
+    deps: HandlerDependencies,
+    client,
+    result_error: Optional[str],
+) -> None:
+    """Pause queue processing when a prompt is rejected by backend policy checks."""
+    await deps.db.update_queue_control_state(channel_id, thread_ts, "paused")
+
+    scope_label = _queue_scope_label(thread_ts)
+    detail = result_error or "Prompt rejected by backend policy checks."
+    text = (
+        f"{scope_label}: paused queue because queue item #{item.id} was blocked by prompt policy. "
+        "Review or rewrite that item, then resume with `/qc resume`."
+    )
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=text,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": detail}]},
+        ],
     )
 
 
@@ -934,6 +970,15 @@ async def _execute_queue_item(
                 output=result.output,
                 error_message=result.error,
             )
+            if _is_prompt_policy_block(result.output, result.error):
+                await _pause_queue_for_prompt_policy_block(
+                    item=item,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    deps=deps,
+                    client=client,
+                    result_error=result.error,
+                )
             final_status = "failed"
         final_output = result.output or result.error or "No output"
         if streaming_state and not streaming_state.accumulated_output.strip() and final_output:
