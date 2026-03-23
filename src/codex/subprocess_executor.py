@@ -1190,7 +1190,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                         "settings": collaboration_settings,
                     }
             elif mode:
-                # Explicitly set default mode so resumed plan threads exit plan mode.
+                # Explicitly set a non-plan mode so resumed plan threads exit plan mode.
                 if collaboration_settings:
                     turn_params["collaborationMode"] = {
                         "mode": "default",
@@ -1346,6 +1346,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             "session not found",
             "no conversation found",
             "unknown thread",
+            "no rollout found",
         )
         return any(marker in error_text for marker in markers)
 

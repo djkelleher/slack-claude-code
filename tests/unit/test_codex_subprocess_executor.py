@@ -336,8 +336,8 @@ class TestCodexSubprocessExecutor:
             await executor.shutdown()
 
     @pytest.mark.asyncio
-    async def test_execute_non_plan_mode_sets_default_collaboration_mode(self, monkeypatch):
-        """Non-plan modes should explicitly set default collaboration mode."""
+    async def test_execute_bypass_mode_sets_default_collaboration_mode(self, monkeypatch):
+        """Bypass mode should map to default collaboration mode for app-server."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
 
         process = _DummyProcess(
@@ -374,6 +374,58 @@ class TestCodexSubprocessExecutor:
                 working_directory="/tmp/workspace",
                 model="gpt-5.3-codex-high",
                 permission_mode="bypassPermissions",
+            )
+
+        assert result.success is True
+        turn_start = _sent_requests(process)[2]
+        assert turn_start["params"]["collaborationMode"] == {
+            "mode": "default",
+            "settings": {
+                "model": "gpt-5.3-codex",
+                "reasoning_effort": "high",
+                "developer_instructions": None,
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_execute_default_mode_sets_default_collaboration_mode(self, monkeypatch):
+        """Default mode should explicitly set default collaboration mode."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {
+                            "thread": {"id": "thread-1"},
+                            "model": "gpt-5.3-codex",
+                        },
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            result = await executor.execute(
+                prompt="implement this plan",
+                working_directory="/tmp/workspace",
+                model="gpt-5.3-codex-high",
+                permission_mode="default",
             )
 
         assert result.success is True
@@ -1134,6 +1186,63 @@ class TestCodexSubprocessExecutor:
                 prompt="retry me",
                 working_directory="/tmp/workspace",
                 resume_session_id="old-thread",
+            )
+
+        assert mock_exec.await_count == 1
+        assert result.success is True
+        assert result.session_id == "thread-2"
+
+        methods = [req["method"] for req in _sent_requests(process)]
+        assert methods == ["initialize", "thread/resume", "thread/start", "turn/start"]
+
+    @pytest.mark.asyncio
+    async def test_resume_missing_rollout_retries_with_new_thread(self, monkeypatch):
+        """Missing rollout on a pooled server should retry with thread/start."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process = _DummyProcess(
+            [
+                [_json_line({"jsonrpc": "2.0", "id": 1, "result": {}})],
+                [
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 2,
+                            "error": {"message": "no rollout found for thread id thread-1"},
+                        }
+                    )
+                ],
+                [
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 3,
+                            "result": {"thread": {"id": "thread-2"}},
+                        }
+                    )
+                ],
+                [
+                    _json_line({"jsonrpc": "2.0", "id": 4, "result": {}}),
+                    _json_line(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "turn/completed",
+                            "params": {"turn": {"status": "completed"}},
+                        }
+                    ),
+                ],
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ) as mock_exec:
+            result = await executor.execute(
+                prompt="retry me",
+                working_directory="/tmp/workspace",
+                resume_session_id="thread-1",
             )
 
         assert mock_exec.await_count == 1
