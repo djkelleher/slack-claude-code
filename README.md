@@ -212,10 +212,10 @@ Queue submission directives supported before the first content block:
 | Marker | Meaning |
 |--------|---------|
 | `***` | Prompt separator (split into multiple queue items) |
-| `((branch <name>))` ... `((endbranch))` | Run enclosed prompts in worktree for branch `<name>` (`((endbranch))` optional at EOF) |
-| `((loop<n>))` ... `((endloop))` | Repeat enclosed prompts `n` times (`n >= 1`, `((endloop))` optional at EOF) |
-| `((parallel))` ... `((endparallel))` | Run all enclosed prompts concurrently as one barriered queue group |
-| `((parallel<n>))` ... `((endparallel))` | Keep up to `<n>` enclosed prompts running concurrently until the block is drained |
+| `((branch <name>))` ... `((end))` | Run enclosed prompts in worktree for branch `<name>` (`((end))` optional at EOF) |
+| `((loop<n>))` ... `((end))` | Repeat enclosed prompts `n` times (`n >= 1`, `((end))` optional at EOF) |
+| `((parallel))` ... `((end))` | Run all enclosed prompts concurrently as one barriered queue group |
+| `((parallel<n>))` ... `((end))` | Keep up to `<n>` enclosed prompts running concurrently until the block is drained |
 | `((at <time> [action]))` | Schedule queue control action (`start`, `pause`, `resume`, `stop`) for this queue scope; default action is `resume` |
 | `((save <name>))` | Save a queue item's final output into variable `<name>` for later prompts |
 | `((p<n>output))` | Inject the final output from authored queue position `n` |
@@ -250,14 +250,14 @@ Run test suite and summarize failures
 Implement auth middleware updates
 ***
 Add/update auth tests and run them
-((endbranch))
-((endloop))
+((end))
+((end))
 ((parallel2))
 Summarize open PRs touching auth
 ***
 Review auth-related production logs
 ***
-((endparallel))
+((end))
 ((save release_notes))
 Write release notes summary
 ***

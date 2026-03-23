@@ -19,9 +19,9 @@ from src.tasks.queue_plan import (
 def test_contains_queue_plan_markers_detects_known_markers() -> None:
     assert contains_queue_plan_markers("first\n***\nsecond") is True
     assert contains_queue_plan_markers("((append))\nfirst\n***\nsecond") is True
-    assert contains_queue_plan_markers("((loop2))\nrun\n((endloop))") is True
-    assert contains_queue_plan_markers("((branch feature/x))\nrun\n((endbranch))") is True
-    assert contains_queue_plan_markers("((parallel2))\nrun\n***\nmore\n((endparallel))") is True
+    assert contains_queue_plan_markers("((loop2))\nrun\n((end))") is True
+    assert contains_queue_plan_markers("((branch feature/x))\nrun\n((end))") is True
+    assert contains_queue_plan_markers("((parallel2))\nrun\n***\nmore\n((end))") is True
 
 
 def test_contains_queue_plan_markers_ignores_non_marker_plain_text() -> None:
@@ -41,7 +41,7 @@ def test_parse_queue_plan_separator_expands_prompts() -> None:
 
 def test_parse_queue_plan_branch_section_scopes_prompts() -> None:
     prompts = parse_queue_plan_text(
-        "((branch feature/auth))\ninside worktree\n***\nagain\n((endbranch))\noutside"
+        "((branch feature/auth))\ninside worktree\n***\nagain\n((end))\noutside"
     )
     assert [item.prompt for item in prompts] == ["inside worktree", "again", "outside"]
     assert [item.branch_name for item in prompts] == [
@@ -58,7 +58,7 @@ def test_parse_queue_plan_branch_supports_single_line_statement() -> None:
 
 
 def test_parse_queue_plan_loop_expands_prompts() -> None:
-    prompts = parse_queue_plan_text("((loop3))\nrun once\n((endloop))")
+    prompts = parse_queue_plan_text("((loop3))\nrun once\n((end))")
     assert [item.prompt for item in prompts] == ["run once", "run once", "run once"]
 
 
@@ -68,7 +68,7 @@ def test_parse_queue_plan_loop_supports_single_line_statement() -> None:
 
 
 def test_parse_queue_plan_parallel_block_assigns_shared_group() -> None:
-    prompts = parse_queue_plan_text("((parallel2))\nfirst\n***\nsecond\n((endparallel))")
+    prompts = parse_queue_plan_text("((parallel2))\nfirst\n***\nsecond\n((end))")
     assert [item.prompt for item in prompts] == ["first", "second"]
     assert prompts[0].parallel_group_id == prompts[1].parallel_group_id
     assert prompts[0].parallel_limit == 2
@@ -76,7 +76,7 @@ def test_parse_queue_plan_parallel_block_assigns_shared_group() -> None:
 
 
 def test_parse_queue_plan_parallel_inside_loop_creates_distinct_groups() -> None:
-    prompts = parse_queue_plan_text("((loop2))\n((parallel))\none\n((endparallel))\n((endloop))")
+    prompts = parse_queue_plan_text("((loop2))\n((parallel))\none\n((end))\n((end))")
     assert [item.prompt for item in prompts] == ["one", "one"]
     assert prompts[0].parallel_group_id != prompts[1].parallel_group_id
     assert prompts[0].parallel_limit is None
@@ -85,7 +85,7 @@ def test_parse_queue_plan_parallel_inside_loop_creates_distinct_groups() -> None
 
 def test_parse_queue_plan_rejects_nested_parallel_blocks() -> None:
     with pytest.raises(QueuePlanError, match="nested parallel blocks"):
-        parse_queue_plan_text("((parallel))\n((parallel2))\nrun\n((endparallel))\n((endparallel))")
+        parse_queue_plan_text("((parallel))\n((parallel2))\nrun\n((end))\n((end))")
 
 
 def test_parse_queue_plan_allows_nested_loop_and_branch() -> None:
@@ -94,8 +94,8 @@ def test_parse_queue_plan_allows_nested_loop_and_branch() -> None:
         "outside\n"
         "((branch feature/a))\n"
         "inside\n"
-        "((endbranch))\n"
-        "((endloop))"
+        "((end))\n"
+        "((end))"
     )
     assert [item.prompt for item in prompts] == [
         "outside",
@@ -124,20 +124,19 @@ def test_parse_queue_plan_allows_unclosed_branch_block_at_eof() -> None:
 
 
 def test_parse_queue_plan_rejects_branch_end_without_open_block() -> None:
-    with pytest.raises(
-        QueuePlanError, match="branch end marker without matching open branch block"
-    ):
-        parse_queue_plan_text("run\n((endbranch))")
+    with pytest.raises(QueuePlanError, match="end marker without a matching open block"):
+        parse_queue_plan_text("run\n((end))")
 
 
-def test_parse_queue_plan_reports_open_branch_when_loop_end_hits_branch_scope() -> None:
-    with pytest.raises(QueuePlanError, match="currently inside branch `f2`"):
-        parse_queue_plan_text("((loop2))\n((branch f2))\nrun\n((endloop))")
+def test_parse_queue_plan_end_closes_innermost_open_block() -> None:
+    prompts = parse_queue_plan_text("((loop2))\n((branch f2))\nrun\n((end))")
+    assert [item.prompt for item in prompts] == ["run", "run"]
+    assert [item.branch_name for item in prompts] == ["f2", "f2"]
 
 
 def test_parse_queue_plan_rejects_non_positive_loop_count() -> None:
     with pytest.raises(QueuePlanError, match="must be >= 1"):
-        parse_queue_plan_text("((loop0))\nrun\n((endloop))")
+        parse_queue_plan_text("((loop0))\nrun\n((end))")
 
 
 def test_parse_queue_plan_rejects_legacy_loop_marker() -> None:
@@ -152,7 +151,12 @@ def test_parse_queue_plan_rejects_unknown_marker() -> None:
 
 def test_parse_queue_plan_enforces_expansion_cap() -> None:
     with pytest.raises(QueuePlanError, match="more than 3 items"):
-        parse_queue_plan_text("((loop4))\nrun\n((endloop))", max_expanded_items=3)
+        parse_queue_plan_text("((loop4))\nrun\n((end))", max_expanded_items=3)
+
+
+def test_parse_queue_plan_rejects_legacy_end_markers() -> None:
+    with pytest.raises(QueuePlanError, match="Unknown queue-plan marker"):
+        parse_queue_plan_text("((loop2))\nrun\n((endloop))")
 
 
 def test_parse_queue_plan_submission_defaults_to_append_pending() -> None:
@@ -278,7 +282,7 @@ async def test_materialize_queue_plan_resolves_existing_worktree() -> None:
         add_worktree=AsyncMock(),
     )
     materialized = await materialize_queue_plan_text(
-        text="((branch feature/auth))\nrun\n((endbranch))",
+        text="((branch feature/auth))\nrun\n((end))",
         working_directory="/repo",
         git_service=git_service,
     )
@@ -301,7 +305,7 @@ async def test_materialize_queue_plan_preserves_session_subdirectory_in_worktree
     )
 
     materialized = await materialize_queue_plan_text(
-        text="((branch feature/auth))\nrun\n((endbranch))",
+        text="((branch feature/auth))\nrun\n((end))",
         working_directory="/repo/services/api",
         git_service=git_service,
     )
@@ -318,7 +322,7 @@ async def test_materialize_queue_plan_creates_missing_worktree() -> None:
         add_worktree=AsyncMock(return_value="/repo-worktrees/feature/new"),
     )
     materialized = await materialize_queue_plan_text(
-        text="((branch feature/new))\nrun\n((endbranch))",
+        text="((branch feature/new))\nrun\n((end))",
         working_directory="/repo",
         git_service=git_service,
     )
@@ -336,7 +340,7 @@ async def test_materialize_queue_plan_rejects_branch_sections_outside_git_repo()
     )
     with pytest.raises(QueuePlanError, match="not a git repository"):
         await materialize_queue_plan_text(
-            text="((branch feature/new))\nrun\n((endbranch))",
+            text="((branch feature/new))\nrun\n((end))",
             working_directory="/repo",
             git_service=git_service,
         )
@@ -344,7 +348,7 @@ async def test_materialize_queue_plan_rejects_branch_sections_outside_git_repo()
 
 @pytest.mark.asyncio
 async def test_materialize_queue_plan_prompts_applies_branch_path_mapping() -> None:
-    prompts = parse_queue_plan_text("((branch feature/a))\nfirst\n((endbranch))\nsecond")
+    prompts = parse_queue_plan_text("((branch feature/a))\nfirst\n((end))\nsecond")
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
         list_worktrees=AsyncMock(return_value=[]),
@@ -365,7 +369,7 @@ async def test_materialize_queue_plan_prompts_applies_branch_path_mapping() -> N
 
 @pytest.mark.asyncio
 async def test_materialize_queue_plan_preserves_subdirectory_for_new_worktree() -> None:
-    prompts = parse_queue_plan_text("((branch feature/a))\nfirst\n((endbranch))")
+    prompts = parse_queue_plan_text("((branch feature/a))\nfirst\n((end))")
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
         list_worktrees=AsyncMock(return_value=[SimpleNamespace(branch="main", path="/repo")]),
@@ -384,7 +388,7 @@ async def test_materialize_queue_plan_preserves_subdirectory_for_new_worktree() 
 @pytest.mark.asyncio
 async def test_materialize_queue_plan_preserves_parallel_metadata() -> None:
     materialized = await materialize_queue_plan_text(
-        text="((parallel3))\nfirst\n***\nsecond\n((endparallel))",
+        text="((parallel3))\nfirst\n***\nsecond\n((end))",
         working_directory="/repo",
     )
 

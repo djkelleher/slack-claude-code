@@ -369,16 +369,15 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
 
-        if marker_type == "branch_end":
+        if marker_type == "block_end":
             if inline_prompt:
                 raise QueuePlanError(
-                    f"Line {line_number}: inline prompt is not supported on branch end markers."
+                    f"Line {line_number}: inline prompt is not supported on end markers."
                 )
-            if current.kind != "branch":
+            if current.kind == "root":
                 detail = _unexpected_block_close_detail(current)
                 raise QueuePlanError(
-                    f"Line {line_number}: found branch end marker without matching open "
-                    f"branch block. {detail}"
+                    f"Line {line_number}: found end marker without a matching open block. {detail}"
                 )
             _close_frame(stack)
             continue
@@ -389,20 +388,6 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
 
-        if marker_type == "loop_end":
-            if inline_prompt:
-                raise QueuePlanError(
-                    f"Line {line_number}: inline prompt is not supported on loop end markers."
-                )
-            if current.kind != "loop":
-                detail = _unexpected_block_close_detail(current)
-                raise QueuePlanError(
-                    f"Line {line_number}: found loop end marker without matching open "
-                    f"loop block. {detail}"
-                )
-            _close_frame(stack)
-            continue
-
         if marker_type == "parallel_start":
             if current.kind == "parallel":
                 raise QueuePlanError(
@@ -411,20 +396,6 @@ def _parse_to_ast(text: str) -> list[_Node]:
             stack.append(_Frame(kind="parallel", start_line=line_number, parallel_limit=marker[1]))
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
-            continue
-
-        if marker_type == "parallel_end":
-            if inline_prompt:
-                raise QueuePlanError(
-                    f"Line {line_number}: inline prompt is not supported on parallel end markers."
-                )
-            if current.kind != "parallel":
-                detail = _unexpected_block_close_detail(current)
-                raise QueuePlanError(
-                    f"Line {line_number}: found parallel end marker without matching open "
-                    f"parallel block. {detail}"
-                )
-            _close_frame(stack)
             continue
 
         raise QueuePlanError(f"Line {line_number}: unsupported queue-plan marker.")
@@ -463,17 +434,17 @@ def _unexpected_block_close_detail(current: _Frame) -> str:
     if current.kind == "branch":
         return (
             f"You are currently inside branch `{current.branch_name or ''}` opened on line "
-            f"{current.start_line}. Close it first with `((endbranch))`."
+            f"{current.start_line}. Close it first with `((end))`."
         )
     if current.kind == "loop":
         return (
             f"You are currently inside loop `{current.loop_count or 1}` opened on line "
-            f"{current.start_line}. Close it first with `((endloop))`."
+            f"{current.start_line}. Close it first with `((end))`."
         )
     if current.kind == "parallel":
         return (
             f"You are currently inside parallel block opened on line {current.start_line}. "
-            "Close it first with `((endparallel))`."
+            "Close it first with `((end))`."
         )
     return "A different block is currently open."
 
@@ -578,6 +549,8 @@ def _parse_marker_with_inline_prompt(
         if inline_marker is not None:
             return inline_marker, trailing_text
 
+    if strict and line.startswith("((") and line.endswith("))"):
+        raise QueuePlanError(f"Unknown queue-plan marker: `{line}`")
     if strict and _ANY_MARKER_RE.match(line):
         raise QueuePlanError(f"Unknown queue-plan marker: `{line}`")
     return None, None
@@ -641,8 +614,8 @@ def _parse_double_paren_block_marker(
     lowered = body.lower()
     if lowered == "parallel":
         return ("parallel_start", None)
-    if lowered == "endparallel":
-        return ("parallel_end",)
+    if lowered == "end":
+        return ("block_end",)
     if lowered.startswith("parallel"):
         limit_text = lowered[len("parallel") :].strip()
         if limit_text.isdigit():
@@ -651,12 +624,8 @@ def _parse_double_paren_block_marker(
         count_text = lowered[len("loop") :].strip()
         if count_text.isdigit():
             return _parse_loop_marker_value(count_text, line, marker_type="loop_start")
-    if lowered == "endloop":
-        return ("loop_end",)
     if lowered.startswith("branch "):
         return _parse_branch_marker_value(body[len("branch ") :], marker_type="branch_start")
-    if lowered == "endbranch":
-        return ("branch_end",)
     return None
 
 

@@ -486,11 +486,10 @@ def _strip_runtime_directive_lines(prompt: str) -> tuple[str, Optional[str], Opt
                 "prepend",
                 "replace",
                 "clear",
-                "endbranch",
+                "end",
                 "parallel",
-                "endparallel",
             }
-            and not lowered.startswith(("branch ", "loop", "endloop", "insert", "at ", "save "))
+            and not lowered.startswith(("branch ", "loop", "insert", "at ", "save "))
         ):
             model_override = normalized_model
             stripped_lines.pop(0)
