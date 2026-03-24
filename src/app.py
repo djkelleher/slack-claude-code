@@ -381,6 +381,24 @@ async def _handle_typed_model_command(
     )
 
 
+async def _post_message_processing_error(
+    client,
+    channel_id: str,
+    thread_ts: str | None,
+    error_text: str,
+) -> None:
+    """Post a best-effort Slack notice for an unexpected message-processing failure."""
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=f"Error: {error_text}",
+        blocks=error_message(
+            "Unexpected error while processing this message.\n"
+            f"{error_text}"
+        ),
+    )
+
+
 async def _route_codex_message_to_active_turn_or_queue(
     client,
     deps,
@@ -484,13 +502,41 @@ async def _route_codex_message_to_active_turn_or_queue(
         "completed",
         output=(f"Steer failed ({steer_error}). " f"Auto-queued item #{queued_item.id}."),
     )
-    await ensure_queue_processor(
-        channel_id=channel_id,
-        thread_ts=thread_ts,
-        deps=deps,
-        client=client,
-        task_logger=logger,
-    )
+    try:
+        await ensure_queue_processor(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            deps=deps,
+            client=client,
+            task_logger=logger,
+        )
+    except Exception as e:
+        queue_start_error = str(e)
+        logger.error(
+            f"Queued Codex fallback item #{queued_item.id} for scope {session_scope} "
+            f"but failed to start queue processor: {queue_start_error}"
+        )
+        await deps.db.update_command_status(
+            cmd_history.id,
+            "failed",
+            output=(
+                f"Steer failed ({steer_error}). Auto-queued item #{queued_item.id}, "
+                f"but queue processor startup failed: {queue_start_error}"
+            ),
+            error_message=queue_start_error,
+        )
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"Queued item #{queued_item.id}, but queue startup failed.",
+            blocks=error_message(
+                "Active Codex run could not be steered, so your message was queued, "
+                "but the queue processor failed to start.\n"
+                f"queued_item: #{queued_item.id}\n"
+                f"queue_start_error: {queue_start_error}"
+            ),
+        )
+        return True
     await client.chat_postMessage(
         channel=channel_id,
         thread_ts=thread_ts,
@@ -573,13 +619,41 @@ async def _route_claude_message_to_active_execution_or_queue(
         "completed",
         output=("Active Claude execution detected." f" Auto-queued item #{queued_item.id}."),
     )
-    await ensure_queue_processor(
-        channel_id=channel_id,
-        thread_ts=thread_ts,
-        deps=deps,
-        client=client,
-        task_logger=logger,
-    )
+    try:
+        await ensure_queue_processor(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            deps=deps,
+            client=client,
+            task_logger=logger,
+        )
+    except Exception as e:
+        queue_start_error = str(e)
+        logger.error(
+            f"Queued Claude fallback item #{queued_item.id} for scope {session_scope} "
+            f"but failed to start queue processor: {queue_start_error}"
+        )
+        await deps.db.update_command_status(
+            cmd_history.id,
+            "failed",
+            output=(
+                f"Active Claude execution detected. Auto-queued item #{queued_item.id}, "
+                f"but queue processor startup failed: {queue_start_error}"
+            ),
+            error_message=queue_start_error,
+        )
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"Queued item #{queued_item.id}, but queue startup failed.",
+            blocks=error_message(
+                "A Claude run is already active, so your message was queued, "
+                "but the queue processor failed to start.\n"
+                f"queued_item: #{queued_item.id}\n"
+                f"queue_start_error: {queue_start_error}"
+            ),
+        )
+        return True
     await client.chat_postMessage(
         channel=channel_id,
         thread_ts=thread_ts,
@@ -1101,38 +1175,38 @@ async def main():
                 # No text, only files - provide default prompt
                 prompt = f"Please analyze these uploaded files:\n{file_refs}"
 
-        # Determine which backend to use based on session model
-        backend = get_backend_for_model(session.model)
-        transport = "Claude CLI" if backend == "claude" else "Codex app-server"
-        logger.info(f"Using backend: {backend} via {transport} (model: {session.model})")
-
-        # Route to appropriate execution path
-        if backend == "codex":
-            handled_active_turn = await _route_codex_message_to_active_turn_or_queue(
-                client=client,
-                deps=deps,
-                session=session,
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                prompt=prompt,
-                logger=logger,
-            )
-            if handled_active_turn:
-                return
-        elif backend == "claude":
-            handled_active_execution = await _route_claude_message_to_active_execution_or_queue(
-                client=client,
-                deps=deps,
-                session=session,
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                prompt=prompt,
-                logger=logger,
-            )
-            if handled_active_execution:
-                return
-
         try:
+            # Determine which backend to use based on session model
+            backend = get_backend_for_model(session.model)
+            transport = "Claude CLI" if backend == "claude" else "Codex app-server"
+            logger.info(f"Using backend: {backend} via {transport} (model: {session.model})")
+
+            # Route to appropriate execution path
+            if backend == "codex":
+                handled_active_turn = await _route_codex_message_to_active_turn_or_queue(
+                    client=client,
+                    deps=deps,
+                    session=session,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    prompt=prompt,
+                    logger=logger,
+                )
+                if handled_active_turn:
+                    return
+            elif backend == "claude":
+                handled_active_execution = await _route_claude_message_to_active_execution_or_queue(
+                    client=client,
+                    deps=deps,
+                    session=session,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    prompt=prompt,
+                    logger=logger,
+                )
+                if handled_active_execution:
+                    return
+
             await execute_prompt_with_runtime(
                 deps=deps,
                 session=session,
@@ -1146,7 +1220,20 @@ async def main():
             )
         except asyncio.CancelledError:
             return
-        except Exception:
+        except Exception as e:
+            logger.error(
+                f"Failed processing message for channel={channel_id} thread_ts={thread_ts}: {e}\n"
+                f"{traceback.format_exc()}"
+            )
+            try:
+                await _post_message_processing_error(
+                    client=client,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    error_text=str(e),
+                )
+            except Exception as notify_error:
+                logger.error(f"Failed to post message-processing error notice: {notify_error}")
             return
 
     # Start Socket Mode handler

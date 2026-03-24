@@ -290,6 +290,52 @@ class TestCodexActiveTurnRouting:
         deps.codex_executor.record_queue_fallback.assert_awaited_once_with(success=False)
         assert client.chat_postMessage.await_count >= 1
 
+    @pytest.mark.asyncio
+    async def test_reports_queue_start_failure_after_steer_failure(self):
+        """Queued Codex fallback should report queue startup failures instead of going silent."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            codex_executor=SimpleNamespace(
+                has_active_turn=AsyncMock(return_value=True),
+                steer_active_turn=AsyncMock(
+                    return_value=SimpleNamespace(success=False, turn_id=None, error="conflict")
+                ),
+                record_queue_fallback=AsyncMock(),
+            ),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=13)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(return_value=SimpleNamespace(id=78)),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch(
+            "src.app.ensure_queue_processor",
+            new=AsyncMock(side_effect=RuntimeError("queue task start failed")),
+        ):
+            handled = await _route_codex_message_to_active_turn_or_queue(
+                client=client,
+                deps=deps,
+                session=session,
+                channel_id="C123",
+                thread_ts="123.456",
+                prompt="follow up",
+                logger=MagicMock(),
+            )
+
+        assert handled is True
+        deps.db.update_command_status.assert_any_await(
+            13,
+            "failed",
+            output=(
+                "Steer failed (conflict). Auto-queued item #78, "
+                "but queue processor startup failed: queue task start failed"
+            ),
+            error_message="queue task start failed",
+        )
+        assert client.chat_postMessage.await_count >= 1
+
 
 class TestClaudeActiveExecutionRouting:
     """Tests for active Claude execution queue fallback behavior."""
@@ -355,6 +401,45 @@ class TestClaudeActiveExecutionRouting:
             21,
             "completed",
             output="Active Claude execution detected. Auto-queued item #88.",
+        )
+
+    @pytest.mark.asyncio
+    async def test_reports_queue_start_failure_when_active_claude_execution_exists(self):
+        """Queued Claude fallback should report queue startup failures instead of going silent."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=True)),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=22)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(return_value=SimpleNamespace(id=89)),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch(
+            "src.app.ensure_queue_processor",
+            new=AsyncMock(side_effect=RuntimeError("queue task start failed")),
+        ):
+            handled = await _route_claude_message_to_active_execution_or_queue(
+                client=client,
+                deps=deps,
+                session=session,
+                channel_id="C123",
+                thread_ts="123.456",
+                prompt="follow up",
+                logger=MagicMock(),
+            )
+
+        assert handled is True
+        deps.db.update_command_status.assert_any_await(
+            22,
+            "failed",
+            output=(
+                "Active Claude execution detected. Auto-queued item #89, "
+                "but queue processor startup failed: queue task start failed"
+            ),
+            error_message="queue task start failed",
         )
         assert client.chat_postMessage.await_count >= 1
 
