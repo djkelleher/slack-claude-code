@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     added_dirs TEXT DEFAULT NULL,  -- JSON array of directories added via /add-dir
     -- Codex-specific fields
     codex_session_id TEXT DEFAULT NULL,
-    sandbox_mode TEXT DEFAULT 'workspace-write',
+    sandbox_mode TEXT DEFAULT 'danger-full-access',
     approval_mode TEXT DEFAULT 'on-request'
 );
 
@@ -231,7 +231,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         db,
         column_names,
         "sandbox_mode",
-        "ALTER TABLE sessions ADD COLUMN sandbox_mode TEXT DEFAULT 'workspace-write'",
+        "ALTER TABLE sessions ADD COLUMN sandbox_mode TEXT DEFAULT 'danger-full-access'",
     )
     await _add_column_if_missing(
         db,

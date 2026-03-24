@@ -32,6 +32,8 @@ class TestSessionOperations:
         assert session.channel_id == "C123ABC"
         assert session.thread_ts is None
         assert session.working_directory == "/home/user"
+        assert session.sandbox_mode == "danger-full-access"
+        assert session.approval_mode == "on-request"
 
     @pytest.mark.asyncio
     async def test_get_or_create_session_uses_configured_codex_defaults(
