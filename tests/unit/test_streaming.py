@@ -378,6 +378,22 @@ class TestStreamingAppendAndUpdate:
         assert state.tool_activities["tool-123"].result == "file contents"
         assert state.tool_activities["tool-123"].duration_ms == 100
 
+    @pytest.mark.asyncio
+    async def test_send_update_uses_processing_fallback_text_without_output(self):
+        """Message updates should include plain-text fallback when output is empty."""
+        client = AsyncMock()
+        state = StreamingMessageState(
+            channel_id="C123",
+            message_ts="123.456",
+            prompt="inspect the queue worker for regressions",
+            client=client,
+            logger=MagicMock(),
+        )
+
+        await state._send_update()
+
+        assert client.chat_update.await_args.kwargs["text"].startswith("Processing: inspect")
+
 
 class TestCreateStreamingCallback:
     """Tests for create_streaming_callback factory."""

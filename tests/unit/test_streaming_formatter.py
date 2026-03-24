@@ -1,7 +1,7 @@
 """Unit tests for streaming formatter blocks."""
 
 from src.config import config
-from src.utils.formatters.streaming import streaming_update
+from src.utils.formatters.streaming import processing_message, streaming_update
 
 
 def test_streaming_update_separates_status_and_prompt_for_complete() -> None:
@@ -52,3 +52,26 @@ def test_streaming_update_can_preserve_full_output() -> None:
 
     assert rendered_output.replace("\n", " ") == long_output.replace("\n", " ")
     assert "_... (earlier output truncated)_" not in rendered_output
+
+
+def test_processing_message_truncates_prompt_to_slack_limit() -> None:
+    """Processing preview should stay under Slack's block text limit."""
+    prompt = "run " + ("<edge-case> & " * 600)
+
+    blocks = processing_message(prompt)
+
+    text = blocks[0]["text"]["text"]
+    assert len(text) <= config.SLACK_BLOCK_TEXT_LIMIT
+    assert text.endswith("...")
+
+
+def test_streaming_update_truncates_extreme_prompt_to_slack_limit() -> None:
+    """Streaming prompt block should stay under Slack's block text limit."""
+    prompt = "analyze " + ("<very-long> & " * 700)
+
+    blocks = streaming_update(
+        prompt=prompt,
+        current_output="partial output",
+    )
+
+    prompt_text = blocks[1]["text"]["text"]

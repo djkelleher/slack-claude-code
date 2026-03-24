@@ -176,6 +176,7 @@ async def _handle_approval_action(
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
+                text=f"{approval_type} resolved",
                 blocks=block_builder(resolved, user_id),
             )
         except Exception as e:
@@ -498,6 +499,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     await client.chat_update(
                         channel=channel_id,
                         ts=job.message_ts,
+                        text=f"Job #{job_id} status updated",
                         blocks=blocks,
                     )
                 except Exception as e:

@@ -418,6 +418,7 @@ async def _run_agent_with_streaming(
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
+            text=f"Agent {agent.name} {'failed' if not success else 'completed'}",
             blocks=blocks,
         )
 
@@ -427,6 +428,7 @@ async def _run_agent_with_streaming(
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
+            text=f"Agent error: {e}",
             blocks=error_message(f"Agent error: {e}"),
         )
 

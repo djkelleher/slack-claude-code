@@ -63,3 +63,4 @@ async def test_approve_tool_action_passes_resolver_user_and_updates_blocks() -> 
     blocks = client.chat_update.await_args.kwargs["blocks"]
     assert blocks[0]["text"]["text"] == ":heavy_check_mark: *Approved*: exec_command"
     assert blocks[1]["elements"][1]["text"] == "By: <@U123>"
+    assert client.chat_update.await_args.kwargs["text"] == "Tool approval resolved"

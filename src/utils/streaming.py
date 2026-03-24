@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 from loguru import logger
 
 from src.config import PLANS_DIR, config
-from src.utils.formatters.streaming import streaming_update
+from src.utils.formatters.streaming import processing_fallback_text, streaming_update
 
 if TYPE_CHECKING:
     from src.claude.streaming import ToolActivity
@@ -66,6 +66,15 @@ class StreamingMessageState:
     _consecutive_failures: int = field(default=0)
     _error_callback_triggered: bool = field(default=False)
     started_at: float = field(default_factory=time.time)
+
+    def _plain_text_preview(self, output: str) -> str:
+        """Build Slack fallback text for message updates."""
+        flattened_output = " ".join(output.split())
+        if flattened_output:
+            if len(flattened_output) > 100:
+                return flattened_output[:100] + "..."
+            return flattened_output
+        return processing_fallback_text(self.prompt)
 
     def get_tool_list(self) -> list["ToolActivity"]:
         """Get list of tracked tool activities."""
@@ -325,11 +334,6 @@ class StreamingMessageState:
             If True, append an idle indicator to show we're still working.
         """
         try:
-            text_preview = (
-                self.accumulated_output[:100] + "..."
-                if len(self.accumulated_output) > 100
-                else self.accumulated_output
-            )
             tool_list = self.get_tool_list() if self.track_tools else None
 
             # Add idle indicator to output if needed
@@ -340,7 +344,7 @@ class StreamingMessageState:
             await self.client.chat_update(
                 channel=self.channel_id,
                 ts=self.message_ts,
-                text=text_preview,
+                text=self._plain_text_preview(output),
                 blocks=streaming_update(
                     self.prompt,
                     output,
@@ -383,16 +387,11 @@ class StreamingMessageState:
         await self.stop_heartbeat()
 
         try:
-            text_preview = (
-                self.accumulated_output[:100] + "..."
-                if len(self.accumulated_output) > 100
-                else self.accumulated_output
-            )
             tool_list = self.get_tool_list() if self.track_tools else None
             await self.client.chat_update(
                 channel=self.channel_id,
                 ts=self.message_ts,
-                text=text_preview,
+                text=self._plain_text_preview(self.accumulated_output),
                 blocks=streaming_update(
                     self.prompt,
                     self.accumulated_output,

@@ -11,7 +11,7 @@ from src.handlers.command_router import CommandRouteResult, execute_for_session
 from src.handlers.response_delivery import deliver_command_response
 from src.question.manager import QuestionManager
 from src.utils.formatters.command import error_message
-from src.utils.formatters.streaming import processing_message
+from src.utils.formatters.streaming import processing_fallback_text, processing_message
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 
@@ -57,7 +57,7 @@ async def execute_prompt_with_runtime(
     cmd_history = await deps.db.add_command(session.id, prompt)
     await deps.db.update_command_status(cmd_history.id, "running")
 
-    initial_text = processing_text or f"Processing: {prompt[:100]}..."
+    initial_text = processing_text or processing_fallback_text(prompt)
     response = await client.chat_postMessage(
         channel=channel_id,
         thread_ts=thread_ts,

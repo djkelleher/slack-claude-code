@@ -2,21 +2,52 @@
 
 from typing import TYPE_CHECKING, Optional
 
-from .base import escape_markdown, text_to_rich_text_blocks, truncate_from_start
+from .base import MAX_TEXT_LENGTH, escape_markdown, text_to_rich_text_blocks, truncate_from_start
 from .tool_blocks import format_tool_activity_section
 
 if TYPE_CHECKING:
     from src.claude.streaming import ToolActivity
 
 
+_ELLIPSIS = "..."
+_PROCESSING_PREFIX = ":hourglass_flowing_sand: *Processing...*\n> "
+_PROMPT_SECTION_PREFIX = "> "
+
+
+def _truncate_preview(text: str, max_length: int) -> str:
+    """Truncate preview text to a Slack-safe length."""
+    if max_length <= 0:
+        return ""
+    if len(text) <= max_length:
+        return text
+    if max_length <= len(_ELLIPSIS):
+        return _ELLIPSIS[:max_length]
+    return text[: max_length - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
+
+
+def _format_prompt_preview(prompt: str, prefix: str) -> str:
+    """Normalize, escape, and truncate a prompt preview for a mrkdwn block."""
+    prompt_text = escape_markdown(" ".join(prompt.split()))
+    return _truncate_preview(prompt_text, MAX_TEXT_LENGTH - len(prefix))
+
+
+def processing_fallback_text(prompt: str) -> str:
+    """Build plain-text fallback content for Slack message payloads."""
+    prompt_text = " ".join(prompt.split())
+    if not prompt_text:
+        return "Processing..."
+    return _truncate_preview(f"Processing: {prompt_text}", 300)
+
+
 def processing_message(prompt: str) -> list[dict]:
     """Format a 'processing' placeholder message."""
+    prompt_text = _format_prompt_preview(prompt, _PROCESSING_PREFIX)
     return [
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f":hourglass_flowing_sand: *Processing...*\n> {escape_markdown(prompt[:100])}{'...' if len(prompt) > 100 else ''}",
+                "text": f"{_PROCESSING_PREFIX}{prompt_text}",
             },
         }
     ]
@@ -58,7 +89,7 @@ def streaming_update(
     list[dict]
         Slack blocks for the streaming message.
     """
-    prompt_preview = f"{escape_markdown(prompt[:100])}{'...' if len(prompt) > 100 else ''}"
+    prompt_text = _format_prompt_preview(prompt, _PROMPT_SECTION_PREFIX)
 
     if is_complete:
         status = ":x: Failed" if is_error else ":heavy_check_mark: Complete"
@@ -80,7 +111,7 @@ def streaming_update(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"> {prompt_preview}",
+                "text": f"> {prompt_text}",
             },
         },
         {"type": "divider"},
