@@ -388,13 +388,22 @@ async def _post_message_processing_error(
     error_text: str,
 ) -> None:
     """Post a best-effort Slack notice for an unexpected message-processing failure."""
+    summary_limit = 240
+    detail_limit = 1500
+    summary = error_text[:summary_limit]
+    if len(error_text) > summary_limit:
+        summary = f"{summary}..."
+    details = error_text[:detail_limit]
+    if len(error_text) > detail_limit:
+        details = f"{details}..."
+
     await client.chat_postMessage(
         channel=channel_id,
         thread_ts=thread_ts,
-        text=f"Error: {error_text}",
+        text=f"Error: {summary}",
         blocks=error_message(
             "Unexpected error while processing this message.\n"
-            f"{error_text}"
+            f"{details}"
         ),
     )
 

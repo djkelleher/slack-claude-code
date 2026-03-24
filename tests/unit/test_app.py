@@ -14,6 +14,7 @@ from src.app import (
     _extract_structured_queue_plan_from_uploaded_files,
     _handle_typed_model_command,
     _is_duplicate_event,
+    _post_message_processing_error,
     _queue_structured_plan_message,
     _restore_pending_queue_processors,
     _route_claude_message_to_active_execution_or_queue,
@@ -166,6 +167,31 @@ class TestTypedModelCommand:
         kwargs = client.chat_postMessage.await_args.kwargs
         assert kwargs["text"] == "Use `/model` slash command to open the model selector."
         assert "open the model selector" in kwargs["blocks"][0]["text"]["text"]
+
+
+class TestUnexpectedMessageErrorReporting:
+    """Tests for the generic message-processing failure notifier."""
+
+    @pytest.mark.asyncio
+    async def test_post_message_processing_error_truncates_slack_payload(self):
+        """Unexpected error reporter should cap Slack text/block length."""
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+        long_error = "x" * 4000
+
+        await _post_message_processing_error(
+            client=client,
+            channel_id="C123",
+            thread_ts="123.456",
+            error_text=long_error,
+        )
+
+        client.chat_postMessage.assert_awaited_once()
+        kwargs = client.chat_postMessage.await_args.kwargs
+        assert len(kwargs["text"]) < 300
+        assert kwargs["text"].endswith("...")
+        block_text = kwargs["blocks"][0]["text"]["text"]
+        assert len(block_text) < 2000
+        assert block_text.endswith("...```")
 
 
 class TestCodexActiveTurnRouting:
