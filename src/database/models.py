@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from src.config import get_backend_for_model
+from src.config import config, get_backend_for_model
 
 
 @dataclass
@@ -22,8 +22,8 @@ class Session:
     last_active: datetime = field(default_factory=datetime.now)
     # Codex-specific fields
     codex_session_id: Optional[str] = None  # For Codex resume
-    sandbox_mode: str = "workspace-write"  # read-only, workspace-write, danger-full-access
-    approval_mode: str = "on-request"  # untrusted, on-request, never
+    sandbox_mode: str = config.CODEX_SANDBOX_MODE  # read-only, workspace-write, danger-full-access
+    approval_mode: str = config.CODEX_APPROVAL_MODE  # untrusted, on-request, never
 
     @classmethod
     def from_row(cls, row: tuple) -> "Session":
@@ -39,8 +39,8 @@ class Session:
             created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
             last_active=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
             codex_session_id=row[10],
-            sandbox_mode=row[11] or "workspace-write",
-            approval_mode=row[12] or "on-request",
+            sandbox_mode=row[11] or config.CODEX_SANDBOX_MODE,
+            approval_mode=row[12] or config.CODEX_APPROVAL_MODE,
         )
 
     def is_thread_session(self) -> bool:

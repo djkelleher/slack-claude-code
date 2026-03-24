@@ -9,6 +9,7 @@ import pytest_asyncio
 
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
+from src.config import config
 
 
 @pytest_asyncio.fixture
@@ -31,6 +32,19 @@ class TestSessionOperations:
         assert session.channel_id == "C123ABC"
         assert session.thread_ts is None
         assert session.working_directory == "/home/user"
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_uses_configured_codex_defaults(
+        self, db_repo, monkeypatch
+    ):
+        """New sessions should respect configured Codex sandbox and approval defaults."""
+        monkeypatch.setattr(config, "CODEX_SANDBOX_MODE", "danger-full-access")
+        monkeypatch.setattr(config, "CODEX_APPROVAL_MODE", "never")
+
+        session = await db_repo.get_or_create_session("C123CFG", None, "/home/user")
+
+        assert session.sandbox_mode == "danger-full-access"
+        assert session.approval_mode == "never"
 
     @pytest.mark.asyncio
     async def test_get_or_create_session_returns_existing(self, db_repo):

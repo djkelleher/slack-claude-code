@@ -170,8 +170,8 @@ class DatabaseRepository:
             added_dirs_json = None
             claude_session_id = None
             codex_session_id = None
-            sandbox_mode = "workspace-write"
-            approval_mode = "on-request"
+            sandbox_mode = config.CODEX_SANDBOX_MODE
+            approval_mode = config.CODEX_APPROVAL_MODE
             if normalized_thread_ts is not None:
                 # New thread sessions branch from the channel-level session context.
                 channel_cursor = await db.execute(
