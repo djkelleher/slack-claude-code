@@ -126,7 +126,7 @@ def queue_item_running(item: Any, sequence_number: str) -> list[dict]:
                 "type": "mrkdwn",
                 "text": (
                     f":arrow_forward: *Processing queue item {sequence_number}:*\n> "
-                    f"{_escaped_preview(item.prompt, 200)}"
+                    f"{_escaped_preview(' '.join(item.prompt.split()), 200)}"
                 ),
             },
         },

@@ -3,6 +3,7 @@
 from datetime import datetime
 from types import SimpleNamespace
 
+from src.config import config
 from src.utils.formatters import queue as queue_fmt
 
 
@@ -79,8 +80,8 @@ def test_queue_status_formats_pending_parallel_suffix() -> None:
 
 
 def test_queue_item_running_and_complete_render_status_and_truncation() -> None:
-    """Queue item formatters should preserve prompt preview and truncate long output."""
-    item = SimpleNamespace(id=9, prompt="process " + ("x" * 250))
+    """Queue item formatters should keep running previews Slack-safe and truncate long output."""
+    item = SimpleNamespace(id=9, prompt="process " + ("x" * 4000))
     success = SimpleNamespace(success=True, output="done", error=None)
     failure = SimpleNamespace(success=False, output="", error="E" * 2600)
 
@@ -88,7 +89,10 @@ def test_queue_item_running_and_complete_render_status_and_truncation() -> None:
     success_blocks = queue_fmt.queue_item_complete(item, success)
     failure_blocks = queue_fmt.queue_item_complete(item, failure)
 
-    assert "Processing queue item 3" in running_blocks[0]["text"]["text"]
+    running_text = running_blocks[0]["text"]["text"]
+    assert "Processing queue item 3" in running_text
+    assert len(running_text) <= config.SLACK_BLOCK_TEXT_LIMIT
+    assert "..." in running_text
     assert success_blocks[0]["elements"][0]["text"] == ":heavy_check_mark: Queue Item #9"
     assert success_blocks[3]["text"]["text"] == "done"
     assert failure_blocks[0]["elements"][0]["text"] == ":x: Queue Item #9"
