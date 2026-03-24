@@ -214,6 +214,7 @@ Queue submission directives supported before the first content block:
 | `***` | Prompt separator (split into multiple queue items) |
 | `((branch <name>))` ... `((end))` | Run enclosed prompts in worktree for branch `<name>` (`((end))` optional at EOF) |
 | `((loop<n>))` ... `((end))` | Repeat enclosed prompts `n` times (`n >= 1`, `((end))` optional at EOF) |
+| `FOR <name> IN ((a, b))` ... `((end))` | Repeat enclosed prompts for each value, substituting `((<name>))` or `((((<name>))))` |
 | `((parallel))` ... `((end))` | Run all enclosed prompts concurrently as one barriered queue group |
 | `((parallel<n>))` ... `((end))` | Keep up to `<n>` enclosed prompts running concurrently until the block is drained |
 | `((at <time> [action]))` | Schedule queue control action (`start`, `pause`, `resume`, `stop`) for this queue scope; default action is `resume` |
@@ -224,8 +225,11 @@ Queue submission directives supported before the first content block:
 Rules:
 - Markers normally appear on their own line.
 - Start markers also support a single-line shorthand: `((loop3)) do this` or `((branch feature/auth)) do this`.
+- Substitution loops also support a single-line shorthand: `FOR name IN ((joe, tod)) greet ((name))`.
 - Blocks can be nested (`loop` inside `branch`, `branch` inside `loop`, etc.).
 - `parallel` can be nested with `loop` and `branch`, but nested `parallel` blocks are invalid.
+- Substitution placeholders only replace loop variables that are currently in scope; unrelated
+  `((name))` references still resolve later as saved queue outputs.
 - If a block reaches end-of-input, its closing marker can be omitted.
 - Timer directives are top-level queue submission directives (before first non-directive content line).
 - Timer `<time>` supports ISO datetime with timezone (for example `2026-03-13T18:30:00-04:00`) or server-local `HH:MM` for today.

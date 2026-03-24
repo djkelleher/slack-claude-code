@@ -22,6 +22,7 @@ def test_contains_queue_plan_markers_detects_known_markers() -> None:
     assert contains_queue_plan_markers("((loop2))\nrun\n((end))") is True
     assert contains_queue_plan_markers("((branch feature/x))\nrun\n((end))") is True
     assert contains_queue_plan_markers("((parallel2))\nrun\n***\nmore\n((end))") is True
+    assert contains_queue_plan_markers("FOR name IN ((joe, tod))\nrun ((name))\n((end))") is True
 
 
 def test_contains_queue_plan_markers_ignores_non_marker_plain_text() -> None:
@@ -67,6 +68,50 @@ def test_parse_queue_plan_loop_supports_single_line_statement() -> None:
     assert [item.prompt for item in prompts] == ["continue", "continue", "continue"]
 
 
+def test_parse_queue_plan_substitution_loop_expands_cartesian_product() -> None:
+    prompts = parse_queue_plan_text(
+        "FOR model IN ((c56m, c46l))\n"
+        "FOR name IN ((joe, tod))\n"
+        "((((model)))) check to make sure name is ((name))\n"
+        "((end))\n"
+        "((end))"
+    )
+
+    assert [item.prompt for item in prompts] == [
+        "c56m check to make sure name is joe",
+        "c56m check to make sure name is tod",
+        "c46l check to make sure name is joe",
+        "c46l check to make sure name is tod",
+    ]
+
+
+def test_parse_queue_plan_substitution_loop_supports_single_line_statement() -> None:
+    prompts = parse_queue_plan_text("FOR name IN ((joe, tod)) say hi to ((name))")
+    assert [item.prompt for item in prompts] == ["say hi to joe", "say hi to tod"]
+
+
+def test_parse_queue_plan_substitution_loop_preserves_runtime_references() -> None:
+    prompts = parse_queue_plan_text(
+        "FOR name IN ((joe, tod))\ncompare ((name)) to ((saved_output))\n((end))"
+    )
+
+    assert [item.prompt for item in prompts] == [
+        "compare joe to ((saved_output))",
+        "compare tod to ((saved_output))",
+    ]
+
+
+def test_parse_queue_plan_rejects_invalid_substitution_loop_values() -> None:
+    with pytest.raises(QueuePlanError, match="Values must be comma-separated"):
+        parse_queue_plan_text("FOR name IN ((joe, ))\nrun ((name))\n((end))")
+
+
+def test_parse_queue_plan_supports_combined_prefix_directives() -> None:
+    prompts = parse_queue_plan_text("((branch feature/auth, loop2)) run here")
+    assert [item.prompt for item in prompts] == ["run here", "run here"]
+    assert [item.branch_name for item in prompts] == ["feature/auth", "feature/auth"]
+
+
 def test_parse_queue_plan_parallel_block_assigns_shared_group() -> None:
     prompts = parse_queue_plan_text("((parallel2))\nfirst\n***\nsecond\n((end))")
     assert [item.prompt for item in prompts] == ["first", "second"]
@@ -90,12 +135,7 @@ def test_parse_queue_plan_rejects_nested_parallel_blocks() -> None:
 
 def test_parse_queue_plan_allows_nested_loop_and_branch() -> None:
     prompts = parse_queue_plan_text(
-        "((loop2))\n"
-        "outside\n"
-        "((branch feature/a))\n"
-        "inside\n"
-        "((end))\n"
-        "((end))"
+        "((loop2))\n" "outside\n" "((branch feature/a))\n" "inside\n" "((end))\n" "((end))"
     )
     assert [item.prompt for item in prompts] == [
         "outside",
@@ -201,6 +241,29 @@ def test_parse_queue_plan_submission_rejects_clear_directive() -> None:
 def test_parse_queue_plan_submission_rejects_conflicting_directives() -> None:
     with pytest.raises(QueuePlanError, match="directives conflict"):
         parse_queue_plan_submission("((append))\n((prepend))\nfirst task")
+
+
+def test_parse_queue_plan_submission_supports_combined_directives() -> None:
+    now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
+    options, body = parse_queue_plan_submission(
+        "((append, at 2026-03-13T18:30:00+00:00 start, at 2026-03-13T18:45:00+00:00 pause, "
+        "branch feature/auth, loop2)) ship fix",
+        now_utc=now,
+    )
+
+    assert options.directive_explicit is True
+    assert options.insertion_mode == "append"
+    assert options.insert_at is None
+    assert [(control.action, control.execute_at) for control in options.scheduled_controls] == [
+        ("start", datetime(2026, 3, 13, 18, 30, tzinfo=timezone.utc)),
+        ("pause", datetime(2026, 3, 13, 18, 45, tzinfo=timezone.utc)),
+    ]
+    assert body == "((branch feature/auth, loop2)) ship fix"
+
+
+def test_parse_queue_plan_submission_rejects_conflicting_combined_directives() -> None:
+    with pytest.raises(QueuePlanError, match="directives conflict"):
+        parse_queue_plan_submission("((append, prepend))\nfirst task")
 
 
 def test_parse_queue_plan_submission_parses_timer_directives_with_iso_time() -> None:
