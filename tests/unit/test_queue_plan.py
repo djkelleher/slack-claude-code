@@ -101,6 +101,24 @@ def test_parse_queue_plan_substitution_loop_preserves_runtime_references() -> No
     ]
 
 
+def test_parse_queue_plan_substitution_loop_preserves_save_then_file_write_flow() -> None:
+    prompts = parse_queue_plan_text(
+        "FOR name IN ((joe, tod))\n"
+        "((save draft))\n"
+        "Draft content for ((name))\n"
+        "***\n"
+        "Write ((draft)) to notes/((name)).md\n"
+        "((end))"
+    )
+
+    assert [item.prompt for item in prompts] == [
+        "((save draft))\nDraft content for joe",
+        "Write ((draft)) to notes/joe.md",
+        "((save draft))\nDraft content for tod",
+        "Write ((draft)) to notes/tod.md",
+    ]
+
+
 def test_parse_queue_plan_rejects_invalid_substitution_loop_values() -> None:
     with pytest.raises(QueuePlanError, match="Values must be comma-separated"):
         parse_queue_plan_text("FOR name IN ((joe, ))\nrun ((name))\n((end))")

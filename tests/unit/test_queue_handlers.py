@@ -151,6 +151,39 @@ async def test_resolve_queue_runtime_prompt_supports_named_output_references() -
 
 
 @pytest.mark.asyncio
+async def test_resolve_queue_runtime_prompt_supports_saved_output_in_file_write_prompt() -> None:
+    """Saved outputs should drop into follow-up prompts that ask the agent to write files."""
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_completed_queue_items_before_position=AsyncMock(
+                return_value=[
+                    SimpleNamespace(
+                        position=1,
+                        prompt="((save draft))\nDraft the release notes",
+                        output="line one\nline two",
+                    )
+                ]
+            )
+        )
+    )
+    item = SimpleNamespace(position=2)
+
+    resolved_prompt, model_override = await _resolve_queue_runtime_prompt(
+        deps,
+        item=item,
+        channel_id="C123",
+        thread_ts="123.456",
+        prompt="Write the following content to notes/release.md exactly as-is:\n((draft))",
+    )
+
+    assert (
+        resolved_prompt
+        == "Write the following content to notes/release.md exactly as-is:\nline one\nline two"
+    )
+    assert model_override is None
+
+
+@pytest.mark.asyncio
 async def test_resolve_queue_runtime_prompt_supports_absolute_output_references() -> None:
     """Runtime prompt substitutions should resolve prior outputs by authored queue position."""
     deps = SimpleNamespace(
