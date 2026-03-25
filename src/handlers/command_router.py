@@ -3,7 +3,7 @@
 import os
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from loguru import logger as app_logger
@@ -16,7 +16,9 @@ from src.codex.approval_bridge import (
 )
 from src.codex.capabilities import is_likely_plan_content
 from src.config import PLANS_DIR, config
-from src.database.models import Session
+from src.database.models import Session, WorkspaceLease
+from src.git.service import GitService
+from src.git.workspace_manager import PreparedWorkspace, WorkspaceLeaseError, WorkspaceManager
 from src.question.manager import QuestionManager
 from src.utils.execution_scope import build_session_scope
 
@@ -185,6 +187,82 @@ def _append_assistant_context(state: _ConversationState, msg: Any) -> None:
         state.accumulated_context += msg.content
 
 
+def _append_workspace_notes(result: Any, notes: list[str]) -> Any:
+    """Append workspace lifecycle notes to the result output and detailed output."""
+    filtered_notes = [note.strip() for note in notes if note and note.strip()]
+    if not filtered_notes:
+        return result
+
+    note_block = "\n".join(f"- {note}" for note in filtered_notes)
+    existing_output = (result.output or "").strip()
+    if existing_output:
+        result.output = f"{existing_output}\n\nWorkspace Notes\n{note_block}"
+    else:
+        result.output = f"Workspace Notes\n{note_block}"
+
+    detailed_output = (result.detailed_output or "").strip()
+    if detailed_output:
+        result.detailed_output = f"{detailed_output}\n\nWorkspace Notes\n{note_block}"
+    return result
+
+
+def _build_auto_worktree_finalize_prompt(lease: WorkspaceLease) -> str:
+    """Build a follow-up prompt that converts dirty workspace changes into one commit."""
+    target_branch = lease.target_branch or "the target branch"
+    return (
+        "You are finalizing changes from an isolated auto worktree.\n"
+        f"- Auto worktree branch: `{lease.worktree_name}`\n"
+        f"- Target branch for reintegration: `{target_branch}`\n\n"
+        "Review the current git status. If the changes should be kept, stage only the intended "
+        "files and create one commit with a concise message. If there is nothing worth keeping, "
+        "clean the working tree and explain why. Run the most relevant tests you can identify "
+        "before committing, and summarize what you verified."
+    )
+
+
+def _build_auto_worktree_conflict_prompt(lease: WorkspaceLease, conflict_files: list[str]) -> str:
+    """Build a follow-up prompt for resolving merge conflicts in the target worktree."""
+    conflict_summary = "\n".join(f"- {path}" for path in conflict_files[:20]) or "- (unknown)"
+    return (
+        "A raw git merge reported conflicts while reintegrating an auto worktree.\n"
+        f"- Source branch: `{lease.worktree_name}`\n"
+        f"- Target branch: `{lease.target_branch or 'unknown'}`\n"
+        "- Resolve all unmerged files in this target worktree.\n"
+        "- Preserve the intended behavior from both sides of the merge.\n"
+        "- Run the most relevant tests you can identify.\n"
+        "- Stage the resolutions and complete the merge commit.\n\n"
+        "Current unmerged files:\n"
+        f"{conflict_summary}"
+    )
+
+
+def _build_untracked_prepared_workspace(
+    *,
+    session: Session,
+    channel_id: str,
+    thread_ts: Optional[str],
+    session_scope: str,
+    execution_id: str,
+) -> PreparedWorkspace:
+    """Build a direct-workspace fallback when tests provide a lightweight DB stub."""
+    return PreparedWorkspace(
+        lease=WorkspaceLease(
+            session_id=session.id or 0,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            session_scope=session_scope,
+            execution_id=execution_id,
+            leased_root=session.working_directory,
+            leased_cwd=session.working_directory,
+            base_cwd=session.working_directory,
+            lease_kind="direct",
+            status="active",
+        ),
+        session=session,
+        persist_session_ids=True,
+    )
+
+
 async def _post_or_auto_answer_question(
     *,
     backend: str,
@@ -250,6 +328,266 @@ async def _request_plan_approval(
         slack_client=slack_client,
         plan_file_path=plan_file_path,
     )
+
+
+async def _run_workspace_follow_up(
+    *,
+    backend: str,
+    deps: Any,
+    session: Session,
+    prompt: str,
+    channel_id: str,
+    thread_ts: Optional[str],
+    session_scope: str,
+    execution_id: str,
+    on_chunk: Any,
+    slack_client: Any,
+    user_id: Optional[str],
+    logger: Any,
+    auto_answer_questions: bool,
+    auto_approve_permissions: bool,
+    pause_on_questions: bool,
+) -> Any:
+    """Run a non-persistent follow-up turn inside an already selected workspace."""
+    follow_up_session = replace(session)
+    if backend == "codex":
+        follow_up_session.permission_mode = "default"
+        return await _execute_codex_backend(
+            deps=deps,
+            session=follow_up_session,
+            prompt=prompt,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            session_scope=session_scope,
+            execution_id=execution_id,
+            on_chunk=on_chunk,
+            slack_client=slack_client,
+            user_id=user_id,
+            logger=logger,
+            persist_session_ids=False,
+            auto_answer_questions=auto_answer_questions,
+            auto_approve_permissions=auto_approve_permissions,
+            pause_on_questions=pause_on_questions,
+            on_plan_approved=None,
+            on_interaction_resumed=None,
+        )
+
+    follow_up_session.permission_mode = config.DEFAULT_BYPASS_MODE
+    return await _execute_claude_backend(
+        deps=deps,
+        session=follow_up_session,
+        prompt=prompt,
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        session_scope=session_scope,
+        execution_id=execution_id,
+        on_chunk=on_chunk,
+        slack_client=slack_client,
+        user_id=user_id,
+        logger=logger,
+        persist_session_ids=False,
+        auto_answer_questions=auto_answer_questions,
+        auto_approve_permissions=auto_approve_permissions,
+        pause_on_questions=pause_on_questions,
+        on_plan_approved=None,
+        on_interaction_resumed=None,
+    )
+
+
+async def _reintegrate_auto_worktree(
+    *,
+    deps: Any,
+    backend: str,
+    prepared_workspace: PreparedWorkspace,
+    result: Any,
+    channel_id: str,
+    thread_ts: Optional[str],
+    session_scope: str,
+    execution_id: str,
+    on_chunk: Any,
+    slack_client: Any,
+    user_id: Optional[str],
+    logger: Any,
+    auto_answer_questions: bool,
+    auto_approve_permissions: bool,
+    pause_on_questions: bool,
+) -> tuple[Any, str, list[str]]:
+    """Finalize and, when safe, reintegrate an auto worktree back into its target branch."""
+    lease = prepared_workspace.lease
+    workspace_manager = WorkspaceManager(
+        db=deps.db,
+        claude_executor=deps.executor,
+        codex_executor=deps.codex_executor,
+        git_service=GitService(),
+    )
+    notes = [f"Execution used auto worktree `{lease.leased_cwd}`."]
+    git_service = workspace_manager.git_service
+
+    try:
+        worktree_status = await git_service.get_status(lease.leased_root)
+    except Exception as exc:
+        notes.append(
+            f"Auto worktree `{lease.leased_root}` was kept because its status could not be read: {exc}"
+        )
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+
+    if not worktree_status.has_changes():
+        try:
+            cleanup_note = await workspace_manager.cleanup_auto_worktree(lease)
+        except Exception as exc:
+            notes.append(
+                f"Auto worktree `{lease.leased_root}` was clean, but cleanup failed: {exc}"
+            )
+            return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+        if cleanup_note:
+            notes.append(cleanup_note)
+        return _append_workspace_notes(result, notes), "clean-noop", notes
+
+    if not result.success:
+        notes.append(
+            f"Auto worktree `{lease.leased_root}` was kept because the execution failed with local changes."
+        )
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+
+    finalize_result = await _run_workspace_follow_up(
+        backend=backend,
+        deps=deps,
+        session=replace(
+            prepared_workspace.session,
+            working_directory=lease.leased_cwd,
+            claude_session_id=result.session_id if backend == "claude" else None,
+            codex_session_id=result.session_id if backend == "codex" else None,
+        ),
+        prompt=_build_auto_worktree_finalize_prompt(lease),
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        session_scope=f"{session_scope}:finalize:{execution_id}",
+        execution_id=f"{execution_id}-finalize",
+        on_chunk=on_chunk,
+        slack_client=slack_client,
+        user_id=user_id,
+        logger=logger,
+        auto_answer_questions=auto_answer_questions,
+        auto_approve_permissions=auto_approve_permissions,
+        pause_on_questions=pause_on_questions,
+    )
+    if finalize_result.output:
+        result.output = "\n\n".join(
+            part for part in [result.output, "Finalize Output", finalize_result.output] if part
+        )
+    if not finalize_result.success:
+        notes.append(f"Auto worktree `{lease.leased_root}` was kept because finalization failed.")
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+
+    post_finalize_status = await git_service.get_status(lease.leased_root)
+    if post_finalize_status.has_changes():
+        notes.append(
+            f"Auto worktree `{lease.leased_root}` was kept because finalization did not leave a clean tree."
+        )
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+
+    if not lease.target_worktree_path or not lease.worktree_name:
+        notes.append(
+            f"Auto worktree `{lease.leased_root}` was kept because merge metadata is incomplete."
+        )
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+
+    active_target_lease = await deps.db.get_active_workspace_lease_by_root(
+        lease.target_worktree_path
+    )
+    if active_target_lease and active_target_lease.execution_id != lease.execution_id:
+        notes.append(
+            f"Auto worktree `{lease.leased_root}` is ready but target `{lease.target_worktree_path}` "
+            "is still leased by another execution."
+        )
+        return _append_workspace_notes(result, notes), "target_busy", notes
+
+    target_status = await git_service.get_status(lease.target_worktree_path)
+    if target_status.has_changes():
+        notes.append(
+            f"Auto worktree `{lease.leased_root}` was kept because target `{lease.target_worktree_path}` is dirty."
+        )
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+
+    merge_success, merge_message = await git_service.merge_branch(
+        lease.target_worktree_path,
+        lease.worktree_name,
+    )
+    if merge_success:
+        notes.append(f"Merged `{lease.worktree_name}` into `{lease.target_branch or 'target'}`.")
+        if merge_message:
+            notes.append(merge_message)
+        try:
+            cleanup_note = await workspace_manager.cleanup_auto_worktree(lease)
+        except Exception as exc:
+            notes.append(
+                f"Merge succeeded, but auto worktree cleanup failed for `{lease.leased_root}`: {exc}"
+            )
+            return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+        if cleanup_note:
+            notes.append(cleanup_note)
+        return _append_workspace_notes(result, notes), "merged", notes
+
+    conflict_files = await workspace_manager.get_unmerged_files(lease.target_worktree_path)
+    conflict_result = await _run_workspace_follow_up(
+        backend=backend,
+        deps=deps,
+        session=replace(
+            prepared_workspace.session,
+            working_directory=lease.target_worktree_path,
+            claude_session_id=None,
+            codex_session_id=None,
+        ),
+        prompt=_build_auto_worktree_conflict_prompt(lease, conflict_files),
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        session_scope=f"{session_scope}:merge:{execution_id}",
+        execution_id=f"{execution_id}-merge",
+        on_chunk=on_chunk,
+        slack_client=slack_client,
+        user_id=user_id,
+        logger=logger,
+        auto_answer_questions=auto_answer_questions,
+        auto_approve_permissions=auto_approve_permissions,
+        pause_on_questions=pause_on_questions,
+    )
+    if conflict_result.output:
+        result.output = "\n\n".join(
+            part for part in [result.output, "Merge Resolve Output", conflict_result.output] if part
+        )
+    if not conflict_result.success:
+        notes.append(
+            f"Merge conflicts in `{lease.target_worktree_path}` were not resolved automatically."
+        )
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+
+    remaining_conflicts = await workspace_manager.get_unmerged_files(lease.target_worktree_path)
+    if remaining_conflicts:
+        notes.append(
+            f"Merge conflicts remain in target `{lease.target_worktree_path}`; kept auto worktree `{lease.leased_root}`."
+        )
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+
+    resolved_target_status = await git_service.get_status(lease.target_worktree_path)
+    if resolved_target_status.has_changes():
+        notes.append(
+            f"Target `{lease.target_worktree_path}` still has unstaged or uncommitted changes after merge resolution."
+        )
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+
+    notes.append(
+        f"Merged `{lease.worktree_name}` into `{lease.target_branch or 'target'}` after conflict resolution."
+    )
+    try:
+        cleanup_note = await workspace_manager.cleanup_auto_worktree(lease)
+    except Exception as exc:
+        notes.append(
+            f"Merge succeeded, but auto worktree cleanup failed for `{lease.leased_root}`: {exc}"
+        )
+        return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+    if cleanup_note:
+        notes.append(cleanup_note)
+    return _append_workspace_notes(result, notes), "merged", notes
 
 
 async def _execute_codex_backend(
@@ -485,7 +823,10 @@ async def _execute_codex_backend(
 
     result = await run_codex_turn(first_prompt, initial_resume_session_id)
 
-    if question_pause_requested or _result_field(result, "error", "") == _QUEUE_PAUSE_ON_QUESTION_SIGNAL:
+    if (
+        question_pause_requested
+        or _result_field(result, "error", "") == _QUEUE_PAUSE_ON_QUESTION_SIGNAL
+    ):
         result.success = False
         result.error = _QUEUE_PAUSE_ON_QUESTION_SIGNAL
         result.paused_on_question = True
@@ -606,7 +947,9 @@ async def _execute_claude_backend(
     question_pause_requested = False
 
     async def wrapped_on_chunk(msg: Any) -> None:
-        if msg.tool_activities and (slack_client is not None or auto_answer_questions or pause_on_questions):
+        if msg.tool_activities and (
+            slack_client is not None or auto_answer_questions or pause_on_questions
+        ):
             for tool in msg.tool_activities:
                 if tool.name != "AskUserQuestion":
                     continue
@@ -709,7 +1052,11 @@ async def _execute_claude_backend(
             turn_execution_id=f"{execution_id}-q{state.question_count}",
         )
 
-    if state.question_count >= max_questions and state.pending_question and not question_pause_requested:
+    if (
+        state.question_count >= max_questions
+        and state.pending_question
+        and not question_pause_requested
+    ):
         result.output = (
             (state.accumulated_context or result.output)
             + f"\n\n_Reached maximum question limit ({max_questions}). Please start a new conversation._"
@@ -798,46 +1145,119 @@ async def execute_for_session(
     """Execute a prompt with the correct backend and persist resumed session IDs."""
     backend = resolve_backend_for_session(session)
     session_scope = session_scope_override or build_session_scope(channel_id, thread_ts)
+    workspace_manager = WorkspaceManager(
+        db=deps.db,
+        claude_executor=deps.executor,
+        codex_executor=deps.codex_executor,
+        git_service=GitService(),
+    )
+    prepared_workspace: Optional[PreparedWorkspace] = None
+    result: Any = None
+    release_status = "released"
+    merge_status: Optional[str] = None
+    lease_tracking_enabled = True
 
-    if backend == "codex":
-        result = await _execute_codex_backend(
-            deps=deps,
+    try:
+        prepared_workspace = await workspace_manager.prepare_workspace(
             session=session,
-            prompt=prompt,
             channel_id=channel_id,
             thread_ts=thread_ts,
             session_scope=session_scope,
             execution_id=execution_id,
-            on_chunk=on_chunk,
-            slack_client=slack_client,
-            user_id=user_id,
-            logger=logger,
-            persist_session_ids=persist_session_ids,
-            auto_answer_questions=auto_answer_questions,
-            auto_approve_permissions=auto_approve_permissions,
-            pause_on_questions=pause_on_questions,
-            on_plan_approved=on_plan_approved,
-            on_interaction_resumed=on_interaction_resumed,
         )
-        return CommandRouteResult(backend=backend, result=result)
+    except AttributeError:
+        prepared_workspace = _build_untracked_prepared_workspace(
+            session=session,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            session_scope=session_scope,
+            execution_id=execution_id,
+        )
+        lease_tracking_enabled = False
+    except WorkspaceLeaseError:
+        raise
 
-    result = await _execute_claude_backend(
-        deps=deps,
-        session=session,
-        prompt=prompt,
-        channel_id=channel_id,
-        thread_ts=thread_ts,
-        session_scope=session_scope,
-        execution_id=execution_id,
-        on_chunk=on_chunk,
-        slack_client=slack_client,
-        user_id=user_id,
-        logger=logger,
-        persist_session_ids=persist_session_ids,
-        auto_answer_questions=auto_answer_questions,
-        auto_approve_permissions=auto_approve_permissions,
-        pause_on_questions=pause_on_questions,
-        on_plan_approved=on_plan_approved,
-        on_interaction_resumed=on_interaction_resumed,
-    )
-    return CommandRouteResult(backend=backend, result=result)
+    effective_session = prepared_workspace.session
+    effective_persist_session_ids = persist_session_ids and prepared_workspace.persist_session_ids
+
+    try:
+        if backend == "codex":
+            result = await _execute_codex_backend(
+                deps=deps,
+                session=effective_session,
+                prompt=prompt,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                session_scope=session_scope,
+                execution_id=execution_id,
+                on_chunk=on_chunk,
+                slack_client=slack_client,
+                user_id=user_id,
+                logger=logger,
+                persist_session_ids=effective_persist_session_ids,
+                auto_answer_questions=auto_answer_questions,
+                auto_approve_permissions=auto_approve_permissions,
+                pause_on_questions=pause_on_questions,
+                on_plan_approved=on_plan_approved,
+                on_interaction_resumed=on_interaction_resumed,
+            )
+        else:
+            result = await _execute_claude_backend(
+                deps=deps,
+                session=effective_session,
+                prompt=prompt,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                session_scope=session_scope,
+                execution_id=execution_id,
+                on_chunk=on_chunk,
+                slack_client=slack_client,
+                user_id=user_id,
+                logger=logger,
+                persist_session_ids=effective_persist_session_ids,
+                auto_answer_questions=auto_answer_questions,
+                auto_approve_permissions=auto_approve_permissions,
+                pause_on_questions=pause_on_questions,
+                on_plan_approved=on_plan_approved,
+                on_interaction_resumed=on_interaction_resumed,
+            )
+
+        if prepared_workspace.uses_auto_worktree:
+            result, merge_status, _notes = await _reintegrate_auto_worktree(
+                deps=deps,
+                backend=backend,
+                prepared_workspace=prepared_workspace,
+                result=result,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                session_scope=session_scope,
+                execution_id=execution_id,
+                on_chunk=on_chunk,
+                slack_client=slack_client,
+                user_id=user_id,
+                logger=logger,
+                auto_answer_questions=auto_answer_questions,
+                auto_approve_permissions=auto_approve_permissions,
+                pause_on_questions=pause_on_questions,
+            )
+            if merge_status in {"merged", "clean-noop"}:
+                release_status = "merged"
+            elif merge_status == "target_busy":
+                release_status = "released"
+            else:
+                release_status = "needs_manual_attention"
+        return CommandRouteResult(backend=backend, result=result)
+    finally:
+        if prepared_workspace is not None and lease_tracking_enabled:
+            final_status = release_status
+            if result is not None and not prepared_workspace.uses_auto_worktree:
+                final_status = "released"
+            if prepared_workspace.uses_auto_worktree and merge_status is None:
+                final_status = (
+                    "needs_manual_attention" if result is None or not result.success else "released"
+                )
+            await workspace_manager.release_workspace(
+                execution_id,
+                status=final_status,
+                merge_status=merge_status,
+            )

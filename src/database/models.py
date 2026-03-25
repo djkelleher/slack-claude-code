@@ -171,6 +171,57 @@ class QueueItem:
 
 
 @dataclass
+class WorkspaceLease:
+    """Active or historical workspace lease for one execution."""
+
+    id: Optional[int] = None
+    session_id: int = 0
+    channel_id: str = ""
+    thread_ts: Optional[str] = None
+    session_scope: str = ""
+    execution_id: str = ""
+    repo_root: Optional[str] = None
+    target_worktree_path: Optional[str] = None
+    target_branch: Optional[str] = None
+    leased_root: str = ""
+    leased_cwd: str = ""
+    base_cwd: str = ""
+    relative_subdir: Optional[str] = None
+    lease_kind: str = "direct"  # direct, worktree
+    worktree_name: Optional[str] = None
+    worktree_origin: Optional[str] = None
+    merge_status: Optional[str] = None
+    status: str = "active"  # active, released, abandoned, merged, needs_manual_attention
+    created_at: datetime = field(default_factory=datetime.now)
+    released_at: Optional[datetime] = None
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "WorkspaceLease":
+        return cls(
+            id=row[0],
+            session_id=row[1],
+            channel_id=row[2],
+            thread_ts=row[3],
+            session_scope=row[4],
+            execution_id=row[5],
+            repo_root=row[6],
+            target_worktree_path=row[7],
+            target_branch=row[8],
+            leased_root=row[9],
+            leased_cwd=row[10],
+            base_cwd=row[11],
+            relative_subdir=row[12],
+            lease_kind=row[13],
+            worktree_name=row[14],
+            worktree_origin=row[15],
+            merge_status=row[16],
+            status=row[17],
+            created_at=datetime.fromisoformat(row[18]) if row[18] else datetime.now(),
+            released_at=datetime.fromisoformat(row[19]) if row[19] else None,
+        )
+
+
+@dataclass
 class UploadedFile:
     """File uploaded from Slack and stored locally."""
 

@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.config import config
-from src.database.models import Session
+from src.database.models import Session, WorkspaceLease
+from src.git.workspace_manager import PreparedWorkspace
 from src.handlers.command_router import (
     _build_claude_plan_prompt,
     execute_for_session,
@@ -115,6 +116,102 @@ class TestCommandRouter:
         deps.executor.execute.assert_not_called()
         deps.db.update_session_codex_id.assert_awaited_once_with("C123", "123.4", "codex-new")
         deps.db.update_session_claude_id.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_for_session_uses_prepared_auto_worktree_and_skips_persistence(self):
+        """Auto-worktree executions should run in the leased cwd without persisting IDs."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                get_active_workspace_lease_by_root=AsyncMock(return_value=None),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+        )
+        deps.executor.execute.return_value = SimpleNamespace(
+            session_id="claude-auto",
+            success=True,
+            output="done",
+            detailed_output="",
+        )
+
+        session = Session(
+            id=21,
+            channel_id="C123",
+            model="opus",
+            working_directory="/repo",
+            claude_session_id="claude-old",
+        )
+        prepared = PreparedWorkspace(
+            lease=WorkspaceLease(
+                session_id=21,
+                channel_id="C123",
+                session_scope="C123",
+                execution_id="exec-auto",
+                repo_root="/repo",
+                target_worktree_path="/repo",
+                target_branch="main",
+                leased_root="/repo-worktrees/auto",
+                leased_cwd="/repo-worktrees/auto",
+                base_cwd="/repo",
+                lease_kind="worktree",
+                worktree_name="slack-auto/exec-auto",
+                status="active",
+            ),
+            session=Session(
+                id=21,
+                channel_id="C123",
+                model="opus",
+                working_directory="/repo-worktrees/auto",
+            ),
+            persist_session_ids=False,
+        )
+
+        with (
+            patch(
+                "src.handlers.command_router.WorkspaceManager.prepare_workspace",
+                new=AsyncMock(return_value=prepared),
+            ),
+            patch(
+                "src.handlers.command_router.WorkspaceManager.release_workspace",
+                new=AsyncMock(),
+            ) as mock_release,
+            patch(
+                "src.handlers.command_router._reintegrate_auto_worktree",
+                new=AsyncMock(
+                    return_value=(
+                        SimpleNamespace(
+                            session_id="claude-auto",
+                            success=True,
+                            output="done",
+                            detailed_output="",
+                        ),
+                        "merged",
+                        ["Merged successfully."],
+                    )
+                ),
+            ),
+        ):
+            routed = await execute_for_session(
+                deps=deps,
+                session=session,
+                prompt="hello",
+                channel_id="C123",
+                thread_ts=None,
+                execution_id="exec-auto",
+            )
+
+        assert routed.backend == "claude"
+        assert (
+            deps.executor.execute.await_args.kwargs["working_directory"] == "/repo-worktrees/auto"
+        )
+        deps.db.update_session_claude_id.assert_not_called()
+        mock_release.assert_awaited_once_with(
+            "exec-auto",
+            status="merged",
+            merge_status="merged",
+        )
 
     @pytest.mark.asyncio
     async def test_execute_for_session_claude_skips_id_persistence_when_disabled(self):

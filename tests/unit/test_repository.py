@@ -239,6 +239,89 @@ class TestSessionOperations:
 
         assert await db_repo.get_command_detailed_output(command.id) == "full detailed output"
 
+
+class TestWorkspaceLeaseOperations:
+    """Tests for workspace lease persistence."""
+
+    @pytest.mark.asyncio
+    async def test_create_and_release_workspace_lease(self, db_repo):
+        """Workspace leases should persist and release cleanly."""
+        session = await db_repo.get_or_create_session("C123LEASE", None, "/repo")
+
+        lease = await db_repo.create_workspace_lease(
+            session_id=session.id,
+            channel_id="C123LEASE",
+            thread_ts=None,
+            session_scope="C123LEASE",
+            execution_id="exec-lease-1",
+            repo_root="/repo",
+            target_worktree_path="/repo",
+            target_branch="main",
+            leased_root="/repo",
+            leased_cwd="/repo",
+            base_cwd="/repo",
+            relative_subdir=None,
+            lease_kind="direct",
+        )
+
+        active = await db_repo.get_active_workspace_lease_by_root("/repo")
+        assert active is not None
+        assert active.id == lease.id
+
+        released = await db_repo.release_workspace_lease(
+            "exec-lease-1",
+            status="merged",
+            merge_status="merged",
+        )
+        assert released is True
+
+        active_after_release = await db_repo.get_active_workspace_lease_by_root("/repo")
+        assert active_after_release is None
+
+        stored = await db_repo.get_workspace_lease_by_execution("exec-lease-1")
+        assert stored is not None
+        assert stored.status == "merged"
+        assert stored.merge_status == "merged"
+        assert stored.released_at is not None
+
+    @pytest.mark.asyncio
+    async def test_workspace_leases_enforce_one_active_root(self, db_repo):
+        """Only one active lease can own a leased root at a time."""
+        session = await db_repo.get_or_create_session("C123LEASE", None, "/repo")
+
+        await db_repo.create_workspace_lease(
+            session_id=session.id,
+            channel_id="C123LEASE",
+            thread_ts=None,
+            session_scope="C123LEASE",
+            execution_id="exec-lease-1",
+            repo_root="/repo",
+            target_worktree_path="/repo",
+            target_branch="main",
+            leased_root="/repo",
+            leased_cwd="/repo",
+            base_cwd="/repo",
+            relative_subdir=None,
+            lease_kind="direct",
+        )
+
+        with pytest.raises(aiosqlite.IntegrityError):
+            await db_repo.create_workspace_lease(
+                session_id=session.id,
+                channel_id="C123LEASE",
+                thread_ts=None,
+                session_scope="C123LEASE",
+                execution_id="exec-lease-2",
+                repo_root="/repo",
+                target_worktree_path="/repo",
+                target_branch="main",
+                leased_root="/repo",
+                leased_cwd="/repo",
+                base_cwd="/repo",
+                relative_subdir=None,
+                lease_kind="direct",
+            )
+
     @pytest.mark.asyncio
     async def test_restore_channel_model_selections_returns_saved_models(self, db_repo):
         """restore_channel_model_selections returns persisted channel model selections."""

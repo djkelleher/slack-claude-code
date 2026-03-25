@@ -134,6 +134,31 @@ CREATE TABLE IF NOT EXISTS queue_scheduled_events (
     executed_at TIMESTAMP DEFAULT NULL
 );
 
+-- Workspace leases for concurrent execution isolation
+CREATE TABLE IF NOT EXISTS workspace_leases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
+    session_scope TEXT NOT NULL,
+    execution_id TEXT NOT NULL,
+    repo_root TEXT DEFAULT NULL,
+    target_worktree_path TEXT DEFAULT NULL,
+    target_branch TEXT DEFAULT NULL,
+    leased_root TEXT NOT NULL,
+    leased_cwd TEXT NOT NULL,
+    base_cwd TEXT NOT NULL,
+    relative_subdir TEXT DEFAULT NULL,
+    lease_kind TEXT NOT NULL DEFAULT 'direct',
+    worktree_name TEXT DEFAULT NULL,
+    worktree_origin TEXT DEFAULT NULL,
+    merge_status TEXT DEFAULT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    released_at TIMESTAMP DEFAULT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread
@@ -155,6 +180,12 @@ CREATE INDEX IF NOT EXISTS idx_notification_settings_channel ON notification_set
 CREATE INDEX IF NOT EXISTS idx_queue_controls_scope ON queue_controls(channel_id, thread_ts);
 CREATE INDEX IF NOT EXISTS idx_queue_scheduled_events_due ON queue_scheduled_events(status, execute_at);
 CREATE INDEX IF NOT EXISTS idx_queue_scheduled_events_scope ON queue_scheduled_events(channel_id, thread_ts, status);
+CREATE INDEX IF NOT EXISTS idx_workspace_leases_execution ON workspace_leases(execution_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_leases_scope ON workspace_leases(channel_id, thread_ts, status);
+CREATE INDEX IF NOT EXISTS idx_workspace_leases_repo ON workspace_leases(repo_root, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_leases_active_root
+ON workspace_leases(leased_root)
+WHERE status = 'active' AND released_at IS NULL;
 """
 
 
@@ -203,6 +234,48 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                executed_at TIMESTAMP DEFAULT NULL
            )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS workspace_leases (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               session_id INTEGER NOT NULL,
+               channel_id TEXT NOT NULL,
+               thread_ts TEXT DEFAULT NULL,
+               session_scope TEXT NOT NULL,
+               execution_id TEXT NOT NULL,
+               repo_root TEXT DEFAULT NULL,
+               target_worktree_path TEXT DEFAULT NULL,
+               target_branch TEXT DEFAULT NULL,
+               leased_root TEXT NOT NULL,
+               leased_cwd TEXT NOT NULL,
+               base_cwd TEXT NOT NULL,
+               relative_subdir TEXT DEFAULT NULL,
+               lease_kind TEXT NOT NULL DEFAULT 'direct',
+               worktree_name TEXT DEFAULT NULL,
+               worktree_origin TEXT DEFAULT NULL,
+               merge_status TEXT DEFAULT NULL,
+               status TEXT NOT NULL DEFAULT 'active',
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               released_at TIMESTAMP DEFAULT NULL,
+               FOREIGN KEY (session_id) REFERENCES sessions(id)
+           )"""
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workspace_leases_execution "
+        "ON workspace_leases(execution_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workspace_leases_scope "
+        "ON workspace_leases(channel_id, thread_ts, status)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workspace_leases_repo "
+        "ON workspace_leases(repo_root, status)"
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_leases_active_root "
+        "ON workspace_leases(leased_root) "
+        "WHERE status = 'active' AND released_at IS NULL"
     )
 
     # Check if model column exists in sessions table

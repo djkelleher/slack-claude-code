@@ -16,6 +16,7 @@ from .models import (
     QueueScheduledEvent,
     Session,
     UploadedFile,
+    WorkspaceLease,
 )
 
 # Default timeout for database operations (seconds)
@@ -38,6 +39,11 @@ class DatabaseRepository:
                       model, added_dirs, codex_session_id, sandbox_mode, approval_mode"""
     _QUEUE_SCHEDULED_EVENT_SELECT = """id, channel_id, thread_ts, action, execute_at,
                                    status, error_message, created_at, executed_at"""
+    _WORKSPACE_LEASE_SELECT = """id, session_id, channel_id, thread_ts, session_scope,
+                              execution_id, repo_root, target_worktree_path, target_branch,
+                              leased_root, leased_cwd, base_cwd, relative_subdir, lease_kind,
+                              worktree_name, worktree_origin, merge_status, status,
+                              created_at, released_at"""
 
     def __init__(self, db_path: str, timeout: float = DB_TIMEOUT):
         self.db_path = db_path
@@ -690,6 +696,196 @@ class DatabaseRepository:
             )
             await db.commit()
             return cursor.rowcount > 0
+
+    # Workspace lease operations
+    async def create_workspace_lease(
+        self,
+        *,
+        session_id: int,
+        channel_id: str,
+        thread_ts: Optional[str],
+        session_scope: str,
+        execution_id: str,
+        repo_root: Optional[str],
+        target_worktree_path: Optional[str],
+        target_branch: Optional[str],
+        leased_root: str,
+        leased_cwd: str,
+        base_cwd: str,
+        relative_subdir: Optional[str],
+        lease_kind: str,
+        worktree_name: Optional[str] = None,
+        worktree_origin: Optional[str] = None,
+        merge_status: Optional[str] = None,
+        status: str = "active",
+    ) -> WorkspaceLease:
+        """Create and return a workspace lease row."""
+        normalized_thread_ts = self._normalize_thread_ts(thread_ts)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        async with self._transact() as db:
+            cursor = await db.execute(
+                """INSERT INTO workspace_leases (
+                       session_id, channel_id, thread_ts, session_scope, execution_id,
+                       repo_root, target_worktree_path, target_branch, leased_root, leased_cwd,
+                       base_cwd, relative_subdir, lease_kind, worktree_name, worktree_origin,
+                       merge_status, status, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    channel_id,
+                    normalized_thread_ts,
+                    session_scope,
+                    execution_id,
+                    repo_root,
+                    target_worktree_path,
+                    target_branch,
+                    leased_root,
+                    leased_cwd,
+                    base_cwd,
+                    relative_subdir,
+                    lease_kind,
+                    worktree_name,
+                    worktree_origin,
+                    merge_status,
+                    status,
+                    now_iso,
+                ),
+            )
+            lease_id = cursor.lastrowid
+            if lease_id is None:
+                raise RuntimeError(f"Failed to create workspace lease for execution {execution_id}")
+            cursor = await db.execute(
+                f"SELECT {self._WORKSPACE_LEASE_SELECT} FROM workspace_leases WHERE id = ?",
+                (lease_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError(f"Failed to load workspace lease {lease_id}")
+            return WorkspaceLease.from_row(row)
+
+    async def get_workspace_lease_by_execution(self, execution_id: str) -> Optional[WorkspaceLease]:
+        """Get the most recent workspace lease for an execution."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._WORKSPACE_LEASE_SELECT}
+                    FROM workspace_leases
+                    WHERE execution_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1""",
+                (execution_id,),
+            )
+            row = await cursor.fetchone()
+            return WorkspaceLease.from_row(row) if row else None
+
+    async def get_active_workspace_lease_by_root(
+        self, leased_root: str
+    ) -> Optional[WorkspaceLease]:
+        """Return the active workspace lease for a leased root, if any."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._WORKSPACE_LEASE_SELECT}
+                    FROM workspace_leases
+                    WHERE leased_root = ? AND status = 'active' AND released_at IS NULL
+                    ORDER BY id DESC
+                    LIMIT 1""",
+                (leased_root,),
+            )
+            row = await cursor.fetchone()
+            return WorkspaceLease.from_row(row) if row else None
+
+    async def list_active_workspace_leases(
+        self,
+        repo_root: Optional[str] = None,
+    ) -> list[WorkspaceLease]:
+        """Return active workspace leases, optionally filtered by repo root."""
+        async with self._get_connection() as db:
+            if repo_root is None:
+                cursor = await db.execute(
+                    f"""SELECT {self._WORKSPACE_LEASE_SELECT}
+                        FROM workspace_leases
+                        WHERE status = 'active' AND released_at IS NULL
+                        ORDER BY created_at ASC, id ASC"""
+                )
+            else:
+                cursor = await db.execute(
+                    f"""SELECT {self._WORKSPACE_LEASE_SELECT}
+                        FROM workspace_leases
+                        WHERE status = 'active' AND released_at IS NULL AND repo_root = ?
+                        ORDER BY created_at ASC, id ASC""",
+                    (repo_root,),
+                )
+            rows = await cursor.fetchall()
+            return [WorkspaceLease.from_row(row) for row in rows]
+
+    async def update_workspace_lease(
+        self,
+        execution_id: str,
+        *,
+        leased_cwd: Optional[str] = None,
+        leased_root: Optional[str] = None,
+        worktree_origin: Optional[str] = None,
+        merge_status: Optional[str] = None,
+        status: Optional[str] = None,
+        released: bool = False,
+    ) -> bool:
+        """Update mutable workspace lease fields by execution ID."""
+        updates: list[str] = []
+        params: list[object] = []
+
+        if leased_cwd is not None:
+            updates.append("leased_cwd = ?")
+            params.append(leased_cwd)
+        if leased_root is not None:
+            updates.append("leased_root = ?")
+            params.append(leased_root)
+        if worktree_origin is not None:
+            updates.append("worktree_origin = ?")
+            params.append(worktree_origin)
+        if merge_status is not None:
+            updates.append("merge_status = ?")
+            params.append(merge_status)
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if released:
+            updates.append("released_at = ?")
+            params.append(datetime.now(timezone.utc).isoformat())
+
+        if not updates:
+            return False
+
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "UPDATE workspace_leases SET " + ", ".join(updates) + " WHERE execution_id = ?",
+                (*params, execution_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def release_workspace_lease(
+        self,
+        execution_id: str,
+        *,
+        status: str = "released",
+        merge_status: Optional[str] = None,
+    ) -> bool:
+        """Mark a workspace lease released with optional merge status."""
+        return await self.update_workspace_lease(
+            execution_id,
+            status=status,
+            merge_status=merge_status,
+            released=True,
+        )
+
+    async def mark_workspace_lease_abandoned(
+        self, execution_id: str, *, merge_status: Optional[str] = None
+    ) -> bool:
+        """Mark a workspace lease abandoned."""
+        return await self.release_workspace_lease(
+            execution_id,
+            status="abandoned",
+            merge_status=merge_status,
+        )
 
     # Queue operations
     async def add_to_queue(
