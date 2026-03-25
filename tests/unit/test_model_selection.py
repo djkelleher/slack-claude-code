@@ -1,15 +1,21 @@
 """Unit tests for shared model selection helpers."""
 
 from src.utils.model_selection import (
+    apply_effort_to_model,
     backend_label_for_model,
     codex_model_validation_error,
+    effort_display_name,
     get_all_model_options,
     get_claude_model_options,
     get_codex_model_options,
+    get_effort_options,
     model_display_name,
     normalize_current_model,
+    normalize_effort_name,
     normalize_model_name,
     resolve_model_selection_action,
+    split_model_and_effort,
+    split_model_input_and_effort,
 )
 
 
@@ -119,7 +125,7 @@ class TestModelOptionsCatalog:
         assert any(option["name"] == "sonnet" for option in claude_options)
         assert any(option["name"] == "gpt-5.3-codex" for option in codex_options)
         assert any(option["name"] == "gpt-5.4" for option in codex_options)
-        assert any(option["name"] == "gpt-5.3-codex-xhigh" for option in codex_options)
+        assert not any(option["name"] == "gpt-5.3-codex-xhigh" for option in codex_options)
 
     def test_get_all_model_options_combines_backends(self):
         """Combined options should contain both Claude and Codex entries."""
@@ -128,8 +134,8 @@ class TestModelOptionsCatalog:
         assert "opus-4-6" in names
         assert "opus-4-5" in names
         assert "sonnet-4-5" in names
-        assert "gpt-5.4-medium" in names
-        assert "gpt-5.2-codex-high" in names
+        assert "gpt-5.4" in names
+        assert "gpt-5.2-codex" in names
 
     def test_normalizes_new_codex_frontier_model(self):
         """New Codex model IDs should normalize directly."""
@@ -142,12 +148,59 @@ class TestResolveModelSelectionAction:
 
     def test_resolves_known_action_key_with_display(self):
         """Known picker action IDs should return canonical value and display name."""
-        model_value, display_name = resolve_model_selection_action("gpt-5.3-codex-xhigh")
-        assert model_value == "gpt-5.3-codex-xhigh"
-        assert display_name == "GPT-5.3 Codex (Extra-High)"
+        model_value, display_name = resolve_model_selection_action("gpt-5.3-codex")
+        assert model_value == "gpt-5.3-codex"
+        assert display_name == "GPT-5.3 Codex"
 
     def test_resolves_unknown_action_key_via_normalizer(self):
         """Unknown picker action IDs should fall back to model normalization."""
         model_value, display_name = resolve_model_selection_action("codex-extra-high")
         assert model_value == "gpt-5.3-codex-xhigh"
         assert display_name == "GPT-5.3 Codex (Extra-High)"
+
+
+class TestEffortHelpers:
+    """Tests for effort parsing/apply helpers."""
+
+    def test_splits_model_input_with_space_effort(self):
+        model_text, effort = split_model_input_and_effort("claude-opus-4-6 high")
+        assert model_text == "claude-opus-4-6"
+        assert effort == "high"
+
+    def test_splits_model_input_without_effort(self):
+        model_text, effort = split_model_input_and_effort("gpt-5.4")
+        assert model_text == "gpt-5.4"
+        assert effort is None
+
+    def test_apply_effort_to_claude_default(self):
+        model_value, error = apply_effort_to_model(None, "max")
+        assert error is None
+        assert model_value == "claude-opus-4-6-max"
+
+    def test_apply_effort_to_codex_model(self):
+        model_value, error = apply_effort_to_model("gpt-5.4", "xhigh")
+        assert error is None
+        assert model_value == "gpt-5.4-xhigh"
+
+    def test_apply_invalid_effort_for_backend(self):
+        model_value, error = apply_effort_to_model("gpt-5.4", "auto")
+        assert model_value == "gpt-5.4"
+        assert error is not None
+
+    def test_split_model_and_effort_from_persisted_value(self):
+        base, effort = split_model_and_effort("claude-opus-4-6-high")
+        assert base == "claude-opus-4-6"
+        assert effort == "high"
+
+    def test_effort_display_name(self):
+        assert effort_display_name(None) == "Standard"
+        assert effort_display_name("extra-high") == "Extra-High"
+
+    def test_effort_options_include_standard(self):
+        options = get_effort_options()
+        assert options[0]["value"] == "none"
+        assert any(option["value"] == "xhigh" for option in options)
+
+    def test_normalize_effort_name_aliases(self):
+        assert normalize_effort_name("extra-high") == "xhigh"
+        assert normalize_effort_name("default") is None

@@ -202,7 +202,9 @@ async def test_model_command_stacks_label_above_dropdown():
 
     blocks = client.chat_postMessage.await_args.kwargs["blocks"]
     assert blocks[0]["type"] == "section"
-    assert blocks[0]["text"]["text"] == "*Select a model:*"
+    assert blocks[0]["text"]["text"] == "*Select model and effort:*"
     assert blocks[1]["type"] == "actions"
     assert blocks[1]["elements"][0]["type"] == "static_select"
     assert blocks[1]["elements"][0]["action_id"] == "select_model_menu"
+    assert blocks[1]["elements"][1]["type"] == "static_select"
+    assert blocks[1]["elements"][1]["action_id"] == "select_effort_menu"

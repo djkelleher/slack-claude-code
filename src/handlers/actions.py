@@ -24,10 +24,13 @@ from src.utils.formatters.command import error_message
 from src.utils.formatters.job import parallel_job_status, sequential_job_status
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.model_selection import (
+    apply_effort_to_model,
     codex_model_validation_error,
     model_display_name,
     normalize_model_name,
     resolve_model_selection_action,
+    split_model_and_effort,
+    split_model_input_and_effort,
 )
 
 from .base import CommandContext, HandlerDependencies
@@ -1152,16 +1155,15 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                             "action_id": "custom_model_input",
                             "placeholder": {
                                 "type": "plain_text",
-                                "text": "e.g., claude-sonnet-4-6[1m]",
+                                "text": "e.g., claude-sonnet-4-6[1m] high",
                             },
                         },
                         "label": {"type": "plain_text", "text": "Model ID"},
                         "hint": {
                             "type": "plain_text",
                             "text": (
-                                "Enter a model ID (or `default`; Codex supports "
-                                "-low/-medium/-high/-extra-high, Claude supports "
-                                "-low/-medium/-high/-max/-auto)"
+                                "Enter `<model> [effort]` (space-separated), e.g. "
+                                "`gpt-5.4 high` or `claude-opus-4-6 auto`"
                             ),
                         },
                     }
@@ -1192,7 +1194,17 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         if not model_name:
             return
 
-        model_value = normalize_model_name(model_name)
+        model_text, requested_effort = split_model_input_and_effort(model_name)
+        model_base = normalize_model_name(model_text) if model_text else None
+        model_value, effort_error = apply_effort_to_model(model_base, requested_effort)
+        if effort_error:
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text="Unsupported effort setting",
+                blocks=error_message(effort_error),
+            )
+            return
         validation_error = codex_model_validation_error(model_value)
         if validation_error:
             await client.chat_postMessage(
@@ -1229,6 +1241,11 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             channel_id = body["channel"]["id"]
             message = body.get("message", {})
             thread_ts = message.get("thread_ts")
+            session = await deps.db.get_or_create_session(
+                channel_id,
+                thread_ts=thread_ts,
+                default_cwd=config.DEFAULT_WORKING_DIR,
+            )
         else:
             # Extract model name from action_id (select_model_opus -> opus)
             model_name = action_id.replace("select_model_", "")
@@ -1243,7 +1260,16 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 message = body.get("message", {})
                 thread_ts = message.get("thread_ts")
 
-        model_value, display_name = resolve_model_selection_action(model_name)
+        model_base, display_name = resolve_model_selection_action(model_name)
+        model_value = model_base
+        if action_id == "select_model_menu":
+            _, current_effort = split_model_and_effort(session.model)
+            model_value, effort_error = apply_effort_to_model(model_base, current_effort)
+            if effort_error:
+                # If existing effort is incompatible with the new model backend,
+                # drop effort and keep the chosen model.
+                model_value = model_base
+            display_name = model_display_name(model_value)
 
         await _set_session_model_and_notify(
             deps=deps,
@@ -1254,6 +1280,46 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             model_value=model_value,
             display_name=display_name,
             log_prefix="Model",
+        )
+
+    @app.action("select_effort_menu")
+    async def handle_effort_menu_selection(ack, action, body, client, logger):
+        """Handle effort selection from static select menu."""
+        await ack()
+
+        selected = action.get("selected_option") or {}
+        effort_name = selected.get("value", "")
+        if not effort_name:
+            return
+
+        channel_id = body["channel"]["id"]
+        message = body.get("message", {})
+        thread_ts = message.get("thread_ts")
+        session = await deps.db.get_or_create_session(
+            channel_id,
+            thread_ts=thread_ts,
+            default_cwd=config.DEFAULT_WORKING_DIR,
+        )
+        current_model_base, _ = split_model_and_effort(session.model)
+        model_value, effort_error = apply_effort_to_model(current_model_base, effort_name)
+        if effort_error:
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text="Unsupported effort setting",
+                blocks=error_message(effort_error),
+            )
+            return
+
+        await _set_session_model_and_notify(
+            deps=deps,
+            client=client,
+            logger=logger,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            model_value=model_value,
+            display_name=model_display_name(model_value),
+            log_prefix="Effort",
         )
 
     @app.action("select_model_menu")
@@ -1269,8 +1335,17 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         channel_id = body["channel"]["id"]
         message = body.get("message", {})
         thread_ts = message.get("thread_ts")
-
-        model_value, display_name = resolve_model_selection_action(model_name)
+        session = await deps.db.get_or_create_session(
+            channel_id,
+            thread_ts=thread_ts,
+            default_cwd=config.DEFAULT_WORKING_DIR,
+        )
+        model_base, _ = resolve_model_selection_action(model_name)
+        _, current_effort = split_model_and_effort(session.model)
+        model_value, effort_error = apply_effort_to_model(model_base, current_effort)
+        if effort_error:
+            model_value = model_base
+        display_name = model_display_name(model_value)
         await _set_session_model_and_notify(
             deps=deps,
             client=client,

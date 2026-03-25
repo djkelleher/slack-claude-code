@@ -108,7 +108,7 @@ def test_register_actions_includes_worktree_buttons():
 
 
 @pytest.mark.asyncio
-async def test_custom_model_action_modal_mentions_claude_and_codex_effort_suffixes():
+async def test_custom_model_action_modal_mentions_space_separated_effort_input():
     app = _FakeApp()
     db = SimpleNamespace()
     claude_executor = SimpleNamespace()
@@ -130,5 +130,6 @@ async def test_custom_model_action_modal_mentions_claude_and_codex_effort_suffix
 
     client.views_open.assert_awaited_once()
     hint_text = client.views_open.await_args.kwargs["view"]["blocks"][0]["hint"]["text"]
-    assert "Codex supports -low/-medium/-high/-extra-high" in hint_text
-    assert "Claude supports -low/-medium/-high/-max/-auto" in hint_text
+    assert "<model> [effort]" in hint_text
+    assert "gpt-5.4 high" in hint_text
+    assert "claude-opus-4-6 auto" in hint_text

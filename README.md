@@ -63,7 +63,7 @@ Customize behavior for your workflow.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/model` | Show or change AI model | `/model opus-4.6` |
+| `/model` | Show or change AI model and effort | `/model claude-opus-4-6 high` |
 | `/mode` | View or set session mode (Claude and Codex) | `/mode`, `/mode plan`, `/mode bypass`, `/mode approval never`, `/mode sandbox workspace-write` |
 | `/permissions` | Show current approval/sandbox settings and how to change them | `/permissions` |
 | `/notifications` | View or configure notifications | `/notifications`, `/notifications on`, `/notifications completion off` |
@@ -113,20 +113,20 @@ Supported Claude models:
 - `opus-4.5` / `claude-opus-4-5` (legacy)
 - `sonnet-4.5` / `claude-sonnet-4-5` (legacy)
 
-Optional Claude effort suffixes:
-- `-low`
-- `-medium`
-- `-high`
-- `-max`
-- `-auto`
+Optional Claude effort argument (space-separated):
+- `/model <claude-model> low`
+- `/model <claude-model> medium`
+- `/model <claude-model> high`
+- `/model <claude-model> max`
+- `/model <claude-model> auto`
 
 Note: `/fast` is not currently exposed as a Slack slash command in this wrapper.
 
-Optional Codex effort suffixes:
-- `-low`
-- `-medium`
-- `-high`
-- `-xhigh` (alias: `-extra-high`)
+Optional Codex effort argument (space-separated):
+- `/model <codex-model> low`
+- `/model <codex-model> medium`
+- `/model <codex-model> high`
+- `/model <codex-model> xhigh` (alias: `extra-high`)
 
 Breaking change:
 - Legacy Codex transport flags `CODEX_NATIVE_PLAN_MODE_ENABLED` and `CODEX_USE_DANGEROUS_BYPASS` were removed.

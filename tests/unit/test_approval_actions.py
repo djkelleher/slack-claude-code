@@ -102,9 +102,16 @@ async def test_view_detailed_output_falls_back_to_database_when_cache_is_empty()
 
 
 @pytest.mark.asyncio
-async def test_model_selection_handler_accepts_missing_value_payload() -> None:
+async def test_model_menu_selection_handler_accepts_missing_value_payload() -> None:
     app = _FakeApp()
-    register_actions(app, SimpleNamespace(db=SimpleNamespace()))
+    register_actions(
+        app,
+        SimpleNamespace(
+            db=SimpleNamespace(
+                get_or_create_session=AsyncMock(return_value=SimpleNamespace(model="gpt-5.4")),
+            )
+        ),
+    )
 
     client = SimpleNamespace(chat_postMessage=AsyncMock())
     body = _approval_body()
@@ -117,7 +124,7 @@ async def test_model_selection_handler_accepts_missing_value_payload() -> None:
         "src.handlers.actions._set_session_model_and_notify",
         new=AsyncMock(),
     ) as mock_set_model:
-        await _regex_model_action(app)(
+        await app.actions["select_model_menu"](
             ack=AsyncMock(),
             action=action,
             body=body,
@@ -128,3 +135,38 @@ async def test_model_selection_handler_accepts_missing_value_payload() -> None:
     mock_set_model.assert_awaited_once()
     assert mock_set_model.await_args.kwargs["channel_id"] == "C123"
     assert mock_set_model.await_args.kwargs["thread_ts"] == "123.456"
+
+
+@pytest.mark.asyncio
+async def test_effort_menu_selection_handler_updates_model_effort() -> None:
+    app = _FakeApp()
+    register_actions(
+        app,
+        SimpleNamespace(
+            db=SimpleNamespace(
+                get_or_create_session=AsyncMock(return_value=SimpleNamespace(model="gpt-5.4")),
+            )
+        ),
+    )
+
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    body = _approval_body()
+    action = {
+        "action_id": "select_effort_menu",
+        "selected_option": {"value": "high"},
+    }
+
+    with patch(
+        "src.handlers.actions._set_session_model_and_notify",
+        new=AsyncMock(),
+    ) as mock_set_model:
+        await app.actions["select_effort_menu"](
+            ack=AsyncMock(),
+            action=action,
+            body=body,
+            client=client,
+            logger=MagicMock(),
+        )
+
+    mock_set_model.assert_awaited_once()
+    assert mock_set_model.await_args.kwargs["model_value"] == "gpt-5.4-high"

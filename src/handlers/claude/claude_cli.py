@@ -22,12 +22,17 @@ from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.command import command_response_with_tables, error_message
 from src.utils.formatters.streaming import processing_message
 from src.utils.model_selection import (
+    apply_effort_to_model,
     backend_label_for_model,
     codex_model_validation_error,
+    effort_display_name,
     get_all_model_options,
+    get_effort_options,
     model_display_name,
     normalize_current_model,
     normalize_model_name,
+    split_model_and_effort,
+    split_model_input_and_effort,
 )
 
 from ..base import CommandContext, HandlerDependencies, slack_command
@@ -489,8 +494,19 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
         if ctx.text:
             # Direct model selection via command argument
-            model_name = ctx.text.strip().lower()
-            normalized = normalize_model_name(model_name)
+            model_text, requested_effort = split_model_input_and_effort(ctx.text)
+            if model_text:
+                model_base = normalize_model_name(model_text)
+            else:
+                model_base, _ = split_model_and_effort(session.model)
+            normalized, effort_error = apply_effort_to_model(model_base, requested_effort)
+            if effort_error:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    text="Unsupported effort setting",
+                    blocks=error_message(effort_error),
+                )
+                return
             validation_error = codex_model_validation_error(normalized)
             if validation_error:
                 await ctx.client.chat_postMessage(
@@ -525,16 +541,18 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             )
         else:
             # Show current model and allow selection via dropdown
-            normalized_current_model = normalize_current_model(session.model)
-            current_backend = backend_label_for_model(normalized_current_model)
+            current_model_value, current_effort = split_model_and_effort(session.model)
+            current_backend = backend_label_for_model(current_model_value)
 
             # Get display name for current model
             all_models = get_all_model_options()
             current_display = next(
-                (m["display"] for m in all_models if m["value"] == normalized_current_model),
-                model_display_name(normalized_current_model),
+                (m["display"] for m in all_models if m["value"] == current_model_value),
+                model_display_name(current_model_value),
             )
-            current_model_id = normalized_current_model or "claude-opus-4-6"
+            current_model_id = current_model_value or "claude-opus-4-6"
+            current_effort_value = current_effort or "none"
+            current_effort_display = effort_display_name(current_effort)
 
             select_options = []
             initial_option = None
@@ -549,15 +567,31 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "description": {"type": "plain_text", "text": model["desc"][:75]},
                 }
                 select_options.append(option)
-                if model["value"] == normalized_current_model:
+                if model["value"] == current_model_value:
                     initial_option = option
+
+            effort_options = []
+            initial_effort_option = None
+            for effort in get_effort_options():
+                option = {
+                    "text": {
+                        "type": "plain_text",
+                        "text": effort["display"],
+                        "emoji": True,
+                    },
+                    "value": effort["value"],
+                    "description": {"type": "plain_text", "text": effort["desc"][:75]},
+                }
+                effort_options.append(option)
+                if effort["value"] == current_effort_value:
+                    initial_effort_option = option
 
             blocks = [
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "*Select a model:*",
+                        "text": "*Select model and effort:*",
                     },
                 },
                 {
@@ -573,7 +607,22 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                             },
                             "options": select_options,
                             **({"initial_option": initial_option} if initial_option else {}),
-                        }
+                        },
+                        {
+                            "type": "static_select",
+                            "action_id": "select_effort_menu",
+                            "placeholder": {
+                                "type": "plain_text",
+                                "text": "Choose effort",
+                                "emoji": True,
+                            },
+                            "options": effort_options,
+                            **(
+                                {"initial_option": initial_effort_option}
+                                if initial_effort_option
+                                else {}
+                            ),
+                        },
                     ],
                 },
                 {"type": "divider"},
@@ -581,7 +630,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
 
             # Check if current model is a custom one (not in predefined lists)
             predefined_models = {m["value"] for m in all_models}
-            is_custom_model = normalized_current_model not in predefined_models
+            is_custom_model = current_model_value not in predefined_models
 
             blocks.append(
                 {
@@ -589,9 +638,10 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            "*Custom Model*\nEnter any model ID (e.g., `claude-sonnet-4-6[1m]` or `gpt-5.3-codex-extra-high`)"
+                            "*Custom Model*\nEnter model and optional effort separated by a space (e.g., "
+                            "`claude-sonnet-4-6[1m] high` or `gpt-5.3-codex medium`)"
                             + (
-                                f"\n_Currently using: `{normalized_current_model}`_"
+                                f"\n_Currently using: `{current_model_value}`_"
                                 if is_custom_model
                                 else ""
                             )
@@ -617,7 +667,8 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                             "type": "mrkdwn",
                             "text": (
                                 f"Current model: *{current_display}*"
-                                f" (`{current_model_id}`) · backend `{current_backend}`"
+                                f" (`{current_model_id}`) · effort *{current_effort_display}*"
+                                f" · backend `{current_backend}`"
                             ),
                         }
                     ],
