@@ -49,13 +49,18 @@ _PARALLEL_HISTORY_COMMAND_LIMIT = 10
 _PARALLEL_HISTORY_OUTPUT_LIMIT = 1000
 _PARALLEL_HISTORY_TOTAL_LIMIT = 12000
 _THREAD_TS_PATTERN = re.compile(r"^\d+\.\d+$")
-_QUEUE_POSITION_OUTPUT_REFERENCE_RE = re.compile(r"\(\(\s*p(\d+)output\s*\)\)", re.IGNORECASE)
-_QUEUE_DIRECTIVE_LINE_RE = re.compile(r"^\(\((.+)\)\)$")
-_QUEUE_SAVE_OUTPUT_DIRECTIVE_RE = re.compile(
-    r"^\(\(\s*save\s+([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)$",
+_QUEUE_POSITION_OUTPUT_REFERENCE_RE = re.compile(
+    r"\(\(\s*p(\d+)output\s*\)\)|\(\s*p(\d+)output\s*\)",
     re.IGNORECASE,
 )
-_QUEUE_NAMED_OUTPUT_REFERENCE_RE = re.compile(r"\(\(\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)")
+_QUEUE_DIRECTIVE_LINE_RE = re.compile(r"^(?:\(\((.+)\)\)|\((.+)\))$")
+_QUEUE_SAVE_OUTPUT_DIRECTIVE_RE = re.compile(
+    r"^(?:\(\(\s*save\s+([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)|\(\s*save\s+([a-zA-Z][a-zA-Z0-9_]*)\s*\))$",
+    re.IGNORECASE,
+)
+_QUEUE_NAMED_OUTPUT_REFERENCE_RE = re.compile(
+    r"\(\(\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)|\(\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\)"
+)
 _QUEUE_COMMAND_USER_ID_PREFIX = "queue-item"
 _QUEUE_SCHEDULE_DISPATCHER_TASK_ID = "queue_schedule_dispatcher"
 _QUEUE_SCHEDULE_DISPATCHER_POLL_SECONDS = 1.0
@@ -487,10 +492,15 @@ def _extract_saved_output_name(prompt: str) -> Optional[str]:
             continue
         match = _QUEUE_SAVE_OUTPUT_DIRECTIVE_RE.match(stripped)
         if match:
-            return match.group(1)
+            return next(group for group in match.groups() if group)
         if not _QUEUE_DIRECTIVE_LINE_RE.match(stripped):
             break
     return None
+
+
+def _first_matched_group(match: re.Match[str]) -> str:
+    """Return the first populated capture group from an alternation-based regex match."""
+    return next(group for group in match.groups() if group is not None)
 
 
 def _strip_runtime_directive_lines(prompt: str) -> tuple[str, Optional[str], Optional[str]]:
@@ -504,14 +514,14 @@ def _strip_runtime_directive_lines(prompt: str) -> tuple[str, Optional[str], Opt
         current_line = stripped_lines[0].strip()
         save_match = _QUEUE_SAVE_OUTPUT_DIRECTIVE_RE.match(current_line)
         if save_match:
-            save_output_as = save_match.group(1)
+            save_output_as = _first_matched_group(save_match)
             stripped_lines.pop(0)
             continue
 
         match = _QUEUE_DIRECTIVE_LINE_RE.match(current_line)
         if not match:
             break
-        directive_body = match.group(1).strip()
+        directive_body = _first_matched_group(match).strip()
         normalized_model = normalize_model_name(directive_body)
         lowered = directive_body.lower()
         if (
@@ -522,10 +532,10 @@ def _strip_runtime_directive_lines(prompt: str) -> tuple[str, Optional[str], Opt
                 "prepend",
                 "replace",
                 "clear",
-                "end",
-                "parallel",
             }
-            and not lowered.startswith(("branch ", "loop", "insert", "at ", "save "))
+            and not lowered.startswith(
+                ("branch ", "loop", "insert", "at ", "save ", "end", "parallel")
+            )
         ):
             model_override = normalized_model
             stripped_lines.pop(0)
@@ -565,17 +575,15 @@ async def _resolve_queue_runtime_prompt(
     }
 
     def replace_position_output_reference(match: re.Match[str]) -> str:
-        position = int(match.group(1))
+        position = int(_first_matched_group(match))
         if position < 1 or position >= item.position:
-            raise ValueError(
-                f"Queue output reference `((p{position}output))` is not available yet."
-            )
+            raise ValueError(f"Queue output reference `(p{position}output)` is not available yet.")
         if position not in completed_outputs_by_position:
-            raise ValueError(f"Queue output reference `((p{position}output))` was not found.")
+            raise ValueError(f"Queue output reference `(p{position}output)` was not found.")
         return completed_outputs_by_position[position]
 
     def replace_named_output_reference(match: re.Match[str]) -> str:
-        variable_name = match.group(1)
+        variable_name = _first_matched_group(match)
         if variable_name not in saved_outputs_by_name:
             return match.group(0)
         return saved_outputs_by_name[variable_name]

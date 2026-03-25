@@ -170,6 +170,7 @@ async def execute_prompt_with_runtime(
             cost_usd=result.cost_usd,
             is_error=not result.success,
             logger=logger,
+            db=deps.db,
             detailed_output=result.detailed_output,
             post_detail_button=True,
             notify_on_snippet_failure=True,

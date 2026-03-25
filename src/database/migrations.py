@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS command_history (
     session_id INTEGER NOT NULL,
     command TEXT NOT NULL,
     output TEXT,
+    detailed_output TEXT,
     status TEXT DEFAULT 'pending',
     error_message TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -238,6 +239,16 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         column_names,
         "approval_mode",
         "ALTER TABLE sessions ADD COLUMN approval_mode TEXT DEFAULT 'on-request'",
+    )
+
+    history_cursor = await db.execute("PRAGMA table_info(command_history)")
+    history_columns = await history_cursor.fetchall()
+    history_column_names = [col[1] for col in history_columns]
+    await _add_column_if_missing(
+        db,
+        history_column_names,
+        "detailed_output",
+        "ALTER TABLE command_history ADD COLUMN detailed_output TEXT",
     )
 
     # Add queue_items.thread_ts for thread-scoped queueing

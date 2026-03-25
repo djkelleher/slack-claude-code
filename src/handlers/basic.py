@@ -87,6 +87,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             cost_usd=None,
             is_error=process.returncode != 0,
             logger=ctx.logger,
+            db=deps.db,
             terminal_style=True,
         )
 

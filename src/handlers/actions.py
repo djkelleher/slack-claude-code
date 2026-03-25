@@ -1047,13 +1047,16 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
 
         command_id = int(action["value"])
         content = DetailCache.get(command_id)
+        if not content and deps.db:
+            content = await deps.db.get_command_detailed_output(command_id)
+            if content:
+                DetailCache.store(command_id, content)
 
         if not content:
-            # Content expired or not found
             await client.chat_postEphemeral(
                 channel=body["channel"]["id"],
                 user=body["user"]["id"],
-                text="Detailed output is no longer available (expired after 8 hours).",
+                text="Detailed output is no longer available.",
             )
             return
 
@@ -1212,19 +1215,33 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             log_prefix="Custom model",
         )
 
-    @app.action(re.compile(r"^select_model_(?!custom$).*$"))
+    @app.action(re.compile(r"^select_model_(?!(?:custom|menu)$).*$"))
     async def handle_model_selection(ack, action, body, client, logger):
         """Handle model selection button click."""
         await ack()
 
-        # Extract model name from action_id (select_model_opus -> opus)
         action_id = action["action_id"]
-        model_name = action_id.replace("select_model_", "")
+        if action_id == "select_model_menu":
+            selected = action.get("selected_option") or {}
+            model_name = selected.get("value", "")
+            if not model_name:
+                return
+            channel_id = body["channel"]["id"]
+            message = body.get("message", {})
+            thread_ts = message.get("thread_ts")
+        else:
+            # Extract model name from action_id (select_model_opus -> opus)
+            model_name = action_id.replace("select_model_", "")
 
-        # Parse channel_id and thread_ts from value
-        value_parts = action["value"].split("|")
-        channel_id = value_parts[0]
-        thread_ts = value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
+            value = action.get("value", "")
+            if value:
+                value_parts = value.split("|")
+                channel_id = value_parts[0]
+                thread_ts = value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
+            else:
+                channel_id = body["channel"]["id"]
+                message = body.get("message", {})
+                thread_ts = message.get("thread_ts")
 
         model_value, display_name = resolve_model_selection_action(model_name)
 

@@ -230,6 +230,16 @@ class TestSessionOperations:
         assert session.model == "gpt-5.3-codex"
 
     @pytest.mark.asyncio
+    async def test_store_and_get_command_detailed_output(self, db_repo):
+        """Detailed command output should persist in the database."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        command = await db_repo.add_command(session.id, "run report")
+
+        await db_repo.store_command_detailed_output(command.id, "full detailed output")
+
+        assert await db_repo.get_command_detailed_output(command.id) == "full detailed output"
+
+    @pytest.mark.asyncio
     async def test_restore_channel_model_selections_returns_saved_models(self, db_repo):
         """restore_channel_model_selections returns persisted channel model selections."""
         await db_repo.get_or_create_session("C123ABC", None)

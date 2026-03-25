@@ -533,6 +533,25 @@ class DatabaseRepository:
             )
             await db.commit()
 
+    async def store_command_detailed_output(self, command_id: int, detailed_output: str) -> None:
+        """Persist detailed output for later on-demand viewing."""
+        async with self._get_connection() as db:
+            await db.execute(
+                "UPDATE command_history SET detailed_output = ? WHERE id = ?",
+                (detailed_output, command_id),
+            )
+            await db.commit()
+
+    async def get_command_detailed_output(self, command_id: int) -> Optional[str]:
+        """Return persisted detailed output for a command, if available."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "SELECT detailed_output FROM command_history WHERE id = ?",
+                (command_id,),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] is not None else None
+
     async def get_command_history(
         self, session_id: int, limit: int = 10, offset: int = 0
     ) -> tuple[list[CommandHistory], int]:

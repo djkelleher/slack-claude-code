@@ -54,6 +54,21 @@ def test_streaming_update_can_preserve_full_output() -> None:
     assert "_... (earlier output truncated)_" not in rendered_output
 
 
+def test_streaming_update_does_not_truncate_long_prompt() -> None:
+    """Streaming status should show the full normalized prompt."""
+    prompt = (
+        "Processing queue item 13: how can we improve the logic, algorithmic edge, "
+        "mathematical edge in /home/dan/dev-repos/slack-claude-code/src/handlers/claude/queue.py"
+    )
+
+    blocks = streaming_update(
+        prompt=prompt,
+        current_output="partial output",
+    )
+
+    assert blocks[1]["text"]["text"] == f"> {prompt}"
+
+
 def test_processing_message_truncates_prompt_to_slack_limit() -> None:
     """Processing preview should stay under Slack's block text limit."""
     prompt = "run " + ("<edge-case> & " * 600)
@@ -75,3 +90,5 @@ def test_streaming_update_truncates_extreme_prompt_to_slack_limit() -> None:
     )
 
     prompt_text = blocks[1]["text"]["text"]
+    assert len(prompt_text) <= config.SLACK_BLOCK_TEXT_LIMIT
+    assert prompt_text.endswith("...")

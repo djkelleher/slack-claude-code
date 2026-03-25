@@ -162,3 +162,47 @@ async def test_usage_for_claude_session_returns_app_native_claude_status():
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Claude usage"
     assert "Claude Session Status" in kwargs["blocks"][0]["text"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_model_command_stacks_label_above_dropdown():
+    app = _FakeApp()
+    session = Session(model="gpt-5.3-codex", working_directory="/repo")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=session),
+            update_session_claude_id=AsyncMock(),
+            update_session_codex_id=AsyncMock(),
+            clear_session_claude_id=AsyncMock(),
+            clear_session_codex_id=AsyncMock(),
+            get_session_dirs=AsyncMock(return_value=[]),
+            add_session_dir=AsyncMock(return_value=[]),
+            remove_session_dir=AsyncMock(return_value=[]),
+        ),
+        executor=SimpleNamespace(
+            execute=AsyncMock(), cancel_by_scope=AsyncMock(), cancel_by_channel=AsyncMock()
+        ),
+        codex_executor=SimpleNamespace(cancel_by_scope=AsyncMock(), cancel_by_channel=AsyncMock()),
+    )
+    register_claude_cli_commands(app, deps)
+
+    handler = app.handlers["/model"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "",
+            "command": "/model",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    blocks = client.chat_postMessage.await_args.kwargs["blocks"]
+    assert blocks[0]["type"] == "section"
+    assert blocks[0]["text"]["text"] == "*Select a model:*"
+    assert blocks[1]["type"] == "actions"
+    assert blocks[1]["elements"][0]["type"] == "static_select"
+    assert blocks[1]["elements"][0]["action_id"] == "select_model_menu"

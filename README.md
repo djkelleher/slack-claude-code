@@ -88,6 +88,7 @@ the exact request/notification methods this app handles.
 - `/mode plan` sets native app-server `turn/start.collaborationMode` to `plan`
 - `/mode accept` and `/mode delegate` remain unsupported for Codex
 - `/mode approval <untrusted|on-failure|on-request|never>` sets explicit approval policy
+- `/mode sandbox <read-only|workspace-write|danger-full-access>` sets sandbox policy
 
 Current Codex defaults:
 - `CODEX_SANDBOX_MODE=danger-full-access`
@@ -95,7 +96,6 @@ Current Codex defaults:
 - Set `CODEX_APPROVAL_MODE=never` if you want Codex command/file approvals to auto-accept instead of posting Slack approve/deny buttons.
 - Set `/mode sandbox ...` or `CODEX_SANDBOX_MODE=...` to override the sandbox policy per session or globally.
 - Existing saved sessions keep their stored sandbox/approval settings until you change them with `/mode`.
-- `/mode sandbox <read-only|workspace-write|danger-full-access>` sets sandbox policy
 
 Supported Codex models:
 - `gpt-5.3-codex`

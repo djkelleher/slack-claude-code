@@ -11,16 +11,16 @@ from src.git.service import GitError, GitService
 MAX_EXPANDED_QUEUE_PLAN_ITEMS: int | None = None
 
 _ANY_MARKER_RE = re.compile(r"^\*\*\*.+$")
-_DIRECTIVE_RE = re.compile(r"^\(\((.+)\)\)$")
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _FOR_LOOP_MARKER_RE = re.compile(
-    r"^FOR\s+([a-zA-Z][a-zA-Z0-9_]*)\s+IN\s+\(\((.*?)\)\)(?:\s+(.*))?$",
+    r"^FOR\s+([a-zA-Z][a-zA-Z0-9_]*)\s+IN\s+(?:\(\((.*?)\)\)|\((.*?)\))(?:\s+(.*))?$",
     re.IGNORECASE,
 )
 _FOR_LOOP_PREFIX_RE = re.compile(
-    r"^FOR\s+[a-zA-Z][a-zA-Z0-9_]*\s+IN\s+\(\(",
+    r"^FOR\s+[a-zA-Z][a-zA-Z0-9_]*\s+IN\s+(?:\(\(|\()",
     re.IGNORECASE,
 )
+_SINGLE_PAREN_VARIABLE_RE = re.compile(r"\(\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\)")
 _DOUBLE_PAREN_VARIABLE_RE = re.compile(r"\(\(\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)")
 _QUADRUPLE_PAREN_VARIABLE_RE = re.compile(r"\(\(\(\(\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\)\)\)\)")
 
@@ -99,7 +99,7 @@ class _ForNode:
 
 
 _Node = _PromptNode | _BranchNode | _LoopNode | _ParallelNode | _ForNode
-_Marker = tuple[str] | tuple[str, str | int] | tuple[str, str, list[str]]
+_Marker = tuple[str] | tuple[str, int | None | str] | tuple[str, str, list[str]]
 
 
 @dataclass
@@ -136,7 +136,7 @@ def contains_queue_plan_markers(text: str) -> bool:
             return True
         if stripped.startswith("***"):
             return True
-        if stripped.startswith("((") and stripped.endswith("))"):
+        if _looks_like_parenthesized_queue_marker(stripped):
             return True
     return False
 
@@ -172,10 +172,10 @@ def parse_queue_plan_submission(
     """Extract top-level queue submission directives from queue-plan text.
 
     Supported directives must appear before the first non-empty, non-directive line:
-    - ``((append))``: append to the current pending queue
-    - ``((prepend))``: insert at the front of the pending queue
-    - ``((insertN))``: insert at one-based pending queue index ``N``
-    - ``((at <time>))``: schedule an implicit resume/start at the given time
+    - ``(append)``: append to the current pending queue
+    - ``(prepend)``: insert at the front of the pending queue
+    - ``(insertN)``: insert at one-based pending queue index ``N``
+    - ``(at <time>)``: schedule an implicit resume/start at the given time
     """
     current_now_utc = now_utc or datetime.now(timezone.utc)
     if current_now_utc.tzinfo is None or current_now_utc.tzinfo.utcoffset(current_now_utc) is None:
@@ -195,7 +195,7 @@ def parse_queue_plan_submission(
             body_start_index = index + 1
             continue
 
-        parsed_line = _extract_double_paren_directive_parts(stripped)
+        parsed_line = _extract_queue_directive_parts(stripped)
         if parsed_line is not None:
             directive_parts, trailing_text = parsed_line
             remaining_parts: list[str] = []
@@ -212,7 +212,7 @@ def parse_queue_plan_submission(
                     if seen_directive is not None and seen_directive != directive_name:
                         raise QueuePlanError(
                             "Queue submission directives conflict. Use only one of "
-                            "`((append))`, `((prepend))`, or `((insertN))`."
+                            "`(append)`, `(prepend)`, or `(insertN)`."
                         )
                     seen_directive = directive_name
                 if directive_name == "append":
@@ -238,7 +238,7 @@ def parse_queue_plan_submission(
                     )
 
             if saw_submission_directive:
-                rebuilt_line = _rebuild_double_paren_directive_line(remaining_parts, trailing_text)
+                rebuilt_line = _rebuild_queue_directive_line(remaining_parts, trailing_text)
                 if rebuilt_line:
                     remaining_text = "\n".join([rebuilt_line] + lines[index + 1 :])
                     return (
@@ -311,16 +311,24 @@ def _parse_queue_timer_time(time_text: str, now_utc: datetime) -> datetime:
     )
 
 
-def _extract_double_paren_directive_parts(line: str) -> Optional[tuple[list[str], Optional[str]]]:
-    """Split a ``((...))`` line into directive parts and optional trailing prompt text."""
-    if not line.startswith("(("):
+def _extract_queue_directive_parts(line: str) -> Optional[tuple[list[str], Optional[str]]]:
+    """Split a parenthesized directive line into parts and optional trailing prompt text."""
+    delimiter: str
+    prefix_length: int
+    if line.startswith("(("):
+        delimiter = "))"
+        prefix_length = 2
+    elif line.startswith("("):
+        delimiter = ")"
+        prefix_length = 1
+    else:
         return None
 
-    closing_index = line.find("))")
+    closing_index = line.find(delimiter, prefix_length)
     if closing_index == -1:
         return None
 
-    body = line[2:closing_index].strip()
+    body = line[prefix_length:closing_index].strip()
     if not body:
         return None
 
@@ -328,14 +336,14 @@ def _extract_double_paren_directive_parts(line: str) -> Optional[tuple[list[str]
     if any(not part for part in parts):
         raise QueuePlanError(f"Invalid queue-plan marker: `{line}`")
 
-    trailing_text = line[closing_index + 2 :].strip() or None
+    trailing_text = line[closing_index + len(delimiter) :].strip() or None
     return parts, trailing_text
 
 
-def _rebuild_double_paren_directive_line(parts: list[str], trailing_text: Optional[str]) -> str:
+def _rebuild_queue_directive_line(parts: list[str], trailing_text: Optional[str]) -> str:
     """Rebuild a directive line from remaining parts plus any inline prompt text."""
     if parts:
-        rebuilt = f"(({', '.join(parts)}))"
+        rebuilt = f"({', '.join(parts)})"
         if trailing_text:
             rebuilt = f"{rebuilt} {trailing_text}"
         return rebuilt
@@ -352,7 +360,7 @@ def _expand_combined_block_directive_lines(text: str) -> str:
 
 def _expand_combined_block_directive_line(line: str) -> list[str]:
     """Expand one combined block directive line, preserving inline prompt text."""
-    parsed = _extract_double_paren_directive_parts(line.strip())
+    parsed = _extract_queue_directive_parts(line.strip())
     if parsed is None:
         return [line]
 
@@ -363,7 +371,7 @@ def _expand_combined_block_directive_line(line: str) -> list[str]:
     if any(_parse_block_marker_part(part) is None for part in parts):
         return [line]
 
-    expanded = [f"(({part}))" for part in parts]
+    expanded = [f"({part})" for part in parts]
     if trailing_text:
         expanded[-1] = f"{expanded[-1]} {trailing_text}"
     return expanded
@@ -497,12 +505,16 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 raise QueuePlanError(
                     f"Line {line_number}: inline prompt is not supported on end markers."
                 )
-            if current.kind == "root":
-                detail = _unexpected_block_close_detail(current)
-                raise QueuePlanError(
-                    f"Line {line_number}: found end marker without a matching open block. {detail}"
-                )
-            _close_frame(stack)
+            close_count = int(marker[1]) if len(marker) > 1 else 1
+            for _ in range(close_count):
+                current = stack[-1]
+                if current.kind == "root":
+                    detail = _unexpected_block_close_detail(current)
+                    raise QueuePlanError(
+                        f"Line {line_number}: found end marker without a matching open block. "
+                        f"{detail}"
+                    )
+                _close_frame(stack)
             continue
 
         if marker_type == "loop_start":
@@ -566,23 +578,23 @@ def _unexpected_block_close_detail(current: _Frame) -> str:
     if current.kind == "branch":
         return (
             f"You are currently inside branch `{current.branch_name or ''}` opened on line "
-            f"{current.start_line}. Close it first with `((end))`."
+            f"{current.start_line}. Close it first with `(end)`."
         )
     if current.kind == "loop":
         return (
             f"You are currently inside loop `{current.loop_count or 1}` opened on line "
-            f"{current.start_line}. Close it first with `((end))`."
+            f"{current.start_line}. Close it first with `(end)`."
         )
     if current.kind == "parallel":
         return (
             f"You are currently inside parallel block opened on line {current.start_line}. "
-            "Close it first with `((end))`."
+            "Close it first with `(end)`."
         )
     if current.kind == "for":
         return (
             "You are currently inside substitution loop "
             f"`{current.substitution_variable or ''}` opened on line {current.start_line}. "
-            "Close it first with `((end))`."
+            "Close it first with `(end)`."
         )
     return "A different block is currently open."
 
@@ -694,11 +706,11 @@ def _parse_marker_with_inline_prompt(
         variable_name, values, inline_prompt = substitution_loop
         return ("for_start", variable_name, values), inline_prompt
 
-    parsed = _extract_double_paren_directive_parts(line)
+    parsed = _extract_queue_directive_parts(line)
     if parsed is not None:
         parts, trailing_text = parsed
         if trailing_text:
-            marker_token = f"(({', '.join(parts)}))"
+            marker_token = f"({', '.join(parts)})"
             inline_marker = _parse_marker(marker_token)
             if inline_marker is not None:
                 return inline_marker, trailing_text
@@ -707,14 +719,13 @@ def _parse_marker_with_inline_prompt(
     if marker is not None:
         return marker, None
 
-    if line.startswith("(("):
-        closing_index = line.find("))")
-        if closing_index != -1:
-            marker_token = line[: closing_index + 2]
-            trailing_text = line[closing_index + 2 :].strip()
-            inline_marker = _parse_marker(marker_token)
-            if inline_marker is not None:
-                return inline_marker, trailing_text or None
+    parsed = _extract_queue_directive_parts(line)
+    if parsed is not None:
+        parts, trailing_text = parsed
+        marker_token = f"({', '.join(parts)})"
+        inline_marker = _parse_marker(marker_token)
+        if inline_marker is not None:
+            return inline_marker, trailing_text
 
     parts = line.split(maxsplit=1)
     if len(parts) == 2:
@@ -723,7 +734,7 @@ def _parse_marker_with_inline_prompt(
         if inline_marker is not None:
             return inline_marker, trailing_text
 
-    if strict and _looks_like_double_paren_queue_marker(line):
+    if strict and _looks_like_parenthesized_queue_marker(line):
         raise QueuePlanError(f"Unknown queue-plan marker: `{line}`")
     if strict and _ANY_MARKER_RE.match(line):
         raise QueuePlanError(f"Unknown queue-plan marker: `{line}`")
@@ -739,18 +750,18 @@ def _parse_marker(line: str) -> Optional[_Marker]:
         variable_name, values, _inline_prompt = substitution_loop
         return ("for_start", variable_name, values)
 
-    double_paren_marker = _parse_double_paren_block_marker(line)
-    if double_paren_marker is not None:
-        return double_paren_marker
+    parenthesized_marker = _parse_parenthesized_block_marker(line)
+    if parenthesized_marker is not None:
+        return parenthesized_marker
 
     return None
 
 
-def _parse_double_paren_submission_directive(
+def _parse_parenthesized_submission_directive(
     line: str,
 ) -> tuple[str, str | int | tuple[str, str]] | None:
-    """Parse queue submission directives using ``((...))`` syntax."""
-    parsed = _extract_double_paren_directive_parts(line)
+    """Parse queue submission directives using ``(...)`` syntax."""
+    parsed = _extract_queue_directive_parts(line)
     if parsed is None:
         return None
     parts, _trailing_text = parsed
@@ -769,7 +780,7 @@ def _parse_submission_directive_part(
     if lowered.startswith("insert"):
         index_text = lowered[len("insert") :].strip()
         if not index_text.isdigit() or int(index_text) < 1:
-            raise QueuePlanError("Insert directives must be like `((insert1))`.")
+            raise QueuePlanError("Insert directives must be like `(insert1)`.")
         return "insert", int(index_text)
     if lowered in {"clear", "replace"}:
         raise QueuePlanError("Queue clearing is handled by `/qc clear`, not queue DSL.")
@@ -777,7 +788,7 @@ def _parse_submission_directive_part(
         schedule_body = body[3:].strip()
         if not schedule_body:
             raise QueuePlanError(
-                "Timer directives must be like `((at 18:30))` or `((at 18:30 pause))`."
+                "Timer directives must be like `(at 18:30)` or `(at 18:30 pause)`."
             )
         parts = schedule_body.rsplit(" ", 1)
         if len(parts) == 2 and parts[1].lower() in {"start", "pause", "resume", "stop"}:
@@ -786,11 +797,11 @@ def _parse_submission_directive_part(
     return None
 
 
-def _parse_double_paren_block_marker(
+def _parse_parenthesized_block_marker(
     line: str,
 ) -> tuple[str, str | int] | tuple[str] | None:
-    """Parse block markers using ``((...))`` syntax."""
-    parsed = _extract_double_paren_directive_parts(line)
+    """Parse block markers using ``(...)`` syntax."""
+    parsed = _extract_queue_directive_parts(line)
     if parsed is None:
         return None
     parts, _trailing_text = parsed
@@ -804,11 +815,20 @@ def _parse_block_marker_part(
 ) -> tuple[str, str | int] | tuple[str] | None:
     """Parse one block marker from a directive body fragment."""
     lowered = body.lower()
-    line = original_token or f"(({body}))"
+    line = original_token or f"({body})"
     if lowered == "parallel":
         return ("parallel_start", None)
     if lowered == "end":
-        return ("block_end",)
+        return ("block_end", 1)
+    if lowered.startswith("end"):
+        close_count_text = lowered[len("end") :].strip()
+        if close_count_text.isdigit():
+            close_count = int(close_count_text)
+            if close_count < 1:
+                raise QueuePlanError(
+                    f"Invalid end count `{close_count}` in marker `{line}`. Count must be >= 1."
+                )
+            return ("block_end", close_count)
     if lowered.startswith("parallel"):
         limit_text = lowered[len("parallel") :].strip()
         if limit_text.isdigit():
@@ -822,9 +842,9 @@ def _parse_block_marker_part(
     return None
 
 
-def _looks_like_double_paren_queue_marker(line: str) -> bool:
-    """Return True when a ``((...))`` line resembles queue-plan control syntax."""
-    parsed = _extract_double_paren_directive_parts(line)
+def _looks_like_parenthesized_queue_marker(line: str) -> bool:
+    """Return True when a parenthesized line resembles queue-plan control syntax."""
+    parsed = _extract_queue_directive_parts(line)
     if parsed is None:
         return False
     parts, _trailing_text = parsed
@@ -851,7 +871,7 @@ def _looks_like_queue_directive_part(body: str) -> bool:
 def _parse_for_loop_marker(
     line: str,
 ) -> tuple[str, list[str], Optional[str]] | None:
-    """Parse a substitution-loop marker using ``FOR name IN ((a, b))`` syntax."""
+    """Parse a substitution-loop marker using ``FOR name IN (a, b)`` syntax."""
     match = _FOR_LOOP_MARKER_RE.match(line)
     if not match:
         if _FOR_LOOP_PREFIX_RE.match(line):
@@ -859,8 +879,8 @@ def _parse_for_loop_marker(
         return None
 
     variable_name = match.group(1)
-    values_body = match.group(2).strip()
-    inline_prompt = match.group(3).strip() or None if match.group(3) else None
+    values_body = (match.group(2) or match.group(3) or "").strip()
+    inline_prompt = match.group(4).strip() or None if match.group(4) else None
     if not values_body:
         raise QueuePlanError(
             f"Invalid substitution loop marker: `{line}`. Include at least one value."
@@ -884,7 +904,8 @@ def _substitute_loop_variables(text: str, substitutions: dict[str, str]) -> str:
         return substitutions.get(variable_name, match.group(0))
 
     substituted = _QUADRUPLE_PAREN_VARIABLE_RE.sub(replace, text)
-    return _DOUBLE_PAREN_VARIABLE_RE.sub(replace, substituted)
+    substituted = _DOUBLE_PAREN_VARIABLE_RE.sub(replace, substituted)
+    return _SINGLE_PAREN_VARIABLE_RE.sub(replace, substituted)
 
 
 def _parse_loop_marker_value(count_text: str, line: str, marker_type: str) -> tuple[str, int]:

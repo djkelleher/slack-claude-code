@@ -651,7 +651,7 @@ class TestStructuredQueuePlanRouting:
                         session=session,
                         channel_id="C123",
                         thread_ts="123.456",
-                        prompt="((append))\nnext",
+                        prompt="(append)\nnext",
                         logger=MagicMock(),
                     )
 
@@ -684,7 +684,7 @@ class TestStructuredQueuePlanRouting:
             session=session,
             channel_id="C123",
             thread_ts="123.456",
-            prompt="((clear))\nfirst",
+            prompt="(clear)\nfirst",
             logger=MagicMock(),
         )
 
@@ -745,7 +745,7 @@ class TestStructuredQueuePlanRouting:
                                 session=session,
                                 channel_id="C123",
                                 thread_ts="123.456",
-                                prompt="((at 19:00 pause))\nfirst",
+                                prompt="(at 19:00 pause)\nfirst",
                                 logger=MagicMock(),
                             )
 

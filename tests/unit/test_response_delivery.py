@@ -16,6 +16,7 @@ async def test_file_response_posts_detail_button_in_channel_when_thread_missing(
         chat_update=AsyncMock(),
         chat_postMessage=AsyncMock(),
     )
+    db = SimpleNamespace(store_command_detailed_output=AsyncMock())
     logger = MagicMock()
     monkeypatch.setattr(response_delivery, "should_attach_file", lambda _output: True)
     monkeypatch.setattr(
@@ -36,11 +37,13 @@ async def test_file_response_posts_detail_button_in_channel_when_thread_missing(
         cost_usd=0.1,
         is_error=False,
         logger=logger,
+        db=db,
         post_detail_button=True,
     )
 
     assert client.chat_postMessage.await_args.kwargs["thread_ts"] is None
     assert client.chat_postMessage.await_args.kwargs["text"] == "📋 Detailed output available"
+    db.store_command_detailed_output.assert_awaited_once_with(7, "full output")
 
 
 @pytest.mark.asyncio
@@ -49,6 +52,7 @@ async def test_file_response_notifies_when_detail_button_post_fails(monkeypatch)
         chat_update=AsyncMock(),
         chat_postMessage=AsyncMock(),
     )
+    db = SimpleNamespace(store_command_detailed_output=AsyncMock())
     logger = MagicMock()
     monkeypatch.setattr(response_delivery, "should_attach_file", lambda _output: True)
     monkeypatch.setattr(
@@ -72,12 +76,14 @@ async def test_file_response_notifies_when_detail_button_post_fails(monkeypatch)
         cost_usd=0.1,
         is_error=False,
         logger=logger,
+        db=db,
         notify_on_snippet_failure=True,
         post_detail_button=True,
     )
 
     assert client.chat_postMessage.await_count == 2
     assert "Could not post detailed output" in client.chat_postMessage.await_args.kwargs["text"]
+    db.store_command_detailed_output.assert_awaited_once_with(7, "full output")
 
 
 @pytest.mark.asyncio

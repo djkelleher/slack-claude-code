@@ -23,6 +23,7 @@ async def deliver_command_response(
     cost_usd: Optional[float],
     is_error: bool,
     logger: Any,
+    db: Any = None,
     detailed_output: Optional[str] = None,
     post_detail_button: bool = False,
     notify_on_snippet_failure: bool = False,
@@ -58,6 +59,8 @@ async def deliver_command_response(
         try:
             detail_content = detailed_output or file_content
             DetailCache.store(command_id, detail_content)
+            if db is not None:
+                await db.store_command_detailed_output(command_id, detail_content)
             if post_detail_button:
                 await client.chat_postMessage(
                     channel=channel_id,

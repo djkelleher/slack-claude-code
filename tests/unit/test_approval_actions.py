@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.handlers.actions import register_actions
+from src.utils.detail_cache import DetailCache
 
 
 class _FakeApp:
@@ -38,6 +39,13 @@ def _approval_body() -> dict:
     }
 
 
+def _regex_model_action(app: _FakeApp):
+    for key, handler in app.actions.items():
+        if key.startswith("re.compile(") and "select_model_" in key:
+            return handler
+    raise AssertionError("Regex model action handler not registered")
+
+
 @pytest.mark.asyncio
 async def test_approve_tool_action_passes_resolver_user_and_updates_blocks() -> None:
     app = _FakeApp()
@@ -60,7 +68,63 @@ async def test_approve_tool_action_passes_resolver_user_and_updates_blocks() -> 
 
     mock_resolve.assert_awaited_once_with("approval-123", approved=True, resolved_by="U123")
     client.chat_update.assert_awaited_once()
+    assert client.chat_update.await_args.kwargs["text"] == "Tool approval resolved"
     blocks = client.chat_update.await_args.kwargs["blocks"]
     assert blocks[0]["text"]["text"] == ":heavy_check_mark: *Approved*: exec_command"
     assert blocks[1]["elements"][1]["text"] == "By: <@U123>"
-    assert client.chat_update.await_args.kwargs["text"] == "Tool approval resolved"
+
+
+@pytest.mark.asyncio
+async def test_view_detailed_output_falls_back_to_database_when_cache_is_empty() -> None:
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(get_command_detailed_output=AsyncMock(return_value="persisted details"))
+    )
+    register_actions(app, deps)
+    DetailCache.clear()
+
+    client = SimpleNamespace(views_open=AsyncMock(), chat_postEphemeral=AsyncMock())
+    body = _approval_body()
+    body["trigger_id"] = "trigger-123"
+
+    await app.actions["view_detailed_output"](
+        ack=AsyncMock(),
+        action={"value": "42"},
+        body=body,
+        client=client,
+        logger=MagicMock(),
+    )
+
+    deps.db.get_command_detailed_output.assert_awaited_once_with(42)
+    client.views_open.assert_awaited_once()
+    view_blocks = client.views_open.await_args.kwargs["view"]["blocks"]
+    assert "persisted details" in view_blocks[0]["text"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_model_selection_handler_accepts_missing_value_payload() -> None:
+    app = _FakeApp()
+    register_actions(app, SimpleNamespace(db=SimpleNamespace()))
+
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    body = _approval_body()
+    action = {
+        "action_id": "select_model_menu",
+        "selected_option": {"value": "gpt-5.4"},
+    }
+
+    with patch(
+        "src.handlers.actions._set_session_model_and_notify",
+        new=AsyncMock(),
+    ) as mock_set_model:
+        await _regex_model_action(app)(
+            ack=AsyncMock(),
+            action=action,
+            body=body,
+            client=client,
+            logger=MagicMock(),
+        )
+
+    mock_set_model.assert_awaited_once()
+    assert mock_set_model.await_args.kwargs["channel_id"] == "C123"
+    assert mock_set_model.await_args.kwargs["thread_ts"] == "123.456"

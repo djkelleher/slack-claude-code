@@ -129,7 +129,7 @@ async def test_resolve_queue_runtime_prompt_supports_named_output_references() -
             get_completed_queue_items_before_position=AsyncMock(
                 return_value=[
                     SimpleNamespace(
-                        position=1, prompt="((save first_pass))\nreview", output="first output"
+                        position=1, prompt="(save first_pass)\nreview", output="first output"
                     ),
                     SimpleNamespace(position=2, prompt="plain prompt", output="second output"),
                 ]
@@ -143,10 +143,10 @@ async def test_resolve_queue_runtime_prompt_supports_named_output_references() -
         item=item,
         channel_id="C123",
         thread_ts="123.456",
-        prompt="Compare ((first_pass)) against ((missing_value)).",
+        prompt="Compare (first_pass) against (missing_value).",
     )
 
-    assert resolved_prompt == "Compare first output against ((missing_value))."
+    assert resolved_prompt == "Compare first output against (missing_value)."
     assert model_override is None
 
 
@@ -159,7 +159,7 @@ async def test_resolve_queue_runtime_prompt_supports_saved_output_in_file_write_
                 return_value=[
                     SimpleNamespace(
                         position=1,
-                        prompt="((save draft))\nDraft the release notes",
+                        prompt="(save draft)\nDraft the release notes",
                         output="line one\nline two",
                     )
                 ]
@@ -173,7 +173,7 @@ async def test_resolve_queue_runtime_prompt_supports_saved_output_in_file_write_
         item=item,
         channel_id="C123",
         thread_ts="123.456",
-        prompt="Write the following content to notes/release.md exactly as-is:\n((draft))",
+        prompt="Write the following content to notes/release.md exactly as-is:\n(draft)",
     )
 
     assert (
@@ -204,7 +204,7 @@ async def test_resolve_queue_runtime_prompt_supports_absolute_output_references(
         item=item,
         channel_id="C123",
         thread_ts="123.456",
-        prompt="Use ((p1output)) and ((p2output)).",
+        prompt="Use (p1output) and (p2output).",
     )
 
     assert resolved_prompt == "Use first output and second output."
@@ -223,13 +223,13 @@ async def test_resolve_queue_runtime_prompt_rejects_unavailable_absolute_output_
     )
     item = SimpleNamespace(position=2)
 
-    with pytest.raises(ValueError, match=r"\(\(p2output\)\)"):
+    with pytest.raises(ValueError, match=r"\(p2output\)"):
         await _resolve_queue_runtime_prompt(
             deps,
             item=item,
             channel_id="C123",
             thread_ts="123.456",
-            prompt="Use ((p2output)).",
+            prompt="Use (p2output).",
         )
 
 
@@ -1656,7 +1656,7 @@ async def test_q_add_structured_plan_can_append_with_explicit_directive():
                     command={
                         "channel_id": "C123",
                         "user_id": "U123",
-                        "text": "((append))\nnext",
+                        "text": "(append)\nnext",
                         "command": "/q",
                     },
                     client=client,
@@ -1713,7 +1713,7 @@ async def test_q_add_structured_plan_defaults_to_append_when_queue_is_running():
                     command={
                         "channel_id": "C123",
                         "user_id": "U123",
-                        "text": "((loop2))\nnext",
+                        "text": "(loop2)\nnext",
                         "command": "/q",
                     },
                     client=client,
@@ -1753,7 +1753,7 @@ async def test_q_add_structured_plan_rejects_clear_directive():
         command={
             "channel_id": "C123",
             "user_id": "U123",
-            "text": "((clear))\nnext",
+            "text": "(clear)\nnext",
             "command": "/q",
         },
         client=client,
@@ -1824,7 +1824,7 @@ async def test_q_add_structured_plan_persists_scheduled_controls():
             command={
                 "channel_id": "C123",
                 "user_id": "U123",
-                "text": "((at 19:30 pause))\nnext",
+                "text": "(at 19:30 pause)\nnext",
                 "command": "/q",
             },
             client=client,
@@ -1897,7 +1897,7 @@ async def test_q_structured_plan_stays_paused_by_default():
             command={
                 "channel_id": "C123",
                 "user_id": "U123",
-                "text": "((loop2))\nqueued now",
+                "text": "(loop2)\nqueued now",
                 "command": "/q",
             },
             client=client,

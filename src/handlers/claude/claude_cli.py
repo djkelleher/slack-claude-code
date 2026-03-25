@@ -559,17 +559,22 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                         "type": "mrkdwn",
                         "text": "*Select a model:*",
                     },
-                    "accessory": {
-                        "type": "static_select",
-                        "action_id": "select_model_menu",
-                        "placeholder": {
-                            "type": "plain_text",
-                            "text": "Choose a model",
-                            "emoji": True,
-                        },
-                        "options": select_options,
-                        **({"initial_option": initial_option} if initial_option else {}),
-                    },
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "static_select",
+                            "action_id": "select_model_menu",
+                            "placeholder": {
+                                "type": "plain_text",
+                                "text": "Choose a model",
+                                "emoji": True,
+                            },
+                            "options": select_options,
+                            **({"initial_option": initial_option} if initial_option else {}),
+                        }
+                    ],
                 },
                 {"type": "divider"},
             ]

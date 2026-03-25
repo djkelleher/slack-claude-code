@@ -70,6 +70,7 @@ class CommandHistory:
     session_id: int = 0
     command: str = ""
     output: Optional[str] = None
+    detailed_output: Optional[str] = None
     status: str = "pending"  # pending, running, completed, failed, cancelled
     error_message: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
@@ -77,15 +78,21 @@ class CommandHistory:
 
     @classmethod
     def from_row(cls, row: tuple) -> "CommandHistory":
+        detailed_output = row[4] if len(row) > 8 else None
+        status = row[5] if len(row) > 8 else row[4]
+        error_message = row[6] if len(row) > 8 else row[5]
+        created_at = row[7] if len(row) > 8 else row[6]
+        completed_at = row[8] if len(row) > 8 else row[7]
         return cls(
             id=row[0],
             session_id=row[1],
             command=row[2],
             output=row[3],
-            status=row[4],
-            error_message=row[5],
-            created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
-            completed_at=datetime.fromisoformat(row[7]) if row[7] else None,
+            detailed_output=detailed_output,
+            status=status,
+            error_message=error_message,
+            created_at=datetime.fromisoformat(created_at) if created_at else datetime.now(),
+            completed_at=datetime.fromisoformat(completed_at) if completed_at else None,
         )
 
 

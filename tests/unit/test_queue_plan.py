@@ -18,11 +18,11 @@ from src.tasks.queue_plan import (
 
 def test_contains_queue_plan_markers_detects_known_markers() -> None:
     assert contains_queue_plan_markers("first\n***\nsecond") is True
-    assert contains_queue_plan_markers("((append))\nfirst\n***\nsecond") is True
-    assert contains_queue_plan_markers("((loop2))\nrun\n((end))") is True
-    assert contains_queue_plan_markers("((branch feature/x))\nrun\n((end))") is True
-    assert contains_queue_plan_markers("((parallel2))\nrun\n***\nmore\n((end))") is True
-    assert contains_queue_plan_markers("FOR name IN ((joe, tod))\nrun ((name))\n((end))") is True
+    assert contains_queue_plan_markers("(append)\nfirst\n***\nsecond") is True
+    assert contains_queue_plan_markers("(loop2)\nrun\n(end)") is True
+    assert contains_queue_plan_markers("(branch feature/x)\nrun\n(end)") is True
+    assert contains_queue_plan_markers("(parallel2)\nrun\n***\nmore\n(end)") is True
+    assert contains_queue_plan_markers("FOR name IN (joe, tod)\nrun (name)\n(end)") is True
 
 
 def test_contains_queue_plan_markers_ignores_non_marker_plain_text() -> None:
@@ -41,9 +41,7 @@ def test_parse_queue_plan_separator_expands_prompts() -> None:
 
 
 def test_parse_queue_plan_branch_section_scopes_prompts() -> None:
-    prompts = parse_queue_plan_text(
-        "((branch feature/auth))\ninside worktree\n***\nagain\n((end))\noutside"
-    )
+    prompts = parse_queue_plan_text("(branch feature/auth)\ninside worktree\n***\nagain\n(end)\noutside")
     assert [item.prompt for item in prompts] == ["inside worktree", "again", "outside"]
     assert [item.branch_name for item in prompts] == [
         "feature/auth",
@@ -53,28 +51,28 @@ def test_parse_queue_plan_branch_section_scopes_prompts() -> None:
 
 
 def test_parse_queue_plan_branch_supports_single_line_statement() -> None:
-    prompts = parse_queue_plan_text("((branch feature/auth)) run here")
+    prompts = parse_queue_plan_text("(branch feature/auth) run here")
     assert [item.prompt for item in prompts] == ["run here"]
     assert [item.branch_name for item in prompts] == ["feature/auth"]
 
 
 def test_parse_queue_plan_loop_expands_prompts() -> None:
-    prompts = parse_queue_plan_text("((loop3))\nrun once\n((end))")
+    prompts = parse_queue_plan_text("(loop3)\nrun once\n(end)")
     assert [item.prompt for item in prompts] == ["run once", "run once", "run once"]
 
 
 def test_parse_queue_plan_loop_supports_single_line_statement() -> None:
-    prompts = parse_queue_plan_text("((loop3)) continue")
+    prompts = parse_queue_plan_text("(loop3) continue")
     assert [item.prompt for item in prompts] == ["continue", "continue", "continue"]
 
 
 def test_parse_queue_plan_substitution_loop_expands_cartesian_product() -> None:
     prompts = parse_queue_plan_text(
-        "FOR model IN ((c56m, c46l))\n"
-        "FOR name IN ((joe, tod))\n"
-        "((((model)))) check to make sure name is ((name))\n"
-        "((end))\n"
-        "((end))"
+        "FOR model IN (c56m, c46l)\n"
+        "FOR name IN (joe, tod)\n"
+        "(model) check to make sure name is (name)\n"
+        "(end)\n"
+        "(end)"
     )
 
     assert [item.prompt for item in prompts] == [
@@ -86,52 +84,50 @@ def test_parse_queue_plan_substitution_loop_expands_cartesian_product() -> None:
 
 
 def test_parse_queue_plan_substitution_loop_supports_single_line_statement() -> None:
-    prompts = parse_queue_plan_text("FOR name IN ((joe, tod)) say hi to ((name))")
+    prompts = parse_queue_plan_text("FOR name IN (joe, tod) say hi to (name)")
     assert [item.prompt for item in prompts] == ["say hi to joe", "say hi to tod"]
 
 
 def test_parse_queue_plan_substitution_loop_preserves_runtime_references() -> None:
-    prompts = parse_queue_plan_text(
-        "FOR name IN ((joe, tod))\ncompare ((name)) to ((saved_output))\n((end))"
-    )
+    prompts = parse_queue_plan_text("FOR name IN (joe, tod)\ncompare (name) to (saved_output)\n(end)")
 
     assert [item.prompt for item in prompts] == [
-        "compare joe to ((saved_output))",
-        "compare tod to ((saved_output))",
+        "compare joe to (saved_output)",
+        "compare tod to (saved_output)",
     ]
 
 
 def test_parse_queue_plan_substitution_loop_preserves_save_then_file_write_flow() -> None:
     prompts = parse_queue_plan_text(
-        "FOR name IN ((joe, tod))\n"
-        "((save draft))\n"
-        "Draft content for ((name))\n"
+        "FOR name IN (joe, tod)\n"
+        "(save draft)\n"
+        "Draft content for (name)\n"
         "***\n"
-        "Write ((draft)) to notes/((name)).md\n"
-        "((end))"
+        "Write (draft) to notes/(name).md\n"
+        "(end)"
     )
 
     assert [item.prompt for item in prompts] == [
-        "((save draft))\nDraft content for joe",
-        "Write ((draft)) to notes/joe.md",
-        "((save draft))\nDraft content for tod",
-        "Write ((draft)) to notes/tod.md",
+        "(save draft)\nDraft content for joe",
+        "Write (draft) to notes/joe.md",
+        "(save draft)\nDraft content for tod",
+        "Write (draft) to notes/tod.md",
     ]
 
 
 def test_parse_queue_plan_rejects_invalid_substitution_loop_values() -> None:
     with pytest.raises(QueuePlanError, match="Values must be comma-separated"):
-        parse_queue_plan_text("FOR name IN ((joe, ))\nrun ((name))\n((end))")
+        parse_queue_plan_text("FOR name IN (joe, )\nrun (name)\n(end)")
 
 
 def test_parse_queue_plan_supports_combined_prefix_directives() -> None:
-    prompts = parse_queue_plan_text("((branch feature/auth, loop2)) run here")
+    prompts = parse_queue_plan_text("(branch feature/auth, loop2) run here")
     assert [item.prompt for item in prompts] == ["run here", "run here"]
     assert [item.branch_name for item in prompts] == ["feature/auth", "feature/auth"]
 
 
 def test_parse_queue_plan_parallel_block_assigns_shared_group() -> None:
-    prompts = parse_queue_plan_text("((parallel2))\nfirst\n***\nsecond\n((end))")
+    prompts = parse_queue_plan_text("(parallel2)\nfirst\n***\nsecond\n(end)")
     assert [item.prompt for item in prompts] == ["first", "second"]
     assert prompts[0].parallel_group_id == prompts[1].parallel_group_id
     assert prompts[0].parallel_limit == 2
@@ -139,7 +135,7 @@ def test_parse_queue_plan_parallel_block_assigns_shared_group() -> None:
 
 
 def test_parse_queue_plan_parallel_inside_loop_creates_distinct_groups() -> None:
-    prompts = parse_queue_plan_text("((loop2))\n((parallel))\none\n((end))\n((end))")
+    prompts = parse_queue_plan_text("(loop2)\n(parallel)\none\n(end)\n(end)")
     assert [item.prompt for item in prompts] == ["one", "one"]
     assert prompts[0].parallel_group_id != prompts[1].parallel_group_id
     assert prompts[0].parallel_limit is None
@@ -148,12 +144,12 @@ def test_parse_queue_plan_parallel_inside_loop_creates_distinct_groups() -> None
 
 def test_parse_queue_plan_rejects_nested_parallel_blocks() -> None:
     with pytest.raises(QueuePlanError, match="nested parallel blocks"):
-        parse_queue_plan_text("((parallel))\n((parallel2))\nrun\n((end))\n((end))")
+        parse_queue_plan_text("(parallel)\n(parallel2)\nrun\n(end)\n(end)")
 
 
 def test_parse_queue_plan_allows_nested_loop_and_branch() -> None:
     prompts = parse_queue_plan_text(
-        "((loop2))\n" "outside\n" "((branch feature/a))\n" "inside\n" "((end))\n" "((end))"
+        "(loop2)\n" "outside\n" "(branch feature/a)\n" "inside\n" "(end)\n" "(end)"
     )
     assert [item.prompt for item in prompts] == [
         "outside",
@@ -170,31 +166,37 @@ def test_parse_queue_plan_allows_nested_loop_and_branch() -> None:
 
 
 def test_parse_queue_plan_allows_unclosed_loop_block_at_eof() -> None:
-    prompts = parse_queue_plan_text("((loop2))\nrun")
+    prompts = parse_queue_plan_text("(loop2)\nrun")
     assert [item.prompt for item in prompts] == ["run", "run"]
     assert [item.branch_name for item in prompts] == [None, None]
 
 
 def test_parse_queue_plan_allows_unclosed_branch_block_at_eof() -> None:
-    prompts = parse_queue_plan_text("((branch feature/a))\ninside")
+    prompts = parse_queue_plan_text("(branch feature/a)\ninside")
     assert [item.prompt for item in prompts] == ["inside"]
     assert [item.branch_name for item in prompts] == ["feature/a"]
 
 
 def test_parse_queue_plan_rejects_branch_end_without_open_block() -> None:
     with pytest.raises(QueuePlanError, match="end marker without a matching open block"):
-        parse_queue_plan_text("run\n((end))")
+        parse_queue_plan_text("run\n(end)")
 
 
 def test_parse_queue_plan_end_closes_innermost_open_block() -> None:
-    prompts = parse_queue_plan_text("((loop2))\n((branch f2))\nrun\n((end))")
+    prompts = parse_queue_plan_text("(loop2)\n(branch f2)\nrun\n(end)")
     assert [item.prompt for item in prompts] == ["run", "run"]
     assert [item.branch_name for item in prompts] == ["f2", "f2"]
 
 
+def test_parse_queue_plan_end_with_count_closes_multiple_open_blocks() -> None:
+    prompts = parse_queue_plan_text("(loop2)\n(branch f2)\nrun\n(end2)\noutside")
+    assert [item.prompt for item in prompts] == ["run", "run", "outside"]
+    assert [item.branch_name for item in prompts] == ["f2", "f2", None]
+
+
 def test_parse_queue_plan_rejects_non_positive_loop_count() -> None:
     with pytest.raises(QueuePlanError, match="must be >= 1"):
-        parse_queue_plan_text("((loop0))\nrun\n((end))")
+        parse_queue_plan_text("(loop0)\nrun\n(end)")
 
 
 def test_parse_queue_plan_rejects_legacy_loop_marker() -> None:
@@ -209,12 +211,12 @@ def test_parse_queue_plan_rejects_unknown_marker() -> None:
 
 def test_parse_queue_plan_enforces_expansion_cap() -> None:
     with pytest.raises(QueuePlanError, match="more than 3 items"):
-        parse_queue_plan_text("((loop4))\nrun\n((end))", max_expanded_items=3)
+        parse_queue_plan_text("(loop4)\nrun\n(end)", max_expanded_items=3)
 
 
 def test_parse_queue_plan_rejects_legacy_end_markers() -> None:
     with pytest.raises(QueuePlanError, match="Unknown queue-plan marker"):
-        parse_queue_plan_text("((loop2))\nrun\n((endloop))")
+        parse_queue_plan_text("(loop2)\nrun\n(endloop)")
 
 
 def test_parse_queue_plan_submission_defaults_to_append_pending() -> None:
@@ -225,7 +227,7 @@ def test_parse_queue_plan_submission_defaults_to_append_pending() -> None:
 
 
 def test_parse_queue_plan_submission_supports_append_directive() -> None:
-    options, body = parse_queue_plan_submission("((append))\nfirst task\n***\nsecond task")
+    options, body = parse_queue_plan_submission("(append)\nfirst task\n***\nsecond task")
     assert options.replace_pending is False
     assert options.directive_explicit is True
     assert options.insertion_mode == "append"
@@ -234,7 +236,7 @@ def test_parse_queue_plan_submission_supports_append_directive() -> None:
 
 
 def test_parse_queue_plan_submission_supports_prepend_directive() -> None:
-    options, body = parse_queue_plan_submission("((prepend))\nfirst task\n***\nsecond task")
+    options, body = parse_queue_plan_submission("(prepend)\nfirst task\n***\nsecond task")
     assert options.replace_pending is False
     assert options.directive_explicit is True
     assert options.insertion_mode == "prepend"
@@ -243,7 +245,7 @@ def test_parse_queue_plan_submission_supports_prepend_directive() -> None:
 
 
 def test_parse_queue_plan_submission_supports_insert_directive() -> None:
-    options, body = parse_queue_plan_submission("((insert2))\nfirst task\n***\nsecond task")
+    options, body = parse_queue_plan_submission("(insert2)\nfirst task\n***\nsecond task")
     assert options.replace_pending is False
     assert options.directive_explicit is True
     assert options.insertion_mode == "insert"
@@ -253,19 +255,19 @@ def test_parse_queue_plan_submission_supports_insert_directive() -> None:
 
 def test_parse_queue_plan_submission_rejects_clear_directive() -> None:
     with pytest.raises(QueuePlanError, match="handled by `/qc clear`"):
-        parse_queue_plan_submission("((clear))\nfirst task")
+        parse_queue_plan_submission("(clear)\nfirst task")
 
 
 def test_parse_queue_plan_submission_rejects_conflicting_directives() -> None:
     with pytest.raises(QueuePlanError, match="directives conflict"):
-        parse_queue_plan_submission("((append))\n((prepend))\nfirst task")
+        parse_queue_plan_submission("(append)\n(prepend)\nfirst task")
 
 
 def test_parse_queue_plan_submission_supports_combined_directives() -> None:
     now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
     options, body = parse_queue_plan_submission(
-        "((append, at 2026-03-13T18:30:00+00:00 start, at 2026-03-13T18:45:00+00:00 pause, "
-        "branch feature/auth, loop2)) ship fix",
+        "(append, at 2026-03-13T18:30:00+00:00 start, at 2026-03-13T18:45:00+00:00 pause, "
+        "branch feature/auth, loop2) ship fix",
         now_utc=now,
     )
 
@@ -276,18 +278,18 @@ def test_parse_queue_plan_submission_supports_combined_directives() -> None:
         ("start", datetime(2026, 3, 13, 18, 30, tzinfo=timezone.utc)),
         ("pause", datetime(2026, 3, 13, 18, 45, tzinfo=timezone.utc)),
     ]
-    assert body == "((branch feature/auth, loop2)) ship fix"
+    assert body == "(branch feature/auth, loop2) ship fix"
 
 
 def test_parse_queue_plan_submission_rejects_conflicting_combined_directives() -> None:
     with pytest.raises(QueuePlanError, match="directives conflict"):
-        parse_queue_plan_submission("((append, prepend))\nfirst task")
+        parse_queue_plan_submission("(append, prepend)\nfirst task")
 
 
 def test_parse_queue_plan_submission_parses_timer_directives_with_iso_time() -> None:
     now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
     options, body = parse_queue_plan_submission(
-        "((at 2026-03-13T18:30:00+00:00))\nfirst task",
+        "(at 2026-03-13T18:30:00+00:00)\nfirst task",
         now_utc=now,
     )
 
@@ -305,7 +307,7 @@ def test_parse_queue_plan_submission_parses_timer_directives_with_hhmm_time() ->
     future_local = local_now + timedelta(minutes=5)
     hhmm = future_local.strftime("%H:%M")
 
-    options, _ = parse_queue_plan_submission(f"((at {hhmm}))\nfirst task", now_utc=now_utc)
+    options, _ = parse_queue_plan_submission(f"(at {hhmm})\nfirst task", now_utc=now_utc)
 
     assert len(options.scheduled_controls) == 1
     assert options.scheduled_controls[0].action == "resume"
@@ -316,7 +318,7 @@ def test_parse_queue_plan_submission_rejects_past_timer_directive() -> None:
     now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
     with pytest.raises(QueuePlanError, match="in the past"):
         parse_queue_plan_submission(
-            "((at 2026-03-13T17:59:00+00:00))\nfirst task",
+            "(at 2026-03-13T17:59:00+00:00)\nfirst task",
             now_utc=now,
         )
 
@@ -325,7 +327,7 @@ def test_parse_queue_plan_submission_rejects_iso_time_without_timezone() -> None
     now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
     with pytest.raises(QueuePlanError, match="must include a timezone offset"):
         parse_queue_plan_submission(
-            "((at 2026-03-13T18:30:00))\nfirst task",
+            "(at 2026-03-13T18:30:00)\nfirst task",
             now_utc=now,
         )
 
@@ -363,7 +365,7 @@ async def test_materialize_queue_plan_resolves_existing_worktree() -> None:
         add_worktree=AsyncMock(),
     )
     materialized = await materialize_queue_plan_text(
-        text="((branch feature/auth))\nrun\n((end))",
+        text="(branch feature/auth)\nrun\n(end)",
         working_directory="/repo",
         git_service=git_service,
     )
@@ -386,7 +388,7 @@ async def test_materialize_queue_plan_preserves_session_subdirectory_in_worktree
     )
 
     materialized = await materialize_queue_plan_text(
-        text="((branch feature/auth))\nrun\n((end))",
+        text="(branch feature/auth)\nrun\n(end)",
         working_directory="/repo/services/api",
         git_service=git_service,
     )
@@ -403,7 +405,7 @@ async def test_materialize_queue_plan_creates_missing_worktree() -> None:
         add_worktree=AsyncMock(return_value="/repo-worktrees/feature/new"),
     )
     materialized = await materialize_queue_plan_text(
-        text="((branch feature/new))\nrun\n((end))",
+        text="(branch feature/new)\nrun\n(end)",
         working_directory="/repo",
         git_service=git_service,
     )
@@ -421,7 +423,7 @@ async def test_materialize_queue_plan_rejects_branch_sections_outside_git_repo()
     )
     with pytest.raises(QueuePlanError, match="not a git repository"):
         await materialize_queue_plan_text(
-            text="((branch feature/new))\nrun\n((end))",
+            text="(branch feature/new)\nrun\n(end)",
             working_directory="/repo",
             git_service=git_service,
         )
@@ -429,7 +431,7 @@ async def test_materialize_queue_plan_rejects_branch_sections_outside_git_repo()
 
 @pytest.mark.asyncio
 async def test_materialize_queue_plan_prompts_applies_branch_path_mapping() -> None:
-    prompts = parse_queue_plan_text("((branch feature/a))\nfirst\n((end))\nsecond")
+    prompts = parse_queue_plan_text("(branch feature/a)\nfirst\n(end)\nsecond")
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
         list_worktrees=AsyncMock(return_value=[]),
@@ -450,7 +452,7 @@ async def test_materialize_queue_plan_prompts_applies_branch_path_mapping() -> N
 
 @pytest.mark.asyncio
 async def test_materialize_queue_plan_preserves_subdirectory_for_new_worktree() -> None:
-    prompts = parse_queue_plan_text("((branch feature/a))\nfirst\n((end))")
+    prompts = parse_queue_plan_text("(branch feature/a)\nfirst\n(end)")
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
         list_worktrees=AsyncMock(return_value=[SimpleNamespace(branch="main", path="/repo")]),
@@ -469,7 +471,7 @@ async def test_materialize_queue_plan_preserves_subdirectory_for_new_worktree() 
 @pytest.mark.asyncio
 async def test_materialize_queue_plan_preserves_parallel_metadata() -> None:
     materialized = await materialize_queue_plan_text(
-        text="((parallel3))\nfirst\n***\nsecond\n((end))",
+        text="(parallel3)\nfirst\n***\nsecond\n(end)",
         working_directory="/repo",
     )
 
