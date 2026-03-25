@@ -70,7 +70,7 @@ async def test_history_single_index_fetches_latest_prompt():
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_or_create_session=AsyncMock(return_value=session),
-            get_command_history=AsyncMock(
+            get_prompt_history=AsyncMock(
                 return_value=(
                     [
                         CommandHistory(
@@ -106,13 +106,14 @@ async def test_history_single_index_fetches_latest_prompt():
         logger=MagicMock(),
     )
 
-    deps.db.get_command_history.assert_awaited_once_with(7, limit=1, offset=0)
+    deps.db.get_prompt_history.assert_awaited_once_with(7, limit=1, offset=0)
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["thread_ts"] == "123.456"
     assert kwargs["text"] == "Prompt history"
     assert "Showing prompt #1 of 4" in kwargs["blocks"][0]["text"]["text"]
-    assert "*#1*" in kwargs["blocks"][2]["text"]["text"]
-    assert "latest prompt" in kwargs["blocks"][2]["text"]["text"]
+    rich_text_elements = kwargs["blocks"][2]["elements"]
+    assert "#1 | completed" in rich_text_elements[0]["elements"][0]["text"]
+    assert rich_text_elements[1]["elements"][0]["text"] == "latest prompt"
 
 
 @pytest.mark.asyncio
@@ -123,7 +124,7 @@ async def test_history_range_clamps_when_fewer_prompts_exist():
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_or_create_session=AsyncMock(return_value=session),
-            get_command_history=AsyncMock(
+            get_prompt_history=AsyncMock(
                 return_value=(
                     [
                         CommandHistory(
@@ -167,11 +168,11 @@ async def test_history_range_clamps_when_fewer_prompts_exist():
         logger=MagicMock(),
     )
 
-    deps.db.get_command_history.assert_awaited_once_with(8, limit=4, offset=0)
+    deps.db.get_prompt_history.assert_awaited_once_with(8, limit=4, offset=0)
     blocks = client.chat_postMessage.await_args.kwargs["blocks"]
     assert "Requested through #4" in blocks[2]["elements"][0]["text"]
-    assert "*#1*" in blocks[4]["text"]["text"]
-    assert "*#2*" in blocks[6]["text"]["text"]
+    assert blocks[4]["elements"][0]["elements"][0]["text"].startswith("#1 | completed")
+    assert blocks[6]["elements"][0]["elements"][0]["text"].startswith("#2 | failed")
 
 
 @pytest.mark.asyncio
@@ -182,7 +183,7 @@ async def test_history_reports_empty_session():
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_or_create_session=AsyncMock(return_value=session),
-            get_command_history=AsyncMock(return_value=([], 0)),
+            get_prompt_history=AsyncMock(return_value=([], 0)),
         ),
         executor=SimpleNamespace(),
     )
@@ -215,7 +216,7 @@ async def test_history_reports_out_of_range_index():
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_or_create_session=AsyncMock(return_value=session),
-            get_command_history=AsyncMock(return_value=([], 3)),
+            get_prompt_history=AsyncMock(return_value=([], 3)),
         ),
         executor=SimpleNamespace(),
     )
@@ -246,7 +247,7 @@ async def test_history_rejects_invalid_range():
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_or_create_session=AsyncMock(),
-            get_command_history=AsyncMock(),
+            get_prompt_history=AsyncMock(),
         ),
         executor=SimpleNamespace(),
     )
@@ -268,3 +269,36 @@ async def test_history_rejects_invalid_range():
 
     deps.db.get_or_create_session.assert_not_awaited()
     assert "greater than or equal" in client.chat_postMessage.await_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_history_uses_prompt_only_query():
+    """`/hist` should use prompt history rather than the generic command history query."""
+    app = _FakeApp()
+    session = Session(id=11, working_directory="/repo")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=session),
+            get_prompt_history=AsyncMock(return_value=([], 0)),
+            get_command_history=AsyncMock(),
+        ),
+        executor=SimpleNamespace(),
+    )
+    register_basic_commands(app, deps)
+
+    handler = app.handlers["/hist"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "",
+            "command": "/hist",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    deps.db.get_prompt_history.assert_awaited_once_with(11, limit=10, offset=0)
+    deps.db.get_command_history.assert_not_called()

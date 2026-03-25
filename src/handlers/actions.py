@@ -85,9 +85,11 @@ def _split_copy_modal_chunks(content: str) -> tuple[list[str], int]:
         break_point = remaining.rfind("\n", 0, _COPY_MODAL_CHUNK_SIZE)
         if break_point == -1 or break_point < _COPY_MODAL_CHUNK_SIZE // 2:
             break_point = _COPY_MODAL_CHUNK_SIZE
+        else:
+            break_point += 1
 
         chunks.append(remaining[:break_point])
-        remaining = remaining[break_point:].lstrip("\n")
+        remaining = remaining[break_point:]
 
     return chunks or [""], len(remaining)
 

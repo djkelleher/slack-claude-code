@@ -599,6 +599,28 @@ class DatabaseRepository:
             rows = await cursor.fetchall()
             return [CommandHistory.from_row(row) for row in rows], total
 
+    async def get_prompt_history(
+        self, session_id: int, limit: int = 10, offset: int = 0
+    ) -> tuple[list[CommandHistory], int]:
+        """Get paginated prompt history for a session, excluding slash commands."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """SELECT COUNT(*) FROM command_history
+                   WHERE session_id = ? AND (TRIM(command) = '' OR TRIM(command) NOT LIKE '/%')""",
+                (session_id,),
+            )
+            total = (await cursor.fetchone())[0]
+
+            cursor = await db.execute(
+                """SELECT * FROM command_history
+                   WHERE session_id = ? AND (TRIM(command) = '' OR TRIM(command) NOT LIKE '/%')
+                   ORDER BY created_at DESC
+                   LIMIT ? OFFSET ?""",
+                (session_id, limit, offset),
+            )
+            rows = await cursor.fetchall()
+            return [CommandHistory.from_row(row) for row in rows], total
+
     async def get_command_by_id(self, command_id: int) -> Optional[CommandHistory]:
         """Get a specific command by ID."""
         async with self._get_connection() as db:

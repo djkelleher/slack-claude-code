@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.handlers.actions import register_actions
+from src.handlers.actions import _split_copy_modal_chunks, register_actions
 from src.utils.detail_cache import DetailCache
 
 
@@ -138,6 +138,15 @@ async def test_copy_command_output_prefers_detailed_output_and_opens_modal() -> 
     input_blocks = [block for block in view["blocks"] if block["type"] == "input"]
     assert input_blocks[0]["element"]["initial_value"] == "persisted details"
     assert input_blocks[0]["element"]["focus_on_load"] is True
+
+
+def test_copy_modal_chunking_preserves_newline_boundaries() -> None:
+    content = ("a" * 2899) + "\n" + "tail"
+
+    chunks, truncated_chars = _split_copy_modal_chunks(content)
+
+    assert truncated_chars == 0
+    assert "".join(chunks) == content
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,6 @@ from slack_bolt.async_app import AsyncApp
 from src.config import config
 from src.database.models import CommandHistory
 from src.handlers.response_delivery import deliver_command_response
-from src.utils.formatters.base import escape_markdown
 from src.utils.formatters.command import error_message
 from src.utils.formatters.directory import cwd_updated, directory_listing
 from src.utils.formatters.streaming import processing_message
@@ -69,11 +68,11 @@ def _format_history_timestamp(created_at: datetime) -> str:
 
 
 def _truncate_history_prompt(prompt: str, limit: int) -> str:
-    """Return escaped prompt text truncated for Slack display."""
+    """Return literal prompt text truncated for Slack display."""
     normalized = (prompt or "").strip() or "(empty prompt)"
     if len(normalized) > limit:
         normalized = normalized[: limit - 3].rstrip() + "..."
-    return escape_markdown(normalized)
+    return normalized
 
 
 def _history_entry_blocks(
@@ -95,14 +94,25 @@ def _history_entry_blocks(
         quoted_prompt = "> " + prompt_text.replace("\n", "\n> ")
         blocks.append(
             {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"*#{history_index}* | `{entry.status}` | "
-                        f"`{_format_history_timestamp(entry.created_at)}`\n{quoted_prompt}"
-                    ),
-                },
+                "type": "rich_text",
+                "elements": [
+                    {
+                        "type": "rich_text_section",
+                        "elements": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    f"#{history_index} | {entry.status} | "
+                                    f"{_format_history_timestamp(entry.created_at)}"
+                                ),
+                            }
+                        ],
+                    },
+                    {
+                        "type": "rich_text_preformatted",
+                        "elements": [{"type": "text", "text": prompt_text}],
+                    },
+                ],
             }
         )
         if offset != len(entries) - 1:
@@ -259,7 +269,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             default_cwd=config.DEFAULT_WORKING_DIR,
         )
         limit = end_index - start_index + 1
-        history, total = await deps.db.get_command_history(
+        history, total = await deps.db.get_prompt_history(
             session.id,
             limit=limit,
             offset=start_index - 1,

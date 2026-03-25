@@ -459,6 +459,20 @@ class TestCommandHistoryOperations:
         assert len(history2) == 5
 
     @pytest.mark.asyncio
+    async def test_get_prompt_history_excludes_slash_commands(self, db_repo):
+        """Prompt history should exclude slash-command entries such as `/!`."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        await db_repo.add_command(session.id, "/! git status")
+        await db_repo.add_command(session.id, "real prompt")
+
+        history, total = await db_repo.get_prompt_history(
+            session.id, limit=10, offset=0
+        )
+
+        assert total == 1
+        assert [entry.command for entry in history] == ["real prompt"]
+
+    @pytest.mark.asyncio
     async def test_get_command_by_id_not_found(self, db_repo):
         """get_command_by_id returns None for nonexistent."""
         result = await db_repo.get_command_by_id(99999)
