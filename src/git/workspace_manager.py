@@ -1,8 +1,8 @@
 """Workspace lease orchestration for concurrent executions."""
 
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
-import re
 from typing import Optional
 
 import aiosqlite
@@ -11,7 +11,6 @@ from src.config import config
 from src.database.models import Session, WorkspaceLease
 from src.database.repository import DatabaseRepository
 
-from .models import Worktree
 from .service import GitError, GitService
 
 

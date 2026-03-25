@@ -49,13 +49,9 @@ def _parse_history_selection(raw_text: str) -> tuple[int, int]:
     if start < 1 or end < 1:
         raise ValueError("History indexes must be positive integers.")
     if end < start:
-        raise ValueError(
-            "History range end must be greater than or equal to the start."
-        )
+        raise ValueError("History range end must be greater than or equal to the start.")
     if (end - start + 1) > _MAX_HISTORY_SPAN:
-        raise ValueError(
-            f"History range too large. Maximum span is {_MAX_HISTORY_SPAN} prompts."
-        )
+        raise ValueError(f"History range too large. Maximum span is {_MAX_HISTORY_SPAN} prompts.")
     return start, end
 
 
@@ -83,15 +79,12 @@ def _history_entry_blocks(
     """Build Slack blocks for one or more prompt history entries."""
     blocks: list[dict] = []
     prompt_limit = (
-        _SINGLE_HISTORY_PROMPT_LIMIT
-        if len(entries) == 1
-        else _RANGE_HISTORY_PROMPT_LIMIT
+        _SINGLE_HISTORY_PROMPT_LIMIT if len(entries) == 1 else _RANGE_HISTORY_PROMPT_LIMIT
     )
 
     for offset, entry in enumerate(entries):
         history_index = start_index + offset
         prompt_text = _truncate_history_prompt(entry.command, prompt_limit)
-        quoted_prompt = "> " + prompt_text.replace("\n", "\n> ")
         blocks.append(
             {
                 "type": "rich_text",
@@ -220,9 +213,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             output = "Command completed with no output."
 
         if process.returncode == 0:
-            await deps.db.update_command_status(
-                cmd_history.id, "completed", output=output
-            )
+            await deps.db.update_command_status(cmd_history.id, "completed", output=output)
         else:
             await deps.db.update_command_status(
                 cmd_history.id,
@@ -353,12 +344,8 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         try:
             entries = list(target_path.iterdir())
             # Sort: directories first, then files, alphabetically
-            dirs = sorted(
-                [e for e in entries if e.is_dir()], key=lambda x: x.name.lower()
-            )
-            files = sorted(
-                [e for e in entries if e.is_file()], key=lambda x: x.name.lower()
-            )
+            dirs = sorted([e for e in entries if e.is_dir()], key=lambda x: x.name.lower())
+            files = sorted([e for e in entries if e.is_file()], key=lambda x: x.name.lower())
             sorted_entries = dirs + files
 
             # Convert to (name, is_dir) tuples for formatter
@@ -417,9 +404,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         # Update working directory
-        await deps.db.update_session_cwd(
-            ctx.channel_id, ctx.thread_ts, str(target_path)
-        )
+        await deps.db.update_session_cwd(ctx.channel_id, ctx.thread_ts, str(target_path))
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
             text=f"Working directory updated to: {target_path}",

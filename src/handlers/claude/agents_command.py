@@ -384,6 +384,7 @@ async def _run_agent_with_streaming(
             output = output[:2500] + "\n\n... (truncated)"
 
         status_emoji = ":heavy_check_mark:" if result.success else ":x:"
+        completion_status = "completed" if result.success else "failed"
 
         # Build cost/duration context
         context_parts = []
@@ -397,7 +398,7 @@ async def _run_agent_with_streaming(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"{status_emoji} Agent `{agent.name}` completed\n\n> {task[:100]}",
+                    "text": f"{status_emoji} Agent `{agent.name}` {completion_status}\n\n> {task[:100]}",
                 },
             },
             {"type": "divider"},
@@ -418,7 +419,7 @@ async def _run_agent_with_streaming(
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
-            text=f"Agent {agent.name} {'failed' if not success else 'completed'}",
+            text=f"Agent {agent.name} {completion_status}",
             blocks=blocks,
         )
 
