@@ -287,6 +287,7 @@ async def _post_or_auto_answer_question(
                 f"Auto-answering {log_prefix} question {pending_question.tool_use_id} "
                 f"for queue-style execution ({len(pending_question.questions)} question(s))"
             )
+        await QuestionManager.cancel(pending_question.question_id)
         return response
 
     if slack_client is None:
@@ -695,8 +696,30 @@ async def _execute_codex_backend(
             default_question="Please provide additional input.",
             default_header="Input Needed",
         )
+        questions = QuestionManager.parse_ask_user_question_input(normalized_tool_input)
 
         if pause_on_questions:
+            deferred_answers = await QuestionManager.consume_deferred_answer(
+                session_id=str(session.id),
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                questions=questions,
+            )
+            if deferred_answers is not None:
+                state.question_count += 1
+                if logger:
+                    logger.info(
+                        f"Replaying deferred answer for Codex question request {tool_use_id} "
+                        f"({len(questions)} question(s))"
+                    )
+                response = QuestionManager.serialize_answers(
+                    questions,
+                    deferred_answers,
+                    backend="codex",
+                )
+                if isinstance(response, dict):
+                    return response
+
             if slack_client is not None:
                 if not state.pending_question or state.pending_question.tool_use_id != tool_use_id:
                     state.pending_question = await QuestionManager.create_pending_question(
@@ -705,6 +728,7 @@ async def _execute_codex_backend(
                         thread_ts=thread_ts,
                         tool_use_id=tool_use_id,
                         tool_input=normalized_tool_input,
+                        defer_for_resume=True,
                     )
                 await QuestionManager.post_question_to_slack(
                     state.pending_question,
@@ -716,7 +740,6 @@ async def _execute_codex_backend(
             raise RuntimeError(_QUEUE_PAUSE_ON_QUESTION_SIGNAL)
 
         if auto_answer_questions:
-            questions = QuestionManager.parse_ask_user_question_input(normalized_tool_input)
             auto_answers = QuestionManager.select_recommended_answers(questions)
             state.question_count += 1
             if logger:
@@ -963,6 +986,7 @@ async def _execute_claude_backend(
                     thread_ts=thread_ts,
                     tool_use_id=tool.id,
                     tool_input=QuestionManager.normalize_question_tool_input(tool.input),
+                    defer_for_resume=pause_on_questions,
                 )
         if on_chunk:
             await on_chunk(msg)
@@ -1013,6 +1037,33 @@ async def _execute_claude_backend(
         and state.question_count < max_questions
     ):
         if pause_on_questions:
+            deferred_answers = await QuestionManager.consume_deferred_answer(
+                session_id=str(session.id),
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                questions=state.pending_question.questions,
+            )
+            if deferred_answers is not None:
+                state.pending_question.answers = deferred_answers
+                answer_text = QuestionManager.format_answer(
+                    state.pending_question, backend="claude"
+                )
+                if isinstance(answer_text, str):
+                    state.question_count += 1
+                    if logger:
+                        logger.info(
+                            "Replaying deferred answer for Claude question "
+                            f"{state.pending_question.tool_use_id} "
+                            f"({len(state.pending_question.questions)} question(s))"
+                        )
+                    state.pending_question = None
+                    result = await run_claude_turn(
+                        answer_text,
+                        result.session_id,
+                        mode=session.permission_mode,
+                        turn_execution_id=f"{execution_id}-q{state.question_count}",
+                    )
+                    continue
             question_pause_requested = True
             if slack_client is not None:
                 await QuestionManager.post_question_to_slack(

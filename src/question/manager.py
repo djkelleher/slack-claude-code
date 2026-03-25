@@ -12,7 +12,7 @@ import asyncio
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from loguru import logger
@@ -23,6 +23,17 @@ from ..database.repository import DatabaseRepository
 from ..utils.pending_manager import PendingManager
 
 _RECOMMENDED_OPTION_SUFFIX = re.compile(r"\(\s*recommended\s*\)\s*$", re.IGNORECASE)
+_QUESTION_CUE_RE = re.compile(
+    r"\b("
+    r"who|what|when|where|why|how|"
+    r"can|could|would|should|will|"
+    r"do|does|did|is|are|am|"
+    r"select|choose|confirm|pick|provide"
+    r")\b",
+    re.IGNORECASE,
+)
+_DEFERRED_ANSWER_TTL = timedelta(hours=24)
+_MAX_DEFERRED_ANSWERS_PER_SCOPE = 20
 
 
 @dataclass
@@ -57,8 +68,20 @@ class PendingQuestion:
     message_ts: Optional[str] = None
     future: Optional[asyncio.Future] = field(default=None, repr=False)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    defer_for_resume: bool = False
     # Collected answers: question_index -> list of selected labels
     answers: dict[int, list[str]] = field(default_factory=dict)
+
+
+@dataclass
+class _DeferredQuestionAnswer:
+    """Resolved answer snapshot used for queue pause/resume handoff."""
+
+    session_id: str
+    channel_id: str
+    thread_ts: Optional[str]
+    answers: dict[int, list[str]]
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class QuestionManager:
@@ -69,6 +92,132 @@ class QuestionManager:
     """
 
     _pending = PendingManager[PendingQuestion]()
+    _deferred_answers: dict[str, list[_DeferredQuestionAnswer]] = {}
+    _deferred_lock: Optional[asyncio.Lock] = None
+    _deferred_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    @classmethod
+    def _deferred_scope_key(
+        cls, *, session_id: str, channel_id: str, thread_ts: Optional[str]
+    ) -> str:
+        normalized_thread_ts = (thread_ts or "").strip() or "channel"
+        return f"{session_id}:{channel_id}:{normalized_thread_ts}"
+
+    @classmethod
+    async def _get_deferred_lock(cls) -> asyncio.Lock:
+        """Return lock for deferred-answer storage keyed to active event loop."""
+        current_loop = asyncio.get_running_loop()
+        if cls._deferred_lock_loop is not current_loop:
+            cls._deferred_answers.clear()
+            cls._deferred_lock_loop = current_loop
+            cls._deferred_lock = asyncio.Lock()
+        if cls._deferred_lock is None:
+            cls._deferred_lock = asyncio.Lock()
+        return cls._deferred_lock
+
+    @classmethod
+    def _normalize_answers_snapshot(
+        cls, answers_by_index: dict[int, list[str]]
+    ) -> dict[int, list[str]]:
+        """Normalize answer payload into deterministic int->list[str] structure."""
+        normalized: dict[int, list[str]] = {}
+        for key, value in answers_by_index.items():
+            try:
+                index = int(key)
+            except (TypeError, ValueError):
+                continue
+            if index < 0:
+                continue
+            if not isinstance(value, list):
+                continue
+            normalized[index] = [str(option) for option in value]
+        return normalized
+
+    @classmethod
+    async def _store_deferred_answer(cls, pending: PendingQuestion) -> None:
+        """Store resolved queue-pause answers for replay on a resumed execution."""
+        answers_snapshot = cls._normalize_answers_snapshot(pending.answers)
+        if not answers_snapshot:
+            return
+        deferred = _DeferredQuestionAnswer(
+            session_id=pending.session_id,
+            channel_id=pending.channel_id,
+            thread_ts=pending.thread_ts,
+            answers=answers_snapshot,
+        )
+        scope_key = cls._deferred_scope_key(
+            session_id=pending.session_id,
+            channel_id=pending.channel_id,
+            thread_ts=pending.thread_ts,
+        )
+        lock = await cls._get_deferred_lock()
+        async with lock:
+            entries = cls._deferred_answers.setdefault(scope_key, [])
+            entries.append(deferred)
+            if len(entries) > _MAX_DEFERRED_ANSWERS_PER_SCOPE:
+                del entries[: len(entries) - _MAX_DEFERRED_ANSWERS_PER_SCOPE]
+
+    @classmethod
+    def _deferred_answers_match_questions(
+        cls, *, questions: list[Question], answers_by_index: dict[int, list[str]]
+    ) -> bool:
+        """Validate that deferred answers still fit a newly emitted question payload."""
+        if not questions:
+            return False
+        if not answers_by_index:
+            return False
+        if any(index >= len(questions) for index in answers_by_index):
+            return False
+
+        for index, labels in answers_by_index.items():
+            if not isinstance(labels, list):
+                return False
+            question = questions[index]
+            valid_labels = {option.label for option in question.options}
+            if valid_labels and any(label not in valid_labels for label in labels):
+                return False
+        return True
+
+    @classmethod
+    async def consume_deferred_answer(
+        cls,
+        *,
+        session_id: str,
+        channel_id: str,
+        thread_ts: Optional[str],
+        questions: list[Question],
+    ) -> Optional[dict[int, list[str]]]:
+        """Consume one compatible deferred answer snapshot for a resumed queue execution."""
+        scope_key = cls._deferred_scope_key(
+            session_id=session_id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+        )
+        now = datetime.now(timezone.utc)
+        lock = await cls._get_deferred_lock()
+        async with lock:
+            queue = cls._deferred_answers.get(scope_key, [])
+            if not queue:
+                return None
+
+            queue[:] = [
+                item
+                for item in queue
+                if now - item.created_at <= _DEFERRED_ANSWER_TTL
+            ]
+            if not queue:
+                cls._deferred_answers.pop(scope_key, None)
+                return None
+
+            for idx, item in enumerate(queue):
+                if cls._deferred_answers_match_questions(
+                    questions=questions, answers_by_index=item.answers
+                ):
+                    selected = queue.pop(idx)
+                    if not queue:
+                        cls._deferred_answers.pop(scope_key, None)
+                    return cls._normalize_answers_snapshot(selected.answers)
+            return None
 
     @staticmethod
     def normalize_question_tool_input(
@@ -170,6 +319,7 @@ class QuestionManager:
         thread_ts: Optional[str],
         tool_use_id: str,
         tool_input: dict,
+        defer_for_resume: bool = False,
     ) -> PendingQuestion:
         """Create a pending question from AskUserQuestion tool input.
 
@@ -195,6 +345,7 @@ class QuestionManager:
             tool_use_id=tool_use_id,
             questions=questions,
             future=future,
+            defer_for_resume=defer_for_resume,
         )
 
         await cls._pending.add(question_id, pending)
@@ -286,10 +437,17 @@ class QuestionManager:
     @staticmethod
     def _contains_question_text(context_text: str, questions: list[Question]) -> bool:
         """Return True when the assistant context or question payload appears interrogative."""
-        if "?" in context_text:
+        context_text = context_text or ""
+        if "?" in context_text or _QUESTION_CUE_RE.search(context_text):
             return True
         for question in questions:
-            if "?" in question.question:
+            question_text = (question.question or "").strip()
+            header_text = (question.header or "").strip()
+            if "?" in question_text or _QUESTION_CUE_RE.search(question_text):
+                return True
+            if "?" in header_text or _QUESTION_CUE_RE.search(header_text):
+                return True
+            if question.options:
                 return True
         return False
 
@@ -372,6 +530,10 @@ class QuestionManager:
             logger.warning(f"Question {question_id} already resolved")
             return None
 
+        if pending.defer_for_resume:
+            await cls._store_deferred_answer(pending)
+            await cls._pending.pop(question_id)
+
         logger.info(f"Question {question_id} resolved with answers: {pending.answers}")
         return pending
 
@@ -423,7 +585,15 @@ class QuestionManager:
         Returns:
             Number of questions cancelled
         """
-        return await cls._pending.cancel_for_session(session_id)
+        cancelled = await cls._pending.cancel_for_session(session_id)
+        lock = await cls._get_deferred_lock()
+        async with lock:
+            keys_to_delete = [
+                key for key in cls._deferred_answers if key.startswith(f"{session_id}:")
+            ]
+            for key in keys_to_delete:
+                cls._deferred_answers.pop(key, None)
+        return cancelled
 
     @classmethod
     def _is_recommended_option_label(cls, label: str) -> bool:

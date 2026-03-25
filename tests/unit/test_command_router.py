@@ -979,6 +979,75 @@ class TestCommandRouter:
         assert routed.result.error == "__QUEUE_PAUSE_ON_QUESTION__"
 
     @pytest.mark.asyncio
+    async def test_codex_pause_on_questions_replays_deferred_answer(self):
+        """Deferred pause-resume answers should be replayed instead of pausing again."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock()),
+        )
+
+        async def _fake_codex_execute(**kwargs):
+            payload = await kwargs["on_user_input_request"](
+                "item_1",
+                {
+                    "questions": [
+                        {
+                            "id": "q_1",
+                            "question": "Proceed?",
+                            "header": "Confirm",
+                            "options": [{"label": "Yes", "description": "Continue"}],
+                        }
+                    ]
+                },
+            )
+            assert payload == {"answers": {"q_1": {"answers": ["Yes"]}}}
+            return SimpleNamespace(
+                session_id="codex-new",
+                success=True,
+                output="Done.",
+            )
+
+        deps.codex_executor.execute = AsyncMock(side_effect=_fake_codex_execute)
+        session = Session(
+            id=124,
+            model="gpt-5.3-codex",
+            working_directory="/tmp",
+            codex_session_id="codex-old",
+            sandbox_mode="workspace-write",
+            approval_mode="on-request",
+        )
+
+        with patch(
+            "src.handlers.command_router.QuestionManager.consume_deferred_answer",
+            new=AsyncMock(return_value={0: ["Yes"]}),
+        ) as consume_deferred_answer:
+            with patch(
+                "src.handlers.command_router.QuestionManager.post_question_to_slack",
+                new=AsyncMock(),
+            ) as post_question_to_slack:
+                routed = await execute_for_session(
+                    deps=deps,
+                    session=session,
+                    prompt="hello",
+                    channel_id="C123",
+                    thread_ts=None,
+                    execution_id="exec-9-pause-codex-deferred",
+                    slack_client=SimpleNamespace(),
+                    user_id="U123",
+                    pause_on_questions=True,
+                )
+
+        consume_deferred_answer.assert_awaited_once()
+        post_question_to_slack.assert_not_awaited()
+        assert routed.result.success is True
+        assert getattr(routed.result, "paused_on_question", False) is False
+
+    @pytest.mark.asyncio
     async def test_codex_auto_approves_permissions_for_queue_execution(self):
         """Auto-approve mode should bypass Slack permission UI for Codex prompts."""
         deps = SimpleNamespace(
@@ -1267,7 +1336,21 @@ class TestCommandRouter:
             working_directory="/tmp",
             claude_session_id="claude-old",
         )
-        pending_question = SimpleNamespace(question_id="pq-claude", tool_use_id="tool_1")
+        pending_question = SimpleNamespace(
+            question_id="pq-claude",
+            tool_use_id="tool_1",
+            questions=[
+                SimpleNamespace(
+                    question="How should we proceed?",
+                    header="Decision",
+                    options=[
+                        SimpleNamespace(label="Do nothing"),
+                        SimpleNamespace(label="Use fast path"),
+                    ],
+                )
+            ],
+            answers={},
+        )
 
         with patch(
             "src.handlers.command_router.QuestionManager.create_pending_question",
@@ -1299,6 +1382,120 @@ class TestCommandRouter:
         assert routed.result.success is False
         assert routed.result.paused_on_question is True
         assert routed.result.error == "__QUEUE_PAUSE_ON_QUESTION__"
+
+    @pytest.mark.asyncio
+    async def test_claude_pause_on_questions_replays_deferred_answer(self):
+        """Deferred pause-resume answers should let Claude continue without re-pausing."""
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                update_session_claude_id=AsyncMock(),
+                update_session_codex_id=AsyncMock(),
+                update_session_mode=AsyncMock(),
+                get_or_create_session=AsyncMock(return_value=Session(codex_session_id=None)),
+            ),
+            executor=SimpleNamespace(execute=AsyncMock()),
+            codex_executor=SimpleNamespace(execute=AsyncMock(), thread_fork=AsyncMock()),
+        )
+        prompts: list[str] = []
+
+        async def _fake_claude_execute(**kwargs):
+            prompts.append(kwargs["prompt"])
+            if len(prompts) == 1:
+                await kwargs["on_chunk"](
+                    SimpleNamespace(
+                        type="assistant",
+                        content="Need input.",
+                        tool_activities=[
+                            SimpleNamespace(
+                                name="AskUserQuestion",
+                                result=None,
+                                id="tool_1",
+                                input={
+                                    "questions": [
+                                        {
+                                            "id": "q_1",
+                                            "question": "How should we proceed?",
+                                            "header": "Decision",
+                                            "options": [
+                                                {"label": "Do nothing"},
+                                                {"label": "Use fast path"},
+                                            ],
+                                            "multiSelect": False,
+                                        }
+                                    ]
+                                },
+                            )
+                        ],
+                    )
+                )
+                return SimpleNamespace(
+                    session_id="claude-new",
+                    success=True,
+                    output="Need input",
+                    has_pending_question=True,
+                    has_pending_plan_approval=False,
+                )
+            return SimpleNamespace(
+                session_id="claude-new",
+                success=True,
+                output="Done.",
+                has_pending_question=False,
+                has_pending_plan_approval=False,
+            )
+
+        deps.executor.execute = AsyncMock(side_effect=_fake_claude_execute)
+        session = Session(
+            id=125,
+            model="opus",
+            working_directory="/tmp",
+            claude_session_id="claude-old",
+        )
+        pending_question = SimpleNamespace(
+            question_id="pq-claude",
+            tool_use_id="tool_1",
+            questions=[
+                SimpleNamespace(
+                    question="How should we proceed?",
+                    header="Decision",
+                    options=[
+                        SimpleNamespace(label="Do nothing"),
+                        SimpleNamespace(label="Use fast path"),
+                    ],
+                )
+            ],
+            answers={},
+        )
+
+        with patch(
+            "src.handlers.command_router.QuestionManager.create_pending_question",
+            new=AsyncMock(return_value=pending_question),
+        ) as create_pending_question:
+            with patch(
+                "src.handlers.command_router.QuestionManager.consume_deferred_answer",
+                new=AsyncMock(return_value={0: ["Use fast path"]}),
+            ) as consume_deferred_answer:
+                with patch(
+                    "src.handlers.command_router.QuestionManager.post_question_to_slack",
+                    new=AsyncMock(),
+                ) as post_question_to_slack:
+                    routed = await execute_for_session(
+                        deps=deps,
+                        session=session,
+                        prompt="hello",
+                        channel_id="C123",
+                        thread_ts=None,
+                        execution_id="exec-9-pause-claude-deferred",
+                        slack_client=SimpleNamespace(),
+                        user_id="U123",
+                        pause_on_questions=True,
+                    )
+
+        create_pending_question.assert_awaited_once()
+        consume_deferred_answer.assert_awaited_once()
+        post_question_to_slack.assert_not_awaited()
+        assert prompts == ["hello", "Use fast path"]
+        assert routed.result.success is True
+        assert getattr(routed.result, "paused_on_question", False) is False
 
     @pytest.mark.asyncio
     async def test_claude_plan_rejection_does_not_replay_plan_output(self):

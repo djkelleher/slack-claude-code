@@ -223,6 +223,29 @@ def test_question_mention_prefix_defaults_to_channel_on_question_payload():
     assert mention_prefix == "@channel "
 
 
+def test_question_mention_prefix_defaults_to_channel_on_question_payload_without_question_mark():
+    """Question payloads without a trailing `?` should still trigger @channel fallback."""
+    questions = QuestionManager.parse_ask_user_question_input(
+        {
+            "questions": [
+                {
+                    "question": "Select the best option",
+                    "header": "Decision",
+                    "options": [{"label": "Option A"}, {"label": "Option B"}],
+                    "multiSelect": False,
+                }
+            ]
+        }
+    )
+    with patch("src.question.manager.config.SLACK_QUESTION_MENTION", ""):
+        mention_prefix = QuestionManager._question_mention_prefix(
+            context_text="Need your choice",
+            questions=questions,
+        )
+
+    assert mention_prefix == "@channel "
+
+
 def test_question_mention_prefix_stays_empty_without_question_detection():
     """No mention should be added when env is empty and no question text is detected."""
     with patch("src.question.manager.config.SLACK_QUESTION_MENTION", ""):
@@ -270,3 +293,49 @@ async def test_post_question_to_slack_defaults_to_channel_mention_when_detected(
     notification_message = slack_client.chat_postMessage.await_args_list[1].kwargs["text"]
     assert first_message.startswith("@channel ")
     assert notification_message.startswith("@channel ")
+
+
+@pytest.mark.asyncio
+async def test_resolve_with_deferred_resume_stores_and_consumes_answers():
+    """Pause-resume questions should store one deferred answer snapshot for replay."""
+    tool_input = {
+        "questions": [
+            {
+                "id": "q_1",
+                "question": "Proceed?",
+                "header": "Confirm",
+                "options": [{"label": "Yes"}, {"label": "No"}],
+                "multiSelect": False,
+            }
+        ]
+    }
+    pending = await QuestionManager.create_pending_question(
+        session_id="session-deferred",
+        channel_id="C-DEFER",
+        thread_ts=None,
+        tool_use_id="tool-deferred",
+        tool_input=tool_input,
+        defer_for_resume=True,
+    )
+    await QuestionManager.set_answer(pending.question_id, 0, ["Yes"])
+    resolved = await QuestionManager.resolve(pending.question_id)
+
+    assert resolved is not None
+    assert await QuestionManager.get_pending(pending.question_id) is None
+
+    questions = QuestionManager.parse_ask_user_question_input(tool_input)
+    consumed = await QuestionManager.consume_deferred_answer(
+        session_id="session-deferred",
+        channel_id="C-DEFER",
+        thread_ts=None,
+        questions=questions,
+    )
+    assert consumed == {0: ["Yes"]}
+
+    consumed_again = await QuestionManager.consume_deferred_answer(
+        session_id="session-deferred",
+        channel_id="C-DEFER",
+        thread_ts=None,
+        questions=questions,
+    )
+    assert consumed_again is None
