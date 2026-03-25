@@ -221,18 +221,27 @@ class QuestionManager:
         from .slack_ui import build_question_blocks
 
         blocks = build_question_blocks(pending, context_text)
+        mention_prefix = cls._question_mention_prefix(
+            context_text=context_text, questions=pending.questions
+        )
 
         result = await slack_client.chat_postMessage(
             channel=pending.channel_id,
             thread_ts=pending.thread_ts,
             blocks=blocks,
-            text=f"{cls._question_mention_prefix()}Assistant has a question for you".strip(),
+            text=f"{mention_prefix}Assistant has a question for you".strip(),
         )
 
         pending.message_ts = result.get("ts")
 
         # Post channel notification if configured
-        await cls._post_notification(slack_client, pending.channel_id, pending.thread_ts, db)
+        await cls._post_notification(
+            slack_client,
+            pending.channel_id,
+            pending.thread_ts,
+            db,
+            mention_prefix=mention_prefix,
+        )
 
     @classmethod
     async def _post_notification(
@@ -241,6 +250,7 @@ class QuestionManager:
         channel_id: str,
         thread_ts: Optional[str],
         db: Optional[DatabaseRepository] = None,
+        mention_prefix: str = "",
     ) -> None:
         """Post a channel notification for a pending question."""
         try:
@@ -257,13 +267,11 @@ class QuestionManager:
                     f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
                 )
                 message = (
-                    f"{cls._question_mention_prefix()}:question: Assistant has a question • "
+                    f"{mention_prefix}:question: Assistant has a question • "
                     f"<{thread_link}|Answer in thread>"
                 ).strip()
             else:
-                message = (
-                    f"{cls._question_mention_prefix()}:question: Assistant has a question"
-                ).strip()
+                message = f"{mention_prefix}:question: Assistant has a question".strip()
 
             # Post to channel (NOT thread) - triggers sound + unread badge
             await slack_client.chat_postMessage(
@@ -276,12 +284,29 @@ class QuestionManager:
             logger.warning(f"Failed to post question notification: {e}")
 
     @staticmethod
-    def _question_mention_prefix() -> str:
-        """Return the configured mention prefix for agent questions."""
+    def _contains_question_text(context_text: str, questions: list[Question]) -> bool:
+        """Return True when the assistant context or question payload appears interrogative."""
+        if "?" in context_text:
+            return True
+        for question in questions:
+            if "?" in question.question:
+                return True
+        return False
+
+    @classmethod
+    def _question_mention_prefix(
+        cls,
+        *,
+        context_text: str = "",
+        questions: Optional[list[Question]] = None,
+    ) -> str:
+        """Return mention prefix for agent questions with question-aware fallback behavior."""
         mention = (config.SLACK_QUESTION_MENTION or "").strip()
-        if not mention:
-            return ""
-        return f"{mention} "
+        if mention:
+            return f"{mention} "
+        if cls._contains_question_text(context_text, questions or []):
+            return "@channel "
+        return ""
 
     @classmethod
     async def set_answer(

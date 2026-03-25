@@ -1,6 +1,11 @@
 """Unit tests for question parsing and validation behavior."""
 
-from src.question.manager import QuestionManager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from src.question.manager import PendingQuestion, QuestionManager
 
 
 def test_parse_ask_user_question_input_ignores_malformed_entries():
@@ -171,3 +176,97 @@ def test_serialize_answers_for_claude_and_codex():
             "q2": {"answers": ["A", "B"]},
         }
     }
+
+
+def test_question_mention_prefix_uses_configured_env_value():
+    """Configured mention should always take precedence over auto-detection."""
+    with patch("src.question.manager.config.SLACK_QUESTION_MENTION", "@here"):
+        mention_prefix = QuestionManager._question_mention_prefix(
+            context_text="Need input?",
+            questions=[],
+        )
+
+    assert mention_prefix == "@here "
+
+
+def test_question_mention_prefix_defaults_to_channel_on_question_context():
+    """If mention env is empty, question-mark context should trigger @channel mention."""
+    with patch("src.question.manager.config.SLACK_QUESTION_MENTION", ""):
+        mention_prefix = QuestionManager._question_mention_prefix(
+            context_text="Can you confirm this?",
+            questions=[],
+        )
+
+    assert mention_prefix == "@channel "
+
+
+def test_question_mention_prefix_defaults_to_channel_on_question_payload():
+    """Question payload text should also trigger @channel fallback when env is empty."""
+    questions = QuestionManager.parse_ask_user_question_input(
+        {
+            "questions": [
+                {
+                    "question": "Proceed?",
+                    "header": "Confirm",
+                    "options": [{"label": "Yes"}],
+                    "multiSelect": False,
+                }
+            ]
+        }
+    )
+    with patch("src.question.manager.config.SLACK_QUESTION_MENTION", ""):
+        mention_prefix = QuestionManager._question_mention_prefix(
+            context_text="No explicit question context",
+            questions=questions,
+        )
+
+    assert mention_prefix == "@channel "
+
+
+def test_question_mention_prefix_stays_empty_without_question_detection():
+    """No mention should be added when env is empty and no question text is detected."""
+    with patch("src.question.manager.config.SLACK_QUESTION_MENTION", ""):
+        mention_prefix = QuestionManager._question_mention_prefix(
+            context_text="Status update only",
+            questions=[],
+        )
+
+    assert mention_prefix == ""
+
+
+@pytest.mark.asyncio
+async def test_post_question_to_slack_defaults_to_channel_mention_when_detected():
+    """Question posts and channel notifications should include @channel fallback mention."""
+    pending = PendingQuestion(
+        question_id="q123",
+        session_id="session-1",
+        channel_id="C1",
+        thread_ts="123.456",
+        tool_use_id="tool-1",
+        questions=QuestionManager.parse_ask_user_question_input(
+            {
+                "questions": [
+                    {
+                        "question": "Proceed?",
+                        "header": "Confirm",
+                        "options": [{"label": "Yes"}],
+                        "multiSelect": False,
+                    }
+                ]
+            }
+        ),
+    )
+    slack_client = SimpleNamespace(chat_postMessage=AsyncMock(return_value={"ts": "111.222"}))
+
+    with patch("src.question.manager.config.SLACK_QUESTION_MENTION", ""):
+        await QuestionManager.post_question_to_slack(
+            pending=pending,
+            slack_client=slack_client,
+            db=None,
+            context_text="Need a decision?",
+        )
+
+    first_message = slack_client.chat_postMessage.await_args_list[0].kwargs["text"]
+    notification_message = slack_client.chat_postMessage.await_args_list[1].kwargs["text"]
+    assert first_message.startswith("@channel ")
+    assert notification_message.startswith("@channel ")

@@ -427,7 +427,7 @@ Configuration is encrypted and stored in `~/.slack-claude-code/config.enc`. Sens
 - `SLACK_SIGNING_SECRET`: Your App → Basic Information → App Credentials → Signing Secret
 - `DEFAULT_WORKING_DIR`: Optional default starting directory for new sessions
 - `DEFAULT_MODEL`: Optional default Claude or Codex model
-- `SLACK_QUESTION_MENTION`: Optional mention text for interactive approval/question posts
+- `SLACK_QUESTION_MENTION`: Optional mention text for interactive approval/question posts (if unset, detected question text falls back to `@channel`)
 - `GITHUB_REPO`: Optional `owner/repo` used for GitHub file links in Slack output
 - `QUEUE_AUTO_ANSWER_QUESTIONS`: Optional queue auto-answer toggle (`false` by default)
 - `QUEUE_AUTO_APPROVE_PERMISSIONS`: Optional queue auto-approve toggle (`true` by default)
