@@ -51,6 +51,8 @@ def test_register_commands_excludes_codex_slash_commands():
     assert "/usage" in app.handlers
     assert "/clear" in app.handlers
     assert "/!" in app.handlers
+    assert "/hist" in app.handlers
+    assert "/h" in app.handlers
     assert "/git" not in app.handlers
     assert "/claude-help" not in app.handlers
     assert "/doctor" not in app.handlers
@@ -77,11 +79,14 @@ def test_register_commands_builds_slash_command_router():
 
     assert deps.slash_command_router is not None
     assert deps.slash_command_router.has_command("/clear")
+    assert deps.slash_command_router.has_command("/hist")
 
 
 def test_register_commands_builds_slash_router_for_real_async_app():
     app = AsyncApp(
-        token="xoxb-test", signing_secret="test-signing-secret", process_before_response=True
+        token="xoxb-test",
+        signing_secret="test-signing-secret",
+        process_before_response=True,
     )
     db = SimpleNamespace()
     claude_executor = SimpleNamespace()
@@ -90,6 +95,7 @@ def test_register_commands_builds_slash_router_for_real_async_app():
     deps = register_commands(app, db, claude_executor, codex_executor=codex_executor)
 
     assert deps.slash_command_router.has_command("/clear")
+    assert deps.slash_command_router.has_command("/hist")
     assert deps.slash_command_router.has_command("/q")
 
 

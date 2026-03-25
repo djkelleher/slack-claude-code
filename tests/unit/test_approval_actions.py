@@ -66,7 +66,9 @@ async def test_approve_tool_action_passes_resolver_user_and_updates_blocks() -> 
             logger=MagicMock(),
         )
 
-    mock_resolve.assert_awaited_once_with("approval-123", approved=True, resolved_by="U123")
+    mock_resolve.assert_awaited_once_with(
+        "approval-123", approved=True, resolved_by="U123"
+    )
     client.chat_update.assert_awaited_once()
     assert client.chat_update.await_args.kwargs["text"] == "Tool approval resolved"
     blocks = client.chat_update.await_args.kwargs["blocks"]
@@ -75,10 +77,14 @@ async def test_approve_tool_action_passes_resolver_user_and_updates_blocks() -> 
 
 
 @pytest.mark.asyncio
-async def test_view_detailed_output_falls_back_to_database_when_cache_is_empty() -> None:
+async def test_view_detailed_output_falls_back_to_database_when_cache_is_empty() -> (
+    None
+):
     app = _FakeApp()
     deps = SimpleNamespace(
-        db=SimpleNamespace(get_command_detailed_output=AsyncMock(return_value="persisted details"))
+        db=SimpleNamespace(
+            get_command_detailed_output=AsyncMock(return_value="persisted details")
+        )
     )
     register_actions(app, deps)
     DetailCache.clear()
@@ -102,13 +108,129 @@ async def test_view_detailed_output_falls_back_to_database_when_cache_is_empty()
 
 
 @pytest.mark.asyncio
+async def test_copy_command_output_prefers_detailed_output_and_opens_modal() -> None:
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_command_detailed_output=AsyncMock(return_value="persisted details"),
+            get_command_by_id=AsyncMock(),
+        )
+    )
+    register_actions(app, deps)
+    DetailCache.clear()
+
+    client = SimpleNamespace(views_open=AsyncMock(), chat_postEphemeral=AsyncMock())
+    body = _approval_body()
+    body["trigger_id"] = "trigger-123"
+
+    await app.actions["copy_command_output"](
+        ack=AsyncMock(),
+        action={"value": "42"},
+        body=body,
+        client=client,
+        logger=MagicMock(),
+    )
+
+    deps.db.get_command_detailed_output.assert_awaited_once_with(42)
+    client.views_open.assert_awaited_once()
+    view = client.views_open.await_args.kwargs["view"]
+    assert view["callback_id"] == "copy_output_modal"
+    input_blocks = [block for block in view["blocks"] if block["type"] == "input"]
+    assert input_blocks[0]["element"]["initial_value"] == "persisted details"
+    assert input_blocks[0]["element"]["focus_on_load"] is True
+
+
+@pytest.mark.asyncio
+async def test_copy_command_output_falls_back_to_command_output() -> None:
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_command_detailed_output=AsyncMock(return_value=None),
+            get_command_by_id=AsyncMock(
+                return_value=SimpleNamespace(output="short output")
+            ),
+        )
+    )
+    register_actions(app, deps)
+    DetailCache.clear()
+
+    client = SimpleNamespace(views_open=AsyncMock(), chat_postEphemeral=AsyncMock())
+    body = _approval_body()
+    body["trigger_id"] = "trigger-123"
+
+    await app.actions["copy_command_output"](
+        ack=AsyncMock(),
+        action={"value": "7"},
+        body=body,
+        client=client,
+        logger=MagicMock(),
+    )
+
+    deps.db.get_command_by_id.assert_awaited_once_with(7)
+    view = client.views_open.await_args.kwargs["view"]
+    input_blocks = [block for block in view["blocks"] if block["type"] == "input"]
+    assert input_blocks[0]["element"]["initial_value"] == "short output"
+
+
+@pytest.mark.asyncio
+async def test_copy_command_output_posts_ephemeral_when_output_missing() -> None:
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_command_detailed_output=AsyncMock(return_value=None),
+            get_command_by_id=AsyncMock(return_value=None),
+        )
+    )
+    register_actions(app, deps)
+    DetailCache.clear()
+
+    client = SimpleNamespace(views_open=AsyncMock(), chat_postEphemeral=AsyncMock())
+    body = _approval_body()
+    body["trigger_id"] = "trigger-123"
+
+    await app.actions["copy_command_output"](
+        ack=AsyncMock(),
+        action={"value": "100"},
+        body=body,
+        client=client,
+        logger=MagicMock(),
+    )
+
+    client.views_open.assert_not_awaited()
+    client.chat_postEphemeral.assert_awaited_once()
+    assert (
+        client.chat_postEphemeral.await_args.kwargs["text"]
+        == "Command output is no longer available."
+    )
+
+
+@pytest.mark.asyncio
+async def test_copy_output_modal_submission_acknowledges() -> None:
+    app = _FakeApp()
+    register_actions(app, SimpleNamespace(db=SimpleNamespace()))
+
+    ack = AsyncMock()
+    await app.views["copy_output_modal"](
+        ack=ack,
+        body={},
+        client=SimpleNamespace(),
+        view={},
+        logger=MagicMock(),
+    )
+
+    ack.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_model_menu_selection_handler_accepts_missing_value_payload() -> None:
     app = _FakeApp()
     register_actions(
         app,
         SimpleNamespace(
             db=SimpleNamespace(
-                get_or_create_session=AsyncMock(return_value=SimpleNamespace(model="gpt-5.4")),
+                get_or_create_session=AsyncMock(
+                    return_value=SimpleNamespace(model="gpt-5.4")
+                ),
             )
         ),
     )
@@ -144,7 +266,9 @@ async def test_effort_menu_selection_handler_updates_model_effort() -> None:
         app,
         SimpleNamespace(
             db=SimpleNamespace(
-                get_or_create_session=AsyncMock(return_value=SimpleNamespace(model="gpt-5.4")),
+                get_or_create_session=AsyncMock(
+                    return_value=SimpleNamespace(model="gpt-5.4")
+                ),
             )
         ),
     )
