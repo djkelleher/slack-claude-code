@@ -1,7 +1,7 @@
 """Shared execution result models for subprocess-backed backends."""
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 
 @dataclass
@@ -16,3 +16,4 @@ class BackendExecutionResult:
     cost_usd: Optional[float] = None
     duration_ms: Optional[int] = None
     was_cancelled: bool = False
+    git_tool_events: list[dict[str, Any]] = field(default_factory=list)

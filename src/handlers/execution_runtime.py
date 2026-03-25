@@ -176,6 +176,10 @@ async def execute_prompt_with_runtime(
             notify_on_snippet_failure=True,
             api_with_retry=api_with_retry,
             terminal_style=route.backend == "codex",
+            working_directory=session.working_directory,
+            upload_git_diff=True,
+            git_tool_events=result.git_tool_events,
+            upload_git_activity=True,
         )
         return ExecutionDeliveryResult(
             route=route, command_id=cmd_history.id, message_ts=message_ts

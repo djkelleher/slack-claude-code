@@ -1,9 +1,44 @@
 """Shared stream-message accumulation helpers for backend executors."""
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from src.utils.stream_models import StreamMessage
+
+_GIT_COMMAND_PATTERN = re.compile(r"""(^|[\s;&(|'"])git\s""")
+
+
+def _build_git_tool_event(tool: Any) -> dict[str, Any] | None:
+    """Return structured git tool metadata for a completed tool activity."""
+    tool_input = tool.input or {}
+    command = tool_input.get("command")
+    if isinstance(command, str) and _GIT_COMMAND_PATTERN.search(command):
+        return {
+            "kind": "shell",
+            "tool_id": tool.id,
+            "tool_name": tool.name,
+            "command": command,
+            "result": tool.full_result or tool.result or "",
+            "is_error": tool.is_error,
+            "duration_ms": tool.duration_ms,
+        }
+
+    server = str(tool_input.get("server", "")).strip().lower()
+    mcp_tool = str(tool_input.get("tool", "")).strip()
+    if server == "git":
+        return {
+            "kind": "mcp",
+            "tool_id": tool.id,
+            "tool_name": tool.name,
+            "server": server,
+            "mcp_tool": mcp_tool,
+            "result": tool.full_result or tool.result or "",
+            "is_error": tool.is_error,
+            "duration_ms": tool.duration_ms,
+        }
+
+    return None
 
 
 @dataclass
@@ -17,6 +52,7 @@ class StreamAccumulator:
     cost_usd: Optional[float] = None
     duration_ms: Optional[int] = None
     error_message: Optional[str] = None
+    git_tool_events: list[dict[str, Any]] = field(default_factory=list)
     _stringify_result_errors: bool = field(default=True, repr=False)
 
     def apply(self, msg: StreamMessage) -> None:
@@ -47,6 +83,12 @@ class StreamAccumulator:
         if msg.type == "error":
             self.error_message = msg.content
 
+        if msg.type == "tool_result" and msg.tool_activities:
+            for tool in msg.tool_activities:
+                git_event = _build_git_tool_event(tool)
+                if git_event:
+                    self.git_tool_events.append(git_event)
+
     def result_fields(
         self,
         *,
@@ -67,4 +109,5 @@ class StreamAccumulator:
             "cost_usd": self.cost_usd,
             "duration_ms": self.duration_ms,
             "was_cancelled": was_cancelled,
+            "git_tool_events": list(self.git_tool_events),
         }
