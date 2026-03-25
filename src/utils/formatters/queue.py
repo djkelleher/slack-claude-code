@@ -49,7 +49,9 @@ def _scheduled_event_text(event: Any) -> str:
     if execute_at.tzinfo is None or execute_at.tzinfo.utcoffset(execute_at) is None:
         execute_at = execute_at.replace(tzinfo=timezone.utc)
     execute_at_utc = execute_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    return f":alarm_clock: *{event.action}* at `{execute_at_utc}`"
+    event_id = getattr(event, "id", None)
+    id_prefix = f"`#{event_id}` " if event_id is not None else ""
+    return f":alarm_clock: {id_prefix}*{event.action}* at `{execute_at_utc}`"
 
 
 def queue_status(pending: list, running: Any, scheduled_events: list | None = None) -> list[dict]:

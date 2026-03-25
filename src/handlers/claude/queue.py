@@ -87,6 +87,7 @@ _RESUME_TIME_PATTERNS = (
     ),
     re.compile(r"\b(?P<time>\d{4}-\d{2}-\d{2}[tT]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)\b"),
 )
+_QUEUE_TIMER_HHMM_RE = re.compile(r"^(?:[01]?\d|2[0-3]):[0-5]\d$")
 
 
 @dataclass(frozen=True)
@@ -489,7 +490,7 @@ async def _pause_queue_for_question(
     deps: HandlerDependencies,
     client,
 ) -> None:
-    """Pause queue processing when backend asks a question and queue pause-on-question is enabled."""
+    """Pause queue processing when backend asks a question with pause-on-question enabled."""
     await deps.db.update_queue_item_status(item.id, "pending")
     await deps.db.update_queue_control_state(channel_id, thread_ts, "paused")
 
@@ -693,6 +694,52 @@ def _parse_scope_selector(selector: str) -> Optional[str]:
         return normalized
     raise ValueError(
         "Scope must be `channel` or a Slack thread timestamp like `1234567890.123456`."
+    )
+
+
+def _normalize_timer_action(action: str) -> str:
+    """Validate and normalize scheduled queue action text."""
+    normalized = action.strip().lower()
+    if normalized not in {"pause", "resume", "stop", "start"}:
+        raise ValueError("Action must be one of: pause, resume, stop, start.")
+    return normalized
+
+
+def _parse_queue_timer_time_input(time_text: str, now_utc: datetime) -> datetime:
+    """Parse timer text as ISO8601 with timezone or HH:MM local time."""
+    raw = time_text.strip()
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        parsed = None
+
+    if parsed is not None:
+        if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+            raise ValueError(
+                "ISO datetimes must include a timezone offset "
+                "(example: 2026-03-13T18:30:00-04:00)."
+            )
+        execute_at_utc = parsed.astimezone(timezone.utc)
+        if execute_at_utc <= now_utc:
+            raise ValueError("Scheduled time must be in the future.")
+        return execute_at_utc
+
+    if _QUEUE_TIMER_HHMM_RE.match(raw):
+        hour_text, minute_text = raw.split(":", 1)
+        local_now = now_utc.astimezone()
+        local_dt = local_now.replace(
+            hour=int(hour_text),
+            minute=int(minute_text),
+            second=0,
+            microsecond=0,
+        )
+        if local_dt <= local_now:
+            local_dt += timedelta(days=1)
+        return local_dt.astimezone(timezone.utc)
+
+    raise ValueError(
+        "Invalid timer value. Use ISO datetime with timezone "
+        "(for example: 2026-03-13T18:30:00-04:00) or HH:MM."
     )
 
 
@@ -1784,7 +1831,9 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         require_text=True,
         usage_hint=(
             "Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume|"
-            "append <prompt>|prepend <prompt>|insert <index> <prompt>"
+            "append <prompt>|prepend <prompt>|insert <index> <prompt>|"
+            "timer add <action> <time> [channel|thread_ts]|"
+            "timer cancel <event_id|all> [channel|thread_ts]>"
         ),
     )
     async def handle_queue_command(ctx: CommandContext, deps: HandlerDependencies = deps):
@@ -1845,6 +1894,168 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 text=prompt_text,
                 insertion_mode="insert",
                 insert_at=insert_at,
+            )
+            return
+
+        if subcommand == "timer":
+            if not args:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Invalid queue timer command",
+                    blocks=error_message(
+                        "Usage: /qc timer add <action> <time> [channel|thread_ts] "
+                        "or /qc timer cancel <event_id|all> [channel|thread_ts]"
+                    ),
+                )
+                return
+
+            timer_subcommand = args[0].lower()
+            timer_args = args[1:]
+
+            if timer_subcommand == "add":
+                if len(timer_args) < 2 or len(timer_args) > 3:
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text="Invalid queue timer command",
+                        blocks=error_message(
+                            "Usage: /qc timer add <action> <time> [channel|thread_ts]"
+                        ),
+                    )
+                    return
+
+                try:
+                    action = _normalize_timer_action(timer_args[0])
+                    execute_at = _parse_queue_timer_time_input(
+                        timer_args[1], now_utc=datetime.now(timezone.utc)
+                    )
+                    target_thread_ts = (
+                        _parse_scope_selector(timer_args[2])
+                        if len(timer_args) == 3
+                        else ctx.thread_ts
+                    )
+                except ValueError as e:
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text="Invalid queue timer command",
+                        blocks=error_message(str(e)),
+                    )
+                    return
+
+                created_events = await deps.db.add_queue_scheduled_events(
+                    channel_id=ctx.channel_id,
+                    thread_ts=target_thread_ts,
+                    events=[(action, execute_at)],
+                )
+                await ensure_queue_schedule_dispatcher(deps, ctx.client, ctx.logger)
+                created_event = created_events[0]
+                scope_label = _queue_scope_label(target_thread_ts)
+                execute_text = _format_scheduled_event_timestamp(created_event.execute_at)
+                text = (
+                    f"{scope_label}: scheduled {action} at {execute_text} "
+                    f"(timer #{created_event.id})."
+                )
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text=text,
+                    blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
+                )
+                return
+
+            if timer_subcommand == "cancel":
+                if len(timer_args) < 1 or len(timer_args) > 2:
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text="Invalid queue timer command",
+                        blocks=error_message(
+                            "Usage: /qc timer cancel <event_id|all> [channel|thread_ts]"
+                        ),
+                    )
+                    return
+
+                target = timer_args[0].strip().lower()
+                try:
+                    target_thread_ts = (
+                        _parse_scope_selector(timer_args[1])
+                        if len(timer_args) == 2
+                        else ctx.thread_ts
+                    )
+                except ValueError as e:
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text="Invalid queue scope",
+                        blocks=error_message(str(e)),
+                    )
+                    return
+
+                scope_label = _queue_scope_label(target_thread_ts)
+                if target == "all":
+                    cancelled = await deps.db.cancel_pending_queue_scheduled_events(
+                        ctx.channel_id, target_thread_ts
+                    )
+                    text = f"{scope_label}: cancelled {cancelled} pending timer(s)."
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text=text,
+                        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
+                    )
+                    return
+
+                try:
+                    event_id = int(target)
+                except ValueError:
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text="Invalid queue timer ID",
+                        blocks=error_message(
+                            "Timer ID must be an integer, "
+                            "or use `all` to cancel all pending timers."
+                        ),
+                    )
+                    return
+
+                cancelled = await deps.db.cancel_queue_scheduled_event(
+                    event_id=event_id,
+                    channel_id=ctx.channel_id,
+                    thread_ts=target_thread_ts,
+                )
+                if cancelled:
+                    text = f"{scope_label}: cancelled timer #{event_id}."
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text=text,
+                        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
+                    )
+                    return
+
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text=f"Timer #{event_id} not found",
+                    blocks=error_message(
+                        "Timer "
+                        f"#{event_id} was not found in pending state for "
+                        f"{_queue_scope_label(target_thread_ts)}."
+                    ),
+                )
+                return
+
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Invalid queue timer command",
+                blocks=error_message(
+                    "Usage: /qc timer add <action> <time> [channel|thread_ts] "
+                    "or /qc timer cancel <event_id|all> [channel|thread_ts]"
+                ),
             )
             return
 
@@ -2104,7 +2315,9 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             text="Invalid queue command",
             blocks=error_message(
                 "Usage: /qc <view|clear|delete|remove [item_id]|pause|stop|resume|"
-                "append <prompt>|prepend <prompt>|insert <index> <prompt>"
+                "append <prompt>|prepend <prompt>|insert <index> <prompt>|"
+                "timer add <action> <time> [channel|thread_ts]|"
+                "timer cancel <event_id|all> [channel|thread_ts]>"
             ),
         )
 

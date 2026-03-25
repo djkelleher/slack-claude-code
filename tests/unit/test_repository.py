@@ -36,9 +36,7 @@ class TestSessionOperations:
         assert session.approval_mode == "on-request"
 
     @pytest.mark.asyncio
-    async def test_get_or_create_session_uses_configured_codex_defaults(
-        self, db_repo, monkeypatch
-    ):
+    async def test_get_or_create_session_uses_configured_codex_defaults(self, db_repo, monkeypatch):
         """New sessions should respect configured Codex sandbox and approval defaults."""
         monkeypatch.setattr(config, "CODEX_SANDBOX_MODE", "danger-full-access")
         monkeypatch.setattr(config, "CODEX_APPROVAL_MODE", "never")
@@ -875,6 +873,51 @@ class TestQueueOperations:
         deleted = await db_repo.delete_pending_queue_scheduled_events("C123ABC", None)
 
         assert deleted == 1
+        channel_pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", None)
+        thread_pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", "123.456")
+        assert channel_pending == []
+        assert len(thread_pending) == 1
+
+    @pytest.mark.asyncio
+    async def test_cancel_queue_scheduled_event_is_scope_specific(self, db_repo):
+        """Cancelling one schedule should require matching scope and pending status."""
+        now = datetime.now(timezone.utc)
+        created = await db_repo.add_queue_scheduled_events(
+            "C123ABC",
+            "123.456",
+            [("pause", now + timedelta(minutes=10))],
+        )
+        event_id = created[0].id
+
+        wrong_scope_cancelled = await db_repo.cancel_queue_scheduled_event(
+            event_id, "C123ABC", None
+        )
+        assert wrong_scope_cancelled is False
+
+        cancelled = await db_repo.cancel_queue_scheduled_event(event_id, "C123ABC", "123.456")
+        assert cancelled is True
+
+        pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", "123.456")
+        assert pending == []
+
+    @pytest.mark.asyncio
+    async def test_cancel_pending_queue_scheduled_events_is_scope_specific(self, db_repo):
+        """Cancelling all pending schedules should only affect the target scope."""
+        now = datetime.now(timezone.utc)
+        await db_repo.add_queue_scheduled_events(
+            "C123ABC",
+            None,
+            [("pause", now + timedelta(minutes=5))],
+        )
+        await db_repo.add_queue_scheduled_events(
+            "C123ABC",
+            "123.456",
+            [("resume", now + timedelta(minutes=10))],
+        )
+
+        cancelled = await db_repo.cancel_pending_queue_scheduled_events("C123ABC", None)
+        assert cancelled == 1
+
         channel_pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", None)
         thread_pending = await db_repo.get_pending_queue_scheduled_events("C123ABC", "123.456")
         assert channel_pending == []

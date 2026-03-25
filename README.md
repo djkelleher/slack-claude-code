@@ -202,6 +202,8 @@ Queue commands for sequential execution while preserving Claude's session contex
 | `/qc append <prompt>` | Append a plain prompt to the current queue scope | `/qc append summarize the failures` |
 | `/qc prepend <prompt>` | Prepend a plain prompt to the current queue scope | `/qc prepend run smoke tests first` |
 | `/qc insert <index> <prompt>` | Insert a plain prompt at a 1-based queue position | `/qc insert 2 rerun the flaky test` |
+| `/qc timer add <action> <time> [channel\|thread_ts]` | Add a scheduled queue control timer (`pause`, `resume`, `stop`, `start`) | `/qc timer add pause 2026-03-30T15:00:00-04:00` |
+| `/qc timer cancel <event_id\|all> [channel\|thread_ts]` | Cancel one pending timer by id or cancel all pending timers in scope | `/qc timer cancel 501` |
 | `/qv` | View queue status | `/qv` |
 | `/qclear` | Clear pending queue | `/qclear` |
 | `/qdelete` | Delete the entire queue scope, including running/history items | `/qdelete` |
@@ -220,6 +222,7 @@ Queue control behavior:
 - `/qdelete` and `/qc delete` remove the entire queue scope, including running/completed/cancelled records, clear pending scheduled controls, then reset the scope to `running`.
 - Adding new items with `/q` does not auto-start processing while a scope is paused or stopped; resume it explicitly with `/qc resume`.
 - `/qv` and `/qc view` show queue state and include a notice when the scope is paused or stopped.
+- Use `/qc timer add ...` and `/qc timer cancel ...` to manage scheduled queue control timers dynamically; `/qv` and `/qc view` show pending timer IDs.
 - Set `QUEUE_AUTO_ANSWER_QUESTIONS=true` to auto-answer assistant questions during queue execution by choosing `(Recommended)` options (fallback: first option).
 - Set `QUEUE_AUTO_APPROVE_PERMISSIONS=true` to auto-approve permission prompts during queue execution. This defaults to `true`.
 - Set `QUEUE_PAUSE_ON_QUESTIONS=true` to pause the queue and return the current item to pending whenever the assistant requests user input.

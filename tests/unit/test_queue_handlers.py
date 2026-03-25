@@ -436,9 +436,7 @@ async def test_process_queue_streams_updates_during_execution():
         mock_execute.await_args.kwargs["auto_approve_permissions"]
         == config.QUEUE_AUTO_APPROVE_PERMISSIONS
     )
-    assert (
-        mock_execute.await_args.kwargs["pause_on_questions"] == config.QUEUE_PAUSE_ON_QUESTIONS
-    )
+    assert mock_execute.await_args.kwargs["pause_on_questions"] == config.QUEUE_PAUSE_ON_QUESTIONS
     assert client.chat_update.await_count >= 2
 
 
@@ -1274,8 +1272,88 @@ async def test_qc_invalid_subcommand_shows_clean_usage_text():
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Invalid queue command"
     rendered = kwargs["blocks"][0]["text"]["text"]
-    assert "insert <index> <prompt>`" in rendered
-    assert "insert <index> <prompt>>" not in rendered
+    assert "insert <index> <prompt>" in rendered
+    assert "timer add <action> <time>" in rendered
+    assert "timer cancel <event_id|all>" in rendered
+    assert "thread_ts>|timer" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_qc_timer_add_schedules_event_and_starts_dispatcher():
+    """`/qc timer add` should create a scheduled control and boot dispatcher."""
+    scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(
+            add_queue_scheduled_events=AsyncMock(
+                return_value=[
+                    SimpleNamespace(
+                        id=901,
+                        action="pause",
+                        execute_at=scheduled_at,
+                    )
+                ]
+            ),
+        ),
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
+    with patch(
+        "src.handlers.claude.queue.ensure_queue_schedule_dispatcher", new=AsyncMock()
+    ) as mock_dispatcher:
+        await _invoke_slash_handler(
+            handler,
+            command_name="/qc",
+            text=f"timer add pause {scheduled_at.isoformat()}",
+            client=client,
+        )
+
+    deps.db.add_queue_scheduled_events.assert_awaited_once()
+    add_kwargs = deps.db.add_queue_scheduled_events.await_args.kwargs
+    assert add_kwargs["channel_id"] == "C123"
+    assert add_kwargs["thread_ts"] is None
+    action, execute_at = add_kwargs["events"][0]
+    assert action == "pause"
+    assert execute_at.tzinfo is not None
+    mock_dispatcher.assert_awaited_once()
+    assert "timer #901" in client.chat_postMessage.await_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_qc_timer_cancel_all_cancels_scope_timers():
+    """`/qc timer cancel all` should cancel all pending timers for the scope."""
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(cancel_pending_queue_scheduled_events=AsyncMock(return_value=2)),
+    )
+
+    client = await _invoke_slash_handler(handler, command_name="/qc", text="timer cancel all")
+
+    deps.db.cancel_pending_queue_scheduled_events.assert_awaited_once_with("C123", None)
+    assert "cancelled 2 pending timer(s)" in client.chat_postMessage.await_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_qc_timer_cancel_single_event_accepts_explicit_scope():
+    """`/qc timer cancel <id> <thread_ts>` should cancel that pending timer in thread scope."""
+    handler, deps = _registered_handler(
+        "/qc",
+        SimpleNamespace(cancel_queue_scheduled_event=AsyncMock(return_value=True)),
+    )
+
+    client = await _invoke_slash_handler(
+        handler,
+        command_name="/qc",
+        text="timer cancel 501 123.456",
+    )
+
+    deps.db.cancel_queue_scheduled_event.assert_awaited_once_with(
+        event_id=501,
+        channel_id="C123",
+        thread_ts="123.456",
+    )
+    assert (
+        client.chat_postMessage.await_args.kwargs["text"] == "Thread 123.456: cancelled timer #501."
+    )
 
 
 @pytest.mark.asyncio

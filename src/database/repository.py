@@ -1537,6 +1537,44 @@ class DatabaseRepository:
             await db.commit()
             return cursor.rowcount > 0
 
+    async def cancel_queue_scheduled_event(
+        self, event_id: int, channel_id: str, thread_ts: Optional[str]
+    ) -> bool:
+        """Cancel one pending queue scheduled event for a scope."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """UPDATE queue_scheduled_events
+                   SET status = 'cancelled', error_message = NULL, executed_at = ?
+                   WHERE id = ? AND status = 'pending' AND """
+                + self._QUEUE_SCOPE_WHERE,
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    event_id,
+                    *self._queue_scope_params(channel_id, thread_ts),
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def cancel_pending_queue_scheduled_events(
+        self, channel_id: str, thread_ts: Optional[str]
+    ) -> int:
+        """Cancel all pending queue scheduled events for a scope."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """UPDATE queue_scheduled_events
+                   SET status = 'cancelled', error_message = NULL, executed_at = ?
+                   WHERE """
+                + self._QUEUE_SCOPE_WHERE
+                + " AND status = 'pending'",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    *self._queue_scope_params(channel_id, thread_ts),
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount
+
     async def delete_pending_queue_scheduled_events(
         self, channel_id: str, thread_ts: Optional[str]
     ) -> int:
