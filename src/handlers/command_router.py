@@ -20,6 +20,8 @@ from src.database.models import Session
 from src.question.manager import QuestionManager
 from src.utils.execution_scope import build_session_scope
 
+_QUEUE_PAUSE_ON_QUESTION_SIGNAL = "__QUEUE_PAUSE_ON_QUESTION__"
+
 
 @dataclass
 class CommandRouteResult:
@@ -266,6 +268,7 @@ async def _execute_codex_backend(
     persist_session_ids: bool,
     auto_answer_questions: bool,
     auto_approve_permissions: bool,
+    pause_on_questions: bool,
     on_plan_approved: Any,
     on_interaction_resumed: Any,
 ) -> Any:
@@ -275,6 +278,7 @@ async def _execute_codex_backend(
 
     state = _ConversationState()
     max_questions = config.timeouts.execution.max_questions_per_conversation
+    question_pause_requested = False
     codex_turn_index = 1
     tool_id_namespace = f"turn{codex_turn_index}:"
 
@@ -338,6 +342,7 @@ async def _execute_codex_backend(
 
     async def on_user_input_request(tool_use_id: str, tool_input: dict) -> dict | None:
         nonlocal on_chunk
+        nonlocal question_pause_requested
         if state.question_count >= max_questions:
             state.question_limit_reached = True
             if logger:
@@ -352,6 +357,25 @@ async def _execute_codex_backend(
             default_question="Please provide additional input.",
             default_header="Input Needed",
         )
+
+        if pause_on_questions:
+            if slack_client is not None:
+                if not state.pending_question or state.pending_question.tool_use_id != tool_use_id:
+                    state.pending_question = await QuestionManager.create_pending_question(
+                        session_id=str(session.id),
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        tool_use_id=tool_use_id,
+                        tool_input=normalized_tool_input,
+                    )
+                await QuestionManager.post_question_to_slack(
+                    state.pending_question,
+                    slack_client,
+                    deps.db,
+                    context_text=state.accumulated_context,
+                )
+            question_pause_requested = True
+            raise RuntimeError(_QUEUE_PAUSE_ON_QUESTION_SIGNAL)
 
         if auto_answer_questions:
             questions = QuestionManager.parse_ask_user_question_input(normalized_tool_input)
@@ -461,6 +485,11 @@ async def _execute_codex_backend(
 
     result = await run_codex_turn(first_prompt, initial_resume_session_id)
 
+    if question_pause_requested or _result_field(result, "error", "") == _QUEUE_PAUSE_ON_QUESTION_SIGNAL:
+        result.success = False
+        result.error = _QUEUE_PAUSE_ON_QUESTION_SIGNAL
+        result.paused_on_question = True
+
     if state.question_limit_reached:
         result.output = (
             (result.output or state.accumulated_context)
@@ -468,8 +497,12 @@ async def _execute_codex_backend(
         ).strip()
         result.success = False
     if state.pending_question:
-        await QuestionManager.cancel(state.pending_question.question_id)
+        if not question_pause_requested:
+            await QuestionManager.cancel(state.pending_question.question_id)
         state.pending_question = None
+
+    if question_pause_requested:
+        return result
 
     if session.permission_mode == "plan" and result.success and slack_client is not None:
         plan_content, plan_detection_source = _detect_codex_plan_content(result.output)
@@ -563,15 +596,17 @@ async def _execute_claude_backend(
     persist_session_ids: bool,
     auto_answer_questions: bool,
     auto_approve_permissions: bool,
+    pause_on_questions: bool,
     on_plan_approved: Any,
     on_interaction_resumed: Any,
 ) -> Any:
     """Execute prompt against Claude backend, including questions and plan approval."""
     state = _ConversationState()
     max_questions = config.timeouts.execution.max_questions_per_conversation
+    question_pause_requested = False
 
     async def wrapped_on_chunk(msg: Any) -> None:
-        if msg.tool_activities and (slack_client is not None or auto_answer_questions):
+        if msg.tool_activities and (slack_client is not None or auto_answer_questions or pause_on_questions):
             for tool in msg.tool_activities:
                 if tool.name != "AskUserQuestion":
                     continue
@@ -634,6 +669,16 @@ async def _execute_claude_backend(
         and result.session_id
         and state.question_count < max_questions
     ):
+        if pause_on_questions:
+            question_pause_requested = True
+            if slack_client is not None:
+                await QuestionManager.post_question_to_slack(
+                    state.pending_question,
+                    slack_client,
+                    deps.db,
+                    context_text=state.accumulated_context,
+                )
+            break
         if slack_client is None and not auto_answer_questions:
             break
         state.question_count += 1
@@ -664,7 +709,7 @@ async def _execute_claude_backend(
             turn_execution_id=f"{execution_id}-q{state.question_count}",
         )
 
-    if state.question_count >= max_questions and state.pending_question:
+    if state.question_count >= max_questions and state.pending_question and not question_pause_requested:
         result.output = (
             (state.accumulated_context or result.output)
             + f"\n\n_Reached maximum question limit ({max_questions}). Please start a new conversation._"
@@ -672,8 +717,15 @@ async def _execute_claude_backend(
         result.success = False
 
     if state.pending_question:
-        await QuestionManager.cancel(state.pending_question.question_id)
+        if not question_pause_requested:
+            await QuestionManager.cancel(state.pending_question.question_id)
         state.pending_question = None
+
+    if question_pause_requested:
+        result.success = False
+        result.error = _QUEUE_PAUSE_ON_QUESTION_SIGNAL
+        result.paused_on_question = True
+        return result
 
     if _result_field(result, "has_pending_plan_approval", False) and slack_client is not None:
         plan_text = _result_field(result, "plan_subagent_result", "") or result.output or ""
@@ -738,6 +790,7 @@ async def execute_for_session(
     persist_session_ids: bool = True,
     auto_answer_questions: bool = False,
     auto_approve_permissions: bool = False,
+    pause_on_questions: bool = False,
     session_scope_override: Optional[str] = None,
     on_plan_approved: Any = None,
     on_interaction_resumed: Any = None,
@@ -762,6 +815,7 @@ async def execute_for_session(
             persist_session_ids=persist_session_ids,
             auto_answer_questions=auto_answer_questions,
             auto_approve_permissions=auto_approve_permissions,
+            pause_on_questions=pause_on_questions,
             on_plan_approved=on_plan_approved,
             on_interaction_resumed=on_interaction_resumed,
         )
@@ -782,6 +836,7 @@ async def execute_for_session(
         persist_session_ids=persist_session_ids,
         auto_answer_questions=auto_answer_questions,
         auto_approve_permissions=auto_approve_permissions,
+        pause_on_questions=pause_on_questions,
         on_plan_approved=on_plan_approved,
         on_interaction_resumed=on_interaction_resumed,
     )

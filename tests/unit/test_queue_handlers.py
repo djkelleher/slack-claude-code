@@ -436,6 +436,9 @@ async def test_process_queue_streams_updates_during_execution():
         mock_execute.await_args.kwargs["auto_approve_permissions"]
         == config.QUEUE_AUTO_APPROVE_PERMISSIONS
     )
+    assert (
+        mock_execute.await_args.kwargs["pause_on_questions"] == config.QUEUE_PAUSE_ON_QUESTIONS
+    )
     assert client.chat_update.await_count >= 2
 
 
@@ -1060,6 +1063,80 @@ async def test_execute_queue_item_pauses_queue_on_prompt_policy_block():
     assert client.chat_postMessage.await_count == 2
     pause_notice = client.chat_postMessage.await_args_list[1].kwargs
     assert "blocked by prompt policy" in pause_notice["text"]
+
+
+@pytest.mark.asyncio
+async def test_execute_queue_item_pauses_and_requeues_on_question_when_enabled():
+    """Question-triggered queue runs should pause scope and return current item to pending."""
+    item = _queue_item(92, "ship fix")
+    session = Session(id=1, channel_id="C123", model="opus")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, True]),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+        ),
+        codex_executor=None,
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.001"}),
+        chat_update=AsyncMock(),
+    )
+
+    class _FakeStreamingState:
+        def __init__(self, **kwargs):
+            self.message_ts = kwargs["message_ts"]
+            self.accumulated_output = ""
+
+        def start_heartbeat(self):
+            return None
+
+        async def finalize(self, is_error: bool = False):
+            return None
+
+        async def stop_heartbeat(self):
+            return None
+
+    route_result = SimpleNamespace(
+        backend="claude",
+        result=SimpleNamespace(
+            success=False,
+            output="",
+            error="__QUEUE_PAUSE_ON_QUESTION__",
+            session_id=None,
+            paused_on_question=True,
+        ),
+    )
+
+    with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
+        with patch(
+            "src.handlers.claude.queue.create_streaming_callback",
+            side_effect=lambda _state: AsyncMock(),
+        ):
+            with patch(
+                "src.handlers.claude.queue.execute_for_session",
+                new=AsyncMock(return_value=route_result),
+            ):
+                with patch.object(config, "QUEUE_PAUSE_ON_QUESTIONS", True):
+                    result = await _execute_queue_item(
+                        item,
+                        channel_id="C123",
+                        thread_ts=None,
+                        scope="C123:channel",
+                        deps=deps,
+                        client=client,
+                        log=MagicMock(),
+                        base_session=session,
+                        sequence_label="1",
+                        override_resume_ids={},
+                    )
+
+    assert result is None
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
+    assert statuses == ["running", "pending"]
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
+    assert client.chat_postMessage.await_count == 2
+    pause_notice = client.chat_postMessage.await_args_list[1].kwargs
+    assert "requires user input" in pause_notice["text"]
 
 
 @pytest.mark.asyncio

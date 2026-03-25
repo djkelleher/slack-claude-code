@@ -222,6 +222,7 @@ Queue control behavior:
 - `/qv` and `/qc view` show queue state and include a notice when the scope is paused or stopped.
 - Set `QUEUE_AUTO_ANSWER_QUESTIONS=true` to auto-answer assistant questions during queue execution by choosing `(Recommended)` options (fallback: first option).
 - Set `QUEUE_AUTO_APPROVE_PERMISSIONS=true` to auto-approve permission prompts during queue execution. This defaults to `true`.
+- Set `QUEUE_PAUSE_ON_QUESTIONS=true` to pause the queue and return the current item to pending whenever the assistant requests user input.
 
 #### Structured Queue DSL (Queues + Worktree + Loops)
 
@@ -431,6 +432,7 @@ Configuration is encrypted and stored in `~/.slack-claude-code/config.enc`. Sens
 - `GITHUB_REPO`: Optional `owner/repo` used for GitHub file links in Slack output
 - `QUEUE_AUTO_ANSWER_QUESTIONS`: Optional queue auto-answer toggle (`false` by default)
 - `QUEUE_AUTO_APPROVE_PERMISSIONS`: Optional queue auto-approve toggle (`true` by default)
+- `QUEUE_PAUSE_ON_QUESTIONS`: Optional queue pause-on-question toggle (`false` by default)
 
 ### 4. Start the Slack bot
 Run `aislack` in your terminal. The working directory where you start it becomes the default working directory for new session scopes unless `DEFAULT_WORKING_DIR` is set. If a `.env` file exists in that directory, it is loaded automatically.

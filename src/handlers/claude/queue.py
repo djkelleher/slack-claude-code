@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 from slack_bolt.async_app import AsyncApp
@@ -107,6 +107,17 @@ class _QueueUsageLimitState:
 def _queue_task_id(channel_id: str, thread_ts: Optional[str]) -> str:
     """Build a stable task id for a queue processor scoped to channel/thread."""
     return f"queue_{build_session_scope(channel_id, thread_ts)}"
+
+
+def _result_field(result: Any, field_name: str, default: Any) -> Any:
+    """Read a result field from dataclass/SimpleNamespace-like objects safely."""
+    try:
+        values = vars(result)
+    except TypeError:
+        return default
+    if field_name in values:
+        return values[field_name]
+    return default
 
 
 async def _create_queue_task(
@@ -467,6 +478,31 @@ async def _pause_queue_for_prompt_policy_block(
             {"type": "section", "text": {"type": "mrkdwn", "text": text}},
             {"type": "context", "elements": [{"type": "mrkdwn", "text": detail}]},
         ],
+    )
+
+
+async def _pause_queue_for_question(
+    *,
+    item,
+    channel_id: str,
+    thread_ts: Optional[str],
+    deps: HandlerDependencies,
+    client,
+) -> None:
+    """Pause queue processing when backend asks a question and queue pause-on-question is enabled."""
+    await deps.db.update_queue_item_status(item.id, "pending")
+    await deps.db.update_queue_control_state(channel_id, thread_ts, "paused")
+
+    scope_label = _queue_scope_label(thread_ts)
+    text = (
+        f"{scope_label}: paused queue because queue item #{item.id} requires user input. "
+        "Answer the posted question, then run `/qc resume` to continue."
+    )
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=text,
+        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
     )
 
 
@@ -932,6 +968,7 @@ async def _execute_queue_item(
             persist_session_ids=persist_session_ids,
             auto_answer_questions=config.QUEUE_AUTO_ANSWER_QUESTIONS,
             auto_approve_permissions=config.QUEUE_AUTO_APPROVE_PERMISSIONS,
+            pause_on_questions=config.QUEUE_PAUSE_ON_QUESTIONS,
             session_scope_override=session_scope_override,
             on_plan_approved=on_plan_approved,
         )
@@ -944,6 +981,20 @@ async def _execute_queue_item(
         if override_key and result.session_id:
             backend_resume = override_resume_ids.setdefault(override_key, {})
             backend_resume[route_backend] = result.session_id
+
+        if config.QUEUE_PAUSE_ON_QUESTIONS and _result_field(result, "paused_on_question", False):
+            await _pause_queue_for_question(
+                item=item,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                deps=deps,
+                client=client,
+            )
+            if streaming_state and not streaming_state.accumulated_output.strip():
+                streaming_state.accumulated_output = "Queue paused: assistant requested user input."
+            if streaming_state:
+                await streaming_state.finalize(is_error=True)
+            return None
 
         usage_limit_state = await _resolve_usage_limit_state(
             backend=route_backend,
