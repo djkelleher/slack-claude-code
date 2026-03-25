@@ -13,16 +13,22 @@ class Session:
     thread_ts: Optional[str] = None  # Thread timestamp for thread-based sessions
     working_directory: str = "~"
     claude_session_id: Optional[str] = None  # For Claude --resume flag
-    permission_mode: Optional[str] = None  # Per-session permission mode override (Claude)
+    permission_mode: Optional[str] = (
+        None  # Per-session permission mode override (Claude)
+    )
     model: Optional[str] = (
         None  # Model to use (e.g., "sonnet", "claude-opus-4-6[1m]", "gpt-5.3-codex")
     )
-    added_dirs: list[str] = field(default_factory=list)  # Directories added via /add-dir
+    added_dirs: list[str] = field(
+        default_factory=list
+    )  # Directories added via /add-dir
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
     # Codex-specific fields
     codex_session_id: Optional[str] = None  # For Codex resume
-    sandbox_mode: str = config.CODEX_SANDBOX_MODE  # read-only, workspace-write, danger-full-access
+    sandbox_mode: str = (
+        config.CODEX_SANDBOX_MODE
+    )  # read-only, workspace-write, danger-full-access
     approval_mode: str = config.CODEX_APPROVAL_MODE  # untrusted, on-request, never
 
     @classmethod
@@ -91,7 +97,9 @@ class CommandHistory:
             detailed_output=detailed_output,
             status=status,
             error_message=error_message,
-            created_at=datetime.fromisoformat(created_at) if created_at else datetime.now(),
+            created_at=(
+                datetime.fromisoformat(created_at) if created_at else datetime.now()
+            ),
             completed_at=datetime.fromisoformat(completed_at) if completed_at else None,
         )
 
@@ -144,12 +152,31 @@ class QueueItem:
     error_message: Optional[str] = None
     position: int = 0
     message_ts: Optional[str] = None
+    automation_meta: Optional[dict[str, object]] = None
     created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
     @classmethod
     def from_row(cls, row: tuple) -> "QueueItem":
+        created_at_index = 13
+        started_at_index = 14
+        completed_at_index = 15
+        raw_automation_meta = None
+        if len(row) > 16:
+            raw_automation_meta = row[13]
+            created_at_index = 14
+            started_at_index = 15
+            completed_at_index = 16
+
+        automation_meta = None
+        if raw_automation_meta:
+            try:
+                parsed = json.loads(raw_automation_meta)
+            except (TypeError, json.JSONDecodeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                automation_meta = parsed
         return cls(
             id=row[0],
             session_id=row[1],
@@ -164,9 +191,22 @@ class QueueItem:
             error_message=row[10],
             position=row[11],
             message_ts=row[12],
-            created_at=datetime.fromisoformat(row[13]) if row[13] else datetime.now(),
-            started_at=datetime.fromisoformat(row[14]) if row[14] else None,
-            completed_at=datetime.fromisoformat(row[15]) if row[15] else None,
+            automation_meta=automation_meta,
+            created_at=(
+                datetime.fromisoformat(row[created_at_index])
+                if row[created_at_index]
+                else datetime.now()
+            ),
+            started_at=(
+                datetime.fromisoformat(row[started_at_index])
+                if row[started_at_index]
+                else None
+            ),
+            completed_at=(
+                datetime.fromisoformat(row[completed_at_index])
+                if row[completed_at_index]
+                else None
+            ),
         )
 
 
@@ -191,7 +231,9 @@ class WorkspaceLease:
     worktree_name: Optional[str] = None
     worktree_origin: Optional[str] = None
     merge_status: Optional[str] = None
-    status: str = "active"  # active, released, abandoned, merged, needs_manual_attention
+    status: str = (
+        "active"  # active, released, abandoned, merged, needs_manual_attention
+    )
     created_at: datetime = field(default_factory=datetime.now)
     released_at: Optional[datetime] = None
 
@@ -315,6 +357,7 @@ class QueueControl:
     channel_id: str = ""
     thread_ts: Optional[str] = None
     state: str = "running"
+    auto_finish_pending: bool = False
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
 
@@ -325,6 +368,7 @@ class QueueControl:
             channel_id=row[1],
             thread_ts=row[2],
             state=row[3] or "running",
+            auto_finish_pending=bool(row[6]) if len(row) > 6 else False,
             created_at=datetime.fromisoformat(row[4]) if row[4] else datetime.now(),
             updated_at=datetime.fromisoformat(row[5]) if row[5] else datetime.now(),
         )
@@ -332,7 +376,12 @@ class QueueControl:
     @classmethod
     def default(cls, channel_id: str, thread_ts: Optional[str]) -> "QueueControl":
         """Return the default running state for a queue scope."""
-        return cls(channel_id=channel_id, thread_ts=thread_ts, state="running")
+        return cls(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            state="running",
+            auto_finish_pending=False,
+        )
 
 
 @dataclass

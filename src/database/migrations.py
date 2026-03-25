@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS queue_items (
     error_message TEXT,
     position INTEGER NOT NULL,
     message_ts TEXT,
+    automation_meta TEXT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
@@ -117,6 +118,7 @@ CREATE TABLE IF NOT EXISTS queue_controls (
     channel_id TEXT NOT NULL,
     thread_ts TEXT DEFAULT NULL,
     state TEXT DEFAULT 'running',
+    auto_finish_pending INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -218,6 +220,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                channel_id TEXT NOT NULL,
                thread_ts TEXT DEFAULT NULL,
                state TEXT DEFAULT 'running',
+               auto_finish_pending INTEGER DEFAULT 0,
                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
            )"""
@@ -351,6 +354,22 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         queue_column_names,
         "parallel_limit",
         "ALTER TABLE queue_items ADD COLUMN parallel_limit INTEGER DEFAULT NULL",
+    )
+    await _add_column_if_missing(
+        db,
+        queue_column_names,
+        "automation_meta",
+        "ALTER TABLE queue_items ADD COLUMN automation_meta TEXT DEFAULT NULL",
+    )
+
+    queue_control_cursor = await db.execute("PRAGMA table_info(queue_controls)")
+    queue_control_columns = await queue_control_cursor.fetchall()
+    queue_control_column_names = [col[1] for col in queue_control_columns]
+    await _add_column_if_missing(
+        db,
+        queue_control_column_names,
+        "auto_finish_pending",
+        "ALTER TABLE queue_controls ADD COLUMN auto_finish_pending INTEGER DEFAULT 0",
     )
 
     # Ensure queue scope indexes exist for channel+thread isolation

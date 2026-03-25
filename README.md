@@ -226,6 +226,9 @@ Queue control behavior:
 - Set `QUEUE_AUTO_ANSWER_QUESTIONS=true` to auto-answer assistant questions during queue execution by choosing `(Recommended)` options (fallback: first option).
 - Set `QUEUE_AUTO_APPROVE_PERMISSIONS=true` to auto-approve permission prompts during queue execution. This defaults to `true`.
 - Set `QUEUE_PAUSE_ON_QUESTIONS=true` to pause the queue and return the current item to pending whenever the assistant requests user input.
+- Set `QUEUE_AUTO_MAX_CONTINUE_ROUNDS` to cap auto-continue rounds per auto-follow chain (default `20`).
+- Set `QUEUE_AUTO_MAX_CHECK_ROUNDS` to cap auto-check rounds per auto-follow chain (default `10`).
+- Set `QUEUE_AUTO_JUDGE_TIMEOUT_SECONDS` to cap per-item LLM judge runtime (default `30` seconds).
 
 #### Structured Queue DSL (Queues + Worktree + Loops)
 
@@ -235,6 +238,8 @@ Queue submission directives supported before the first content block:
 - `((append))` append to pending items
 - `((prepend))` prepends the expanded plan
 - `((insert<n>))` inserts the expanded plan at 1-based position `n`
+- `((auto))` enables auto-follow checks/continuation after each completed queue prompt
+- `((auto-finish))` enables one consolidated auto-follow pass when the queue drains
 
 | Marker | Meaning |
 |--------|---------|
@@ -436,6 +441,9 @@ Configuration is encrypted and stored in `~/.slack-claude-code/config.enc`. Sens
 - `QUEUE_AUTO_ANSWER_QUESTIONS`: Optional queue auto-answer toggle (`false` by default)
 - `QUEUE_AUTO_APPROVE_PERMISSIONS`: Optional queue auto-approve toggle (`true` by default)
 - `QUEUE_PAUSE_ON_QUESTIONS`: Optional queue pause-on-question toggle (`false` by default)
+- `QUEUE_AUTO_MAX_CONTINUE_ROUNDS`: Optional per-chain auto-continue cap (`20` by default)
+- `QUEUE_AUTO_MAX_CHECK_ROUNDS`: Optional per-chain auto-check cap (`10` by default)
+- `QUEUE_AUTO_JUDGE_TIMEOUT_SECONDS`: Optional queue auto-judge timeout in seconds (`30` by default)
 
 ### 4. Start the Slack bot
 Run `aislack` in your terminal. The working directory where you start it becomes the default working directory for new session scopes unless `DEFAULT_WORKING_DIR` is set. If a `.env` file exists in that directory, it is loaded automatically.

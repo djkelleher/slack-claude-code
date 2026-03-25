@@ -32,6 +32,19 @@ def _running_item_label(item: Any) -> str:
     return label
 
 
+def _automation_prefix(item: Any) -> str:
+    """Return a short queue label prefix for auto-generated items."""
+    raw_meta = getattr(item, "automation_meta", None)
+    if not isinstance(raw_meta, dict):
+        return ""
+    origin = str(raw_meta.get("origin") or "").strip().lower()
+    if origin == "auto_check":
+        return "[auto-check] "
+    if origin == "auto_continue":
+        return "[auto-continue] "
+    return ""
+
+
 def _pending_item_text(item: Any, displayed_position: int) -> str:
     """Render one pending queue line."""
     parallel_suffix = ""
@@ -39,7 +52,7 @@ def _pending_item_text(item: Any, displayed_position: int) -> str:
         parallel_suffix = f", parallel max {item.parallel_limit or 'all'}"
     return (
         f"*#{item.id}* (pos {displayed_position}{parallel_suffix})\n> "
-        f"{_escaped_preview(item.prompt, 100)}"
+        f"{_escaped_preview(_automation_prefix(item) + item.prompt, 100)}"
     )
 
 
@@ -54,9 +67,13 @@ def _scheduled_event_text(event: Any) -> str:
     return f":alarm_clock: {id_prefix}*{event.action}* at `{execute_at_utc}`"
 
 
-def queue_status(pending: list, running: Any, scheduled_events: list | None = None) -> list[dict]:
+def queue_status(
+    pending: list, running: Any, scheduled_events: list | None = None
+) -> list[dict]:
     """Format queue status for /qv command."""
-    running_items = running if isinstance(running, list) else ([running] if running else [])
+    running_items = (
+        running if isinstance(running, list) else ([running] if running else [])
+    )
     scheduled = scheduled_events or []
     blocks = [
         {
@@ -75,7 +92,8 @@ def queue_status(pending: list, running: Any, scheduled_events: list | None = No
         for item in running_items[:10]:
             label = _running_item_label(item)
             running_lines.append(
-                f":arrow_forward: *Running:* {label}\n> " f"{_escaped_preview(item.prompt, 100)}"
+                f":arrow_forward: *Running:* {label}\n> "
+                f"{_escaped_preview(_automation_prefix(item) + item.prompt, 100)}"
             )
         blocks.append(
             {
@@ -90,7 +108,10 @@ def queue_status(pending: list, running: Any, scheduled_events: list | None = No
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Scheduled Controls:*\n" + "\n".join(lines)},
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Scheduled Controls:*\n" + "\n".join(lines),
+                },
             }
         )
         if len(scheduled) > 5:
@@ -128,7 +149,7 @@ def queue_item_running(item: Any, sequence_number: str) -> list[dict]:
                 "type": "mrkdwn",
                 "text": (
                     f":arrow_forward: *Processing queue item {sequence_number}:*\n> "
-                    f"{_escaped_preview(' '.join(item.prompt.split()), 200)}"
+                    f"{_escaped_preview(_automation_prefix(item) + ' '.join(item.prompt.split()), 200)}"
                 ),
             },
         },
@@ -153,7 +174,7 @@ def queue_item_complete(item: Any, result: Any) -> list[dict]:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"> {_escaped_preview(item.prompt, 100)}",
+                "text": f"> {_escaped_preview(_automation_prefix(item) + item.prompt, 100)}",
             },
         },
         {"type": "divider"},
@@ -182,7 +203,10 @@ def queue_scope_overview(scopes: list[dict[str, Any]]) -> list[dict]:
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "_No queue activity found in this channel_"},
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "_No queue activity found in this channel_",
+                },
             }
         )
         return blocks
