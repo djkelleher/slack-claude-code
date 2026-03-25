@@ -534,7 +534,7 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
                 (m["display"] for m in all_models if m["value"] == normalized_current_model),
                 model_display_name(normalized_current_model),
             )
-            current_model_id = normalized_current_model or "default"
+            current_model_id = normalized_current_model or "claude-opus-4-6"
 
             select_options = []
             initial_option = None

@@ -23,16 +23,18 @@ class ModelOption:
 
 
 CLAUDE_MODEL_DISPLAY: dict[str | None, str] = {
-    None: "Default (recommended)",
-    "default": "Default (recommended)",
-    "opus": "Default (recommended)",
-    "claude-opus-4-6": "Default (recommended)",
-    "claude-opus-4-6[1m]": "Opus (1M context)",
-    "sonnet": "Sonnet",
-    "claude-sonnet-4-6": "Sonnet",
-    "claude-sonnet-4-6[1m]": "Sonnet (1M context)",
-    "haiku": "Haiku",
-    "claude-haiku-4-5": "Haiku",
+    None: "Opus 4.6",
+    "default": "Opus 4.6",
+    "opus": "Opus 4.6",
+    "claude-opus-4-6": "Opus 4.6",
+    "claude-opus-4-6[1m]": "Opus 4.6 (1M context)",
+    "claude-opus-4-5": "Opus 4.5",
+    "sonnet": "Sonnet 4.6",
+    "claude-sonnet-4-6": "Sonnet 4.6",
+    "claude-sonnet-4-6[1m]": "Sonnet 4.6 (1M context)",
+    "claude-sonnet-4-5": "Sonnet 4.5",
+    "haiku": "Haiku 4.5",
+    "claude-haiku-4-5": "Haiku 4.5",
 }
 
 CLAUDE_MODEL_ALIASES: dict[str, str | None] = {
@@ -42,12 +44,16 @@ CLAUDE_MODEL_ALIASES: dict[str, str | None] = {
     "opus": None,
     "opus-4.6": None,
     "claude-opus-4-6": None,
+    "opus-4.5": "claude-opus-4-5",
+    "claude-opus-4-5": "claude-opus-4-5",
     "opus-1m": "claude-opus-4-6[1m]",
     "opus (1m context)": "claude-opus-4-6[1m]",
     "claude-opus-4-6[1m]": "claude-opus-4-6[1m]",
     "sonnet": "sonnet",
     "sonnet-4.6": "sonnet",
     "claude-sonnet-4-6": "sonnet",
+    "sonnet-4.5": "claude-sonnet-4-5",
+    "claude-sonnet-4-5": "claude-sonnet-4-5",
     "sonnet-1m": "claude-sonnet-4-6[1m]",
     "sonnet (1m context)": "claude-sonnet-4-6[1m]",
     "claude-sonnet-4-6[1m]": "claude-sonnet-4-6[1m]",
@@ -70,38 +76,38 @@ CODEX_MODEL_ALIASES: dict[str, str] = {
     "g34h": "gpt-3.4-high",
 }
 
-CLAUDE_DEFAULT_ALIASES: set[str] = {"default", "opus", "claude-opus-4-6"}
+CLAUDE_DEFAULT_ALIASES: set[str] = {"default", "opus", "opus-4.6", "claude-opus-4-6"}
 
 CLAUDE_MODEL_OPTIONS: tuple[ModelOption, ...] = (
     ModelOption(
-        name="default",
+        name="opus-4-6",
         value=None,
-        display="Default (recommended)",
+        display="Opus 4.6",
         desc="Opus 4.6 · Most capable for complex work",
-    ),
-    ModelOption(
-        name="opus-1m",
-        value="claude-opus-4-6[1m]",
-        display="Opus (1M context)",
-        desc="Opus 4.6 with 1M context · Billed as extra usage · $10/$37.50 per Mtok",
     ),
     ModelOption(
         name="sonnet",
         value="sonnet",
-        display="Sonnet",
+        display="Sonnet 4.6",
         desc="Sonnet 4.6 · Best for everyday tasks",
-    ),
-    ModelOption(
-        name="sonnet-1m",
-        value="claude-sonnet-4-6[1m]",
-        display="Sonnet (1M context)",
-        desc="Sonnet 4.6 with 1M context · Billed as extra usage · $6/$22.50 per Mtok",
     ),
     ModelOption(
         name="haiku",
         value="haiku",
-        display="Haiku",
+        display="Haiku 4.5",
         desc="Haiku 4.5 · Fastest for quick answers",
+    ),
+    ModelOption(
+        name="opus-4-5",
+        value="claude-opus-4-5",
+        display="Opus 4.5",
+        desc="Previous Opus generation (legacy model ID support)",
+    ),
+    ModelOption(
+        name="sonnet-4-5",
+        value="claude-sonnet-4-5",
+        display="Sonnet 4.5",
+        desc="Previous Sonnet generation (legacy model ID support)",
     ),
 )
 

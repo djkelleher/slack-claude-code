@@ -25,8 +25,11 @@ class TestNormalizeModelName:
     def test_normalizes_claude_named_aliases(self):
         """Claude aliases should map to canonical Claude IDs."""
         assert normalize_model_name("sonnet") == "sonnet"
+        assert normalize_model_name("sonnet-4.5") == "claude-sonnet-4-5"
         assert normalize_model_name("sonnet-1m") == "claude-sonnet-4-6[1m]"
         assert normalize_model_name("haiku-4.5") == "haiku"
+        assert normalize_model_name("opus-4.5") == "claude-opus-4-5"
+        assert normalize_model_name("opus-high") == "claude-opus-4-6-high"
         assert normalize_model_name("co46h") == "claude-opus-4-6-high"
         assert normalize_model_name("claude-opus-4-6-max") == "claude-opus-4-6-max"
 
@@ -46,8 +49,10 @@ class TestModelDisplayName:
 
     def test_known_model_display_name(self):
         """Known model IDs should return friendly labels."""
-        assert model_display_name("claude-opus-4-6[1m]") == "Opus (1M context)"
-        assert model_display_name("haiku") == "Haiku"
+        assert model_display_name("claude-opus-4-6[1m]") == "Opus 4.6 (1M context)"
+        assert model_display_name("haiku") == "Haiku 4.5"
+        assert model_display_name("claude-opus-4-5") == "Opus 4.5"
+        assert model_display_name("claude-sonnet-4-5") == "Sonnet 4.5"
         assert model_display_name("gpt-5.3-codex") == "GPT-5.3 Codex"
         assert model_display_name("gpt-5.4") == "GPT-5.4"
         assert model_display_name("gpt-5.3-codex-xhigh") == "GPT-5.3 Codex (Extra-High)"
@@ -57,8 +62,8 @@ class TestModelDisplayName:
         assert model_display_name("custom-model-id") == "custom-model-id"
 
     def test_default_model_display_name(self):
-        """Default model should display recommended label."""
-        assert model_display_name(None) == "Default (recommended)"
+        """Default model should display the Opus 4.6 label."""
+        assert model_display_name(None) == "Opus 4.6"
 
 
 class TestCodexModelValidation:
@@ -108,7 +113,9 @@ class TestModelOptionsCatalog:
         claude_options = get_claude_model_options()
         codex_options = get_codex_model_options()
 
-        assert any(option["name"] == "default" for option in claude_options)
+        assert any(option["name"] == "opus-4-6" for option in claude_options)
+        assert any(option["name"] == "opus-4-5" for option in claude_options)
+        assert any(option["name"] == "sonnet-4-5" for option in claude_options)
         assert any(option["name"] == "sonnet" for option in claude_options)
         assert any(option["name"] == "gpt-5.3-codex" for option in codex_options)
         assert any(option["name"] == "gpt-5.4" for option in codex_options)
@@ -118,7 +125,9 @@ class TestModelOptionsCatalog:
         """Combined options should contain both Claude and Codex entries."""
         all_options = get_all_model_options()
         names = {option["name"] for option in all_options}
-        assert "default" in names
+        assert "opus-4-6" in names
+        assert "opus-4-5" in names
+        assert "sonnet-4-5" in names
         assert "gpt-5.4-medium" in names
         assert "gpt-5.2-codex-high" in names
 

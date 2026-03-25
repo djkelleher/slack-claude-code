@@ -63,7 +63,7 @@ Customize behavior for your workflow.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/model` | Show or change AI model | `/model sonnet` |
+| `/model` | Show or change AI model | `/model opus-4.6` |
 | `/mode` | View or set session mode (Claude and Codex) | `/mode`, `/mode plan`, `/mode bypass`, `/mode approval never`, `/mode sandbox workspace-write` |
 | `/permissions` | Show current approval/sandbox settings and how to change them | `/permissions` |
 | `/notifications` | View or configure notifications | `/notifications`, `/notifications on`, `/notifications completion off` |
@@ -105,6 +105,22 @@ Supported Codex models:
 - `gpt-5.1-codex-max`
 - `gpt-5.2`
 - `gpt-5.1-codex-mini`
+
+Supported Claude models:
+- `opus` / `opus-4.6` / `claude-opus-4-6`
+- `sonnet` / `sonnet-4.6` / `claude-sonnet-4-6`
+- `haiku` / `haiku-4.5` / `claude-haiku-4-5`
+- `opus-4.5` / `claude-opus-4-5` (legacy)
+- `sonnet-4.5` / `claude-sonnet-4-5` (legacy)
+
+Optional Claude effort suffixes:
+- `-low`
+- `-medium`
+- `-high`
+- `-max`
+- `-auto`
+
+Note: `/fast` is not currently exposed as a Slack slash command in this wrapper.
 
 Optional Codex effort suffixes:
 - `-low`
@@ -429,24 +445,6 @@ Type messages in any channel where the bot is installed. The channel root is one
 
 File uploads are downloaded into the app data directory and added to the session context automatically. If a message contains uploaded files but no text, the bot asks the selected backend to analyze those files. Images also get a Slack preview block in-thread.
 
-## Architecture
-
-```
-src/
-├── app.py                 # Main entry point
-├── config.py              # Configuration
-├── database/              # SQLite persistence (models, migrations, repository)
-├── claude/                # Claude CLI integration (`claude -p --output-format stream-json`)
-├── codex/                 # Codex app-server JSON-RPC integration
-├── handlers/              # Slack command handlers
-├── agents/                # Configurable subagent system (explore, plan, bash, general)
-├── approval/              # Permission & plan approval handling
-├── git/                   # Git service layer used by worktree flows
-├── hooks/                 # Event hook system
-├── question/              # AskUserQuestion tool support
-├── tasks/                 # Background task management
-└── utils/                 # Formatters, helpers, validators
-```
 
 ## Troubleshooting
 

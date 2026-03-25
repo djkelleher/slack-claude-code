@@ -50,6 +50,10 @@ def normalize_model_name(model_name: str) -> Optional[str]:
     resolved_claude_base = CLAUDE_MODEL_ALIASES.get(claude_base_name, claude_base_name)
     if resolved_claude_base is None:
         if claude_effort:
+            # Default aliases should resolve to the current default Claude model ID
+            # when users request an explicit effort suffix (e.g., "opus-high").
+            if claude_base_name in CLAUDE_DEFAULT_ALIASES:
+                return f"claude-opus-4-6-{claude_effort}"
             return f"{claude_base_name}-{claude_effort}"
         return None
     if claude_effort and claude_effort in CLAUDE_EFFORT_LEVELS:
@@ -141,7 +145,7 @@ def normalize_current_model(model: Optional[str]) -> Optional[str]:
 def model_display_name(model: Optional[str]) -> str:
     """Return human-readable display name for a model identifier."""
     normalized = normalize_current_model(model)
-    return _display_name_map().get(normalized, normalized or "Default (recommended)")
+    return _display_name_map().get(normalized, normalized or "Opus 4.6")
 
 
 def codex_model_validation_error(model: Optional[str]) -> Optional[str]:
