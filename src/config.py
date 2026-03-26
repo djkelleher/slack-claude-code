@@ -273,11 +273,17 @@ def get_backend_for_model(model: Optional[str]) -> str:
     if is_supported_codex_model(model_lower):
         return "codex"
 
+    # Try registry first (handles all backends including Gemini)
+    if registry.backend_ids:
+        return registry.get_backend_for_model(model)
+
     # Check prefixes for extended model names
     if model_lower.startswith("claude"):
         return "claude"
     if looks_like_codex_model(model_lower):
         return "codex"
+    if model_lower.startswith("gemini"):
+        return "gemini"
     # Default to Claude for unknown models
     return "claude"
 

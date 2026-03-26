@@ -10,6 +10,7 @@ import asyncio
 import os
 import random
 import re
+import shutil
 import signal
 import sys
 import time
@@ -1157,6 +1158,16 @@ async def main():
     # Populate backend registry with providers
     registry.register_backend(ClaudeBackendProvider(claude_executor))
     registry.register_backend(CodexBackendProvider(codex_executor))
+
+    # Register Gemini backend if CLI is available
+    if shutil.which("gemini"):
+        from src.gemini.provider import GeminiBackendProvider
+        from src.gemini.subprocess_executor import SubprocessExecutor as GeminiExecutor
+
+        gemini_executor = GeminiExecutor()
+        registry.register_backend(GeminiBackendProvider(gemini_executor))
+        logger.info("Gemini CLI detected, registered Gemini backend")
+
     logger.info(
         f"Backend registry initialized with {len(registry.backend_ids)} backends: "
         f"{', '.join(registry.backend_ids)}"
