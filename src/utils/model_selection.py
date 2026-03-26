@@ -56,10 +56,15 @@ def normalize_model_name(model_name: str) -> Optional[str]:
     -------
     Optional[str]
         Canonical model ID for storage, or None for default model selection.
+        Returns "auto" for smart routing mode.
     """
     normalized = (model_name or "").strip().lower()
     if not normalized:
         return None
+
+    # Smart routing alias
+    if normalized == "auto":
+        return "auto"
 
     codex_base_name, codex_effort = parse_model_effort(normalized)
     if codex_base_name in CODEX_MODEL_ALIASES or looks_like_codex_model(codex_base_name):
@@ -327,6 +332,9 @@ def normalize_current_model(model: Optional[str]) -> Optional[str]:
 
 def model_display_name(model: Optional[str]) -> str:
     """Return human-readable display name for a model identifier."""
+    if model == "auto":
+        return "Auto (Smart Routing)"
+
     # Try registry first
     if registry.backend_ids:
         normalized = normalize_current_model(model)
@@ -389,6 +397,42 @@ def codex_model_validation_error(model: Optional[str]) -> Optional[str]:
         "Optional effort argument (space-separated): "
         f"`/model <model> <effort>` where effort is {effort_levels} or `extra-high`."
     )
+
+
+def resolve_smart_routing(
+    model: Optional[str],
+    prompt: str,
+    preferred_backend: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str], Optional["ScoringResult"]]:
+    """Resolve smart routing for a model set to "auto".
+
+    Parameters
+    ----------
+    model : Optional[str]
+        The session model. Only triggers routing when "auto".
+    prompt : str
+        The user's request text.
+    preferred_backend : Optional[str]
+        If set, only consider models from this backend.
+
+    Returns
+    -------
+    tuple[Optional[str], Optional[str], Optional[ScoringResult]]
+        (effective_model_cli_value, display_name, scoring_result).
+        Returns (None, None, None) when model is not "auto" or registry is empty.
+    """
+    if model != "auto" or not registry.backend_ids:
+        return None, None, None
+
+    from src.routing.router import ModelRouter
+    from src.routing.scorer import ScoringResult
+
+    router = ModelRouter(registry)
+    selected, scoring = router.select_model(
+        prompt,
+        preferred_backend=preferred_backend,
+    )
+    return selected.cli_value, selected.display_name, scoring
 
 
 def backend_label_for_model(model: Optional[str]) -> str:

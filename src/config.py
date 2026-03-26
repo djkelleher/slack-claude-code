@@ -262,7 +262,7 @@ def get_backend_for_model(model: Optional[str]) -> str:
     Returns:
         "claude" or "codex"
     """
-    if model is None:
+    if model is None or model == "auto":
         return "claude"  # Default to Claude
 
     model_lower = model.lower()
@@ -429,6 +429,10 @@ class Config(BaseSettings):
     CLAUDE_PERMISSION_MODE: str = "bypassPermissions"
     DEFAULT_MODEL: Optional[str] = None
     CLAUDE_SDK_IDLE_TIMEOUT_SECONDS: int = 900
+
+    # Smart routing: auto-select model based on request complexity
+    SMART_ROUTING_ENABLED: bool = False
+    SMART_ROUTING_DEFAULT_BACKEND: Optional[str] = None
 
     # Default permission mode constant (used as fallback when invalid mode specified)
     DEFAULT_BYPASS_MODE: str = "bypassPermissions"
