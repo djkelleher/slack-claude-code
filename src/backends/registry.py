@@ -102,16 +102,13 @@ class BackendRegistry:
         if canonical_id:
             return self._models.get(canonical_id)
 
+        # Try stripping effort suffixes via each backend's parser
         for backend in self._backends.values():
             base_model, effort = backend.parse_effort(normalized)
             if effort:
                 canonical_id = self._aliases.get(base_model.lower())
                 if canonical_id:
                     return self._models.get(canonical_id)
-
-        for alias_key, canonical_id in self._aliases.items():
-            if normalized.startswith(alias_key) or alias_key.startswith(normalized):
-                return self._models.get(canonical_id)
 
         return None
 
@@ -251,8 +248,8 @@ class BackendRegistry:
                     if model.id not in self._models:
                         self._register_model(model)
                         logger.info(f"Discovered new model: {model.id} ({backend_id})")
-            except Exception:
-                logger.warning(f"Model discovery failed for backend: {backend_id}")
+            except Exception as exc:
+                logger.warning(f"Model discovery failed for backend {backend_id}: {exc}")
 
     async def refresh_models(self, backend_id: str) -> list[ModelDefinition]:
         """Re-discover models for a specific backend.
@@ -279,7 +276,7 @@ class BackendRegistry:
                     self._register_model(model)
                     new_models.append(model)
                     logger.info(f"Discovered new model: {model.id} ({backend_id})")
-        except Exception:
-            logger.warning(f"Model refresh failed for backend: {backend_id}")
+        except Exception as exc:
+            logger.warning(f"Model refresh failed for backend {backend_id}: {exc}")
 
         return new_models

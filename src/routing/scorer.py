@@ -7,12 +7,12 @@ text metrics, producing a tier recommendation with confidence score.
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Callable
 
 from src.backends.models import ModelTier
 from src.routing.scorer_config import (
     CONFIDENCE_K,
-    CONFIDENCE_MIDPOINT,
     CONFIDENCE_THRESHOLD,
     DEFAULT_BOUNDARIES,
     LONG_PROMPT_THRESHOLD,
@@ -220,7 +220,7 @@ def _score_constraint_density(text: str) -> float:
     return 1.0
 
 
-_STRUCTURAL_SCORERS: dict[str, callable] = {
+_STRUCTURAL_SCORERS: dict[str, Callable[[str], float]] = {
     "prompt_length": _score_prompt_length,
     "file_references": _score_file_references,
     "specificity": _score_specificity,

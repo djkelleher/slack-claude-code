@@ -253,14 +253,17 @@ def looks_like_codex_model(model_name: str) -> bool:
 
 
 def get_backend_for_model(model: Optional[str]) -> str:
-    """
-    Determine which backend to use based on the model name.
+    """Determine which backend to use based on the model name.
 
-    Args:
-        model: The model name (e.g., "opus", "gpt-5.3-codex")
+    Parameters
+    ----------
+    model : Optional[str]
+        The model name (e.g., "opus", "gpt-5.3-codex", "gemini").
 
-    Returns:
-        "claude" or "codex"
+    Returns
+    -------
+    str
+        Backend identifier: "claude", "codex", or "gemini".
     """
     if model is None or model == "auto":
         return "claude"  # Default to Claude
@@ -436,9 +439,10 @@ class Config(BaseSettings):
     DEFAULT_MODEL: Optional[str] = None
     CLAUDE_SDK_IDLE_TIMEOUT_SECONDS: int = 900
 
-    # Smart routing: auto-select model based on request complexity
+    # Smart routing: when True, sessions with model set to "auto" will
+    # automatically select the best model based on request complexity.
+    # Users opt in per session via /model auto.
     SMART_ROUTING_ENABLED: bool = False
-    SMART_ROUTING_DEFAULT_BACKEND: Optional[str] = None
 
     # Default permission mode constant (used as fallback when invalid mode specified)
     DEFAULT_BYPASS_MODE: str = "bypassPermissions"

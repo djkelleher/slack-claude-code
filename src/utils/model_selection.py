@@ -22,6 +22,8 @@ from src.config import (
     parse_model_effort,
     registry,
 )
+from src.routing.router import ModelRouter
+from src.routing.scorer import ScoringResult
 
 _EFFORT_ALIAS_MAP: dict[str, Optional[str]] = {
     "none": None,
@@ -423,9 +425,6 @@ def resolve_smart_routing(
     """
     if model != "auto" or not registry.backend_ids:
         return None, None, None
-
-    from src.routing.router import ModelRouter
-    from src.routing.scorer import ScoringResult
 
     router = ModelRouter(registry)
     selected, scoring = router.select_model(

@@ -33,6 +33,8 @@ from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
 from src.config import config, get_backend_for_model, registry
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
+from src.gemini.provider import GeminiBackendProvider
+from src.gemini.subprocess_executor import SubprocessExecutor as GeminiExecutor
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
 from src.handlers.claude.queue import (
@@ -1161,9 +1163,6 @@ async def main():
 
     # Register Gemini backend if CLI is available
     if shutil.which("gemini"):
-        from src.gemini.provider import GeminiBackendProvider
-        from src.gemini.subprocess_executor import SubprocessExecutor as GeminiExecutor
-
         gemini_executor = GeminiExecutor()
         registry.register_backend(GeminiBackendProvider(gemini_executor))
         logger.info("Gemini CLI detected, registered Gemini backend")
