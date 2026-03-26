@@ -138,9 +138,9 @@ class TestConfig:
         """Queue pause-on-question should be disabled by default."""
         assert config.QUEUE_PAUSE_ON_QUESTIONS is False
 
-    def test_default_live_pty_setting_disabled(self):
-        """Live PTY mode should be opt-in by default."""
-        assert config.CLAUDE_LIVE_PTY_ENABLED is False
+    def test_default_live_pty_setting_enabled(self):
+        """Live PTY mode should be enabled by default."""
+        assert config.CLAUDE_LIVE_PTY_ENABLED is True
         assert config.CLAUDE_LIVE_PTY_MAX_OUTPUT_CHARS == 500000
         assert config.CLAUDE_LIVE_PTY_JANITOR_INTERVAL_SECONDS == 30.0
 

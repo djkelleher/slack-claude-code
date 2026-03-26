@@ -437,7 +437,7 @@ class Config(BaseSettings):
     # Claude Code configuration
     CLAUDE_PERMISSION_MODE: str = "bypassPermissions"
     DEFAULT_MODEL: Optional[str] = None
-    CLAUDE_LIVE_PTY_ENABLED: bool = False
+    CLAUDE_LIVE_PTY_ENABLED: bool = True
     CLAUDE_LIVE_PTY_IDLE_TIMEOUT_SECONDS: int = 900
     CLAUDE_LIVE_PTY_TURN_TIMEOUT_SECONDS: int = 1800
     CLAUDE_LIVE_PTY_READ_TIMEOUT_SECONDS: float = 0.5
