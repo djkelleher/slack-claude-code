@@ -62,9 +62,7 @@ def _extract_plan_content(text: Optional[str]) -> Optional[str]:
             "## test plan",
         )
         if all(section in lowered for section in required_sections):
-            step_count = len(
-                re.findall(r"(?im)^\s*(?:\d+\.\s+|\d+\)\s+|[-*]\s+)", plan_content)
-            )
+            step_count = len(re.findall(r"(?im)^\s*(?:\d+\.\s+|\d+\)\s+|[-*]\s+)", plan_content))
             if step_count >= 3:
                 return plan_content
 
@@ -123,9 +121,7 @@ def _retry_prompt(base_prompt: str) -> str:
 
 def _build_summary(spec: PlanModeDirective, planner_model: str) -> str:
     reviewers = list(spec.models[1:])
-    reviewer_text = (
-        ", ".join(f"`{model}`" for model in reviewers) if reviewers else "_none_"
-    )
+    reviewer_text = ", ".join(f"`{model}`" for model in reviewers) if reviewers else "_none_"
     return (
         "## Adversarial Planning Summary\n"
         f"- Strategy: `{spec.strategy}`\n"
@@ -160,21 +156,15 @@ async def _run_and_extract_plan(
         persist_session_id,
     )
     if not _result_field(retry_result, "success", False):
-        error = (
-            _result_field(retry_result, "error", None) or "unknown execution failure"
-        )
-        raise AdversarialPlanError(
-            f"Model `{model}` failed on plan-format retry: {error}"
-        )
+        error = _result_field(retry_result, "error", None) or "unknown execution failure"
+        raise AdversarialPlanError(f"Model `{model}` failed on plan-format retry: {error}")
 
     retry_output = _result_field(retry_result, "output", "") or ""
     retry_plan = _extract_plan_content(retry_output)
     if retry_plan:
         return retry_result, retry_plan
 
-    raise AdversarialPlanError(
-        f"Model `{model}` did not produce a detectable implementation plan."
-    )
+    raise AdversarialPlanError(f"Model `{model}` did not produce a detectable implementation plan.")
 
 
 async def orchestrate_adversarial_plan(
@@ -233,9 +223,7 @@ async def orchestrate_adversarial_plan(
             resume_session_id=planner_session_id,
             persist_session_id=True,
         )
-        planner_session_id = _result_field(
-            integrated_result, "session_id", planner_session_id
-        )
+        planner_session_id = _result_field(integrated_result, "session_id", planner_session_id)
         final_plan = integrated_plan
     else:
         raise AdversarialPlanError(f"Unsupported plan strategy: `{spec.strategy}`")

@@ -87,9 +87,7 @@ Delivery prompt
     user_agents = registry.list_by_source(AgentSource.USER)
     assert [agent.name for agent in user_agents] == ["research"]
 
-    project_agents = {
-        agent.name for agent in registry.list_by_source(AgentSource.PROJECT)
-    }
+    project_agents = {agent.name for agent in registry.list_by_source(AgentSource.PROJECT)}
     assert project_agents == {"general", "delivery"}
 
     all_agents = {agent.name for agent in registry.list_all()}
@@ -153,9 +151,7 @@ Body
     assert registry._parse_agent_file(invalid_yaml, AgentSource.PROJECT) is None
 
 
-def test_load_uses_cache_until_force_reload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_load_uses_cache_until_force_reload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """load() should skip reloading unless force_reload is requested."""
     user_home = tmp_path / "home"
     project_dir = tmp_path / "workspace"
@@ -198,9 +194,7 @@ def test_select_for_task_uses_builtin_heuristics(
     expected_agent: str,
 ):
     """Keyword heuristics should choose the expected built-in agent."""
-    monkeypatch.setattr(
-        registry_module.Path, "home", staticmethod(lambda: tmp_path / "home")
-    )
+    monkeypatch.setattr(registry_module.Path, "home", staticmethod(lambda: tmp_path / "home"))
 
     registry = AgentRegistry(str(tmp_path / "workspace"))
 
@@ -213,9 +207,7 @@ def test_select_for_task_raises_when_no_agents_are_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """An empty registry should raise a clear error when selecting an agent."""
-    monkeypatch.setattr(
-        registry_module.Path, "home", staticmethod(lambda: tmp_path / "home")
-    )
+    monkeypatch.setattr(registry_module.Path, "home", staticmethod(lambda: tmp_path / "home"))
     monkeypatch.setattr(registry_module, "BUILTIN_AGENTS", {})
 
     registry = AgentRegistry(str(tmp_path / "workspace"))

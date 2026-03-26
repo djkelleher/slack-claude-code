@@ -29,7 +29,6 @@ from tests.integration.helpers import (
     wait_for_channel_message,
 )
 
-
 # ============================================================================
 # Typed /model command routing
 # ============================================================================
@@ -326,12 +325,12 @@ async def test_file_upload_queue_plan(
         # Upload file with queue plan content — skip if user token lacks files:write
         try:
             upload_response = await slack_user_client.files_upload_v2(
-            channel=slack_test_channel,
-            content=plan_content,
-            filename="test_plan.txt",
-            title=f"[CMD {marker}] Queue Plan Upload",
-            initial_comment="",
-        )
+                channel=slack_test_channel,
+                content=plan_content,
+                filename="test_plan.txt",
+                title=f"[CMD {marker}] Queue Plan Upload",
+                initial_comment="",
+            )
         except SlackApiError as exc:
             if exc.response.get("error") == "missing_scope":
                 pytest.skip(f"SLACK_USER_TOKEN missing scope: {exc.response.get('needed')}")

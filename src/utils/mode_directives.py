@@ -98,9 +98,7 @@ def _resolve_single_mode_token(token: str, *, backend: str) -> RuntimeModeOverri
         raise ModeDirectiveError("Mode directive must include a mode value.")
 
     if normalized.startswith("approval "):
-        raise ModeDirectiveError(
-            "Unsupported `approval` syntax. Use `approval: <mode>`."
-        )
+        raise ModeDirectiveError("Unsupported `approval` syntax. Use `approval: <mode>`.")
     if normalized.startswith("sandbox "):
         raise ModeDirectiveError("Unsupported `sandbox` syntax. Use `sandbox: <mode>`.")
 
@@ -115,9 +113,7 @@ def _resolve_single_mode_token(token: str, *, backend: str) -> RuntimeModeOverri
             raise ModeDirectiveError(
                 f"Invalid approval mode: `{approval_mode}`. Valid modes: {valid}."
             )
-        return RuntimeModeOverrides(
-            approval_mode=normalize_codex_approval_mode(approval_mode)
-        )
+        return RuntimeModeOverrides(approval_mode=normalize_codex_approval_mode(approval_mode))
 
     if normalized.startswith("sandbox:"):
         if backend != "codex":
@@ -144,9 +140,7 @@ def _resolve_single_mode_token(token: str, *, backend: str) -> RuntimeModeOverri
     permission_mode = CLAUDE_MODE_ALIASES.get(normalized)
     if permission_mode is None:
         valid_aliases = ", ".join(f"`{name}`" for name in sorted(CLAUDE_MODE_ALIASES))
-        raise ModeDirectiveError(
-            f"Unknown mode: `{normalized}`. Valid aliases: {valid_aliases}."
-        )
+        raise ModeDirectiveError(f"Unknown mode: `{normalized}`. Valid aliases: {valid_aliases}.")
     return RuntimeModeOverrides(permission_mode=permission_mode)
 
 
@@ -164,13 +158,9 @@ def _parse_plan_mode_token(token: str) -> Optional[PlanModeDirective]:
     if lowered.startswith(("advs", "advf")):
         strategy = lowered.split(":", 1)[0].split(maxsplit=1)[0]
         if strategy in {"advs", "advf"}:
-            raise ModeDirectiveError(
-                f"`{strategy}` has been renamed. Use `splan`/`fplan` instead."
-            )
+            raise ModeDirectiveError(f"`{strategy}` has been renamed. Use `splan`/`fplan` instead.")
     if lowered in {"splan", "fplan"}:
-        raise ModeDirectiveError(
-            f"`{lowered}` must include a comma-separated model list."
-        )
+        raise ModeDirectiveError(f"`{lowered}` must include a comma-separated model list.")
 
     strategy: Optional[str] = None
     raw_values: Optional[str] = None
@@ -207,9 +197,7 @@ def _parse_plan_mode_token(token: str) -> Optional[PlanModeDirective]:
     return PlanModeDirective(strategy=strategy, models=tuple(resolved_models))
 
 
-def resolve_runtime_mode_directives(
-    mode_value: str, *, backend: str
-) -> RuntimeDirectiveResolution:
+def resolve_runtime_mode_directives(mode_value: str, *, backend: str) -> RuntimeDirectiveResolution:
     """Resolve `(mode: ...)` content into runtime overrides + optional plan-mode strategy."""
     raw_value = (mode_value or "").strip()
     if not raw_value:
@@ -258,8 +246,6 @@ def resolve_runtime_mode_directives(
     )
 
 
-def resolve_runtime_mode_value(
-    mode_value: str, *, backend: str
-) -> RuntimeModeOverrides:
+def resolve_runtime_mode_value(mode_value: str, *, backend: str) -> RuntimeModeOverrides:
     """Resolve `(mode: ...)` content into runtime session overrides."""
     return resolve_runtime_mode_directives(mode_value, backend=backend).overrides

@@ -9,8 +9,6 @@ import asyncio
 import logging
 import tempfile
 from pathlib import Path
-
-from tests.integration import helpers as _helpers
 from typing import Any
 
 import pytest_asyncio
@@ -20,7 +18,7 @@ from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
 from src.handlers.base import HandlerDependencies
-
+from tests.integration import helpers as _helpers
 
 # ---------------------------------------------------------------------------
 # Stub executor — satisfies cancel calls without a running backend

@@ -22,9 +22,7 @@ def test_parse_parenthesized_mode_directive_line_extracts_value() -> None:
     )
 
 
-def test_parse_parenthesized_mode_directive_line_returns_none_for_other_directives() -> (
-    None
-):
+def test_parse_parenthesized_mode_directive_line_returns_none_for_other_directives() -> None:
     assert parse_parenthesized_mode_directive_line("(append)") is None
     assert parse_parenthesized_mode_directive_line("plain text") is None
 

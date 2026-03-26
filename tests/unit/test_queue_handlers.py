@@ -37,9 +37,7 @@ class _FakeApp:
         return decorator
 
 
-def _queue_item(
-    item_id: int, prompt: str, working_directory_override: str | None = None
-):
+def _queue_item(item_id: int, prompt: str, working_directory_override: str | None = None):
     """Build a queue-item-like namespace for tests."""
     return SimpleNamespace(
         id=item_id,
@@ -72,9 +70,7 @@ async def _invoke_slash_handler(
     thread_ts: str | None = None,
 ):
     """Invoke a slash-command handler with boilerplate test payload."""
-    slack_client = client or SimpleNamespace(
-        chat_postMessage=AsyncMock(), chat_update=AsyncMock()
-    )
+    slack_client = client or SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
     command = {
         "channel_id": "C123",
         "user_id": "U123",
@@ -106,15 +102,11 @@ async def test_process_queue_marks_failed_when_initial_notification_fails():
         codex_executor=None,
     )
     client = SimpleNamespace(
-        chat_postMessage=AsyncMock(
-            side_effect=[Exception("slack unavailable"), {"ts": "999.001"}]
-        ),
+        chat_postMessage=AsyncMock(side_effect=[Exception("slack unavailable"), {"ts": "999.001"}]),
         chat_update=AsyncMock(),
     )
 
-    with patch(
-        "src.handlers.claude.queue.execute_for_session", new=AsyncMock()
-    ) as mock_execute:
+    with patch("src.handlers.claude.queue.execute_for_session", new=AsyncMock()) as mock_execute:
         with patch("src.handlers.claude.queue.asyncio.sleep", new=AsyncMock()):
             await _process_queue("C123", deps, client, MagicMock())
 
@@ -141,23 +133,19 @@ async def test_resolve_queue_runtime_prompt_supports_named_output_references() -
                         prompt="(save first_pass)\nreview",
                         output="first output",
                     ),
-                    SimpleNamespace(
-                        position=2, prompt="plain prompt", output="second output"
-                    ),
+                    SimpleNamespace(position=2, prompt="plain prompt", output="second output"),
                 ]
             )
         )
     )
     item = SimpleNamespace(position=3)
 
-    resolved_prompt, model_override, mode_directive = (
-        await _resolve_queue_runtime_prompt(
-            deps,
-            item=item,
-            channel_id="C123",
-            thread_ts="123.456",
-            prompt="Compare (first_pass) against (missing_value).",
-        )
+    resolved_prompt, model_override, mode_directive = await _resolve_queue_runtime_prompt(
+        deps,
+        item=item,
+        channel_id="C123",
+        thread_ts="123.456",
+        prompt="Compare (first_pass) against (missing_value).",
     )
 
     assert resolved_prompt == "Compare first output against (missing_value)."
@@ -166,9 +154,7 @@ async def test_resolve_queue_runtime_prompt_supports_named_output_references() -
 
 
 @pytest.mark.asyncio
-async def test_resolve_queue_runtime_prompt_supports_saved_output_in_file_write_prompt() -> (
-    None
-):
+async def test_resolve_queue_runtime_prompt_supports_saved_output_in_file_write_prompt() -> None:
     """Saved outputs should drop into follow-up prompts that ask the agent to write files."""
     deps = SimpleNamespace(
         db=SimpleNamespace(
@@ -185,14 +171,12 @@ async def test_resolve_queue_runtime_prompt_supports_saved_output_in_file_write_
     )
     item = SimpleNamespace(position=2)
 
-    resolved_prompt, model_override, mode_directive = (
-        await _resolve_queue_runtime_prompt(
-            deps,
-            item=item,
-            channel_id="C123",
-            thread_ts="123.456",
-            prompt="Write the following content to notes/release.md exactly as-is:\n(draft)",
-        )
+    resolved_prompt, model_override, mode_directive = await _resolve_queue_runtime_prompt(
+        deps,
+        item=item,
+        channel_id="C123",
+        thread_ts="123.456",
+        prompt="Write the following content to notes/release.md exactly as-is:\n(draft)",
     )
 
     assert (
@@ -204,35 +188,27 @@ async def test_resolve_queue_runtime_prompt_supports_saved_output_in_file_write_
 
 
 @pytest.mark.asyncio
-async def test_resolve_queue_runtime_prompt_supports_absolute_output_references() -> (
-    None
-):
+async def test_resolve_queue_runtime_prompt_supports_absolute_output_references() -> None:
     """Runtime prompt substitutions should resolve prior outputs by authored queue position."""
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_completed_queue_items_before_position=AsyncMock(
                 return_value=[
                     SimpleNamespace(position=1, prompt="first", output="first output"),
-                    SimpleNamespace(
-                        position=2, prompt="second", output="second output"
-                    ),
-                    SimpleNamespace(
-                        position=4, prompt="future", output="future output"
-                    ),
+                    SimpleNamespace(position=2, prompt="second", output="second output"),
+                    SimpleNamespace(position=4, prompt="future", output="future output"),
                 ]
             )
         )
     )
     item = SimpleNamespace(position=4)
 
-    resolved_prompt, model_override, mode_directive = (
-        await _resolve_queue_runtime_prompt(
-            deps,
-            item=item,
-            channel_id="C123",
-            thread_ts="123.456",
-            prompt="Use (p1output) and (p2output).",
-        )
+    resolved_prompt, model_override, mode_directive = await _resolve_queue_runtime_prompt(
+        deps,
+        item=item,
+        channel_id="C123",
+        thread_ts="123.456",
+        prompt="Use (p1output) and (p2output).",
     )
 
     assert resolved_prompt == "Use first output and second output."
@@ -241,16 +217,12 @@ async def test_resolve_queue_runtime_prompt_supports_absolute_output_references(
 
 
 @pytest.mark.asyncio
-async def test_resolve_queue_runtime_prompt_rejects_unavailable_absolute_output_reference() -> (
-    None
-):
+async def test_resolve_queue_runtime_prompt_rejects_unavailable_absolute_output_reference() -> None:
     """Absolute output references should fail fast when the requested item is unavailable."""
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_completed_queue_items_before_position=AsyncMock(
-                return_value=[
-                    SimpleNamespace(position=1, prompt="first", output="first output")
-                ]
+                return_value=[SimpleNamespace(position=1, prompt="first", output="first output")]
             )
         )
     )
@@ -270,20 +242,16 @@ async def test_resolve_queue_runtime_prompt_rejects_unavailable_absolute_output_
 async def test_resolve_queue_runtime_prompt_extracts_mode_directive() -> None:
     """Queue runtime prompt resolution should surface leading mode directives."""
     deps = SimpleNamespace(
-        db=SimpleNamespace(
-            get_completed_queue_items_before_position=AsyncMock(return_value=[])
-        )
+        db=SimpleNamespace(get_completed_queue_items_before_position=AsyncMock(return_value=[]))
     )
     item = SimpleNamespace(position=2)
 
-    resolved_prompt, model_override, mode_directive = (
-        await _resolve_queue_runtime_prompt(
-            deps,
-            item=item,
-            channel_id="C123",
-            thread_ts="123.456",
-            prompt="(mode: plan)\nReview API surface",
-        )
+    resolved_prompt, model_override, mode_directive = await _resolve_queue_runtime_prompt(
+        deps,
+        item=item,
+        channel_id="C123",
+        thread_ts="123.456",
+        prompt="(mode: plan)\nReview API surface",
     )
 
     assert resolved_prompt == "Review API surface"
@@ -294,8 +262,7 @@ async def test_resolve_queue_runtime_prompt_extracts_mode_directive() -> None:
 def test_queue_processing_log_line_keeps_full_prompt() -> None:
     """Processing log lines should include the full normalized prompt text."""
     prompt = (
-        "how can we improve the logic, algorithmic edge, mathematical edge of this module "
-        * 8
+        "how can we improve the logic, algorithmic edge, mathematical edge of this module " * 8
     ) + "/home/dan/dev-repos/slack-claude-code/src/handlers/claude/queue.py"
 
     line = _queue_processing_log_line(7, prompt)
@@ -306,9 +273,7 @@ def test_queue_processing_log_line_keeps_full_prompt() -> None:
 
 def test_parse_resume_time_from_text_preserves_utc_timezone() -> None:
     """UTC retry times should be scheduled in UTC rather than host-local time."""
-    resume_at = _parse_resume_time_from_text(
-        "Usage limit reached. Try again at 14:30 UTC."
-    )
+    resume_at = _parse_resume_time_from_text("Usage limit reached. Try again at 14:30 UTC.")
 
     assert resume_at is not None
     assert resume_at.tzinfo == timezone.utc
@@ -318,10 +283,7 @@ def test_parse_resume_time_from_text_preserves_utc_timezone() -> None:
 
 def test_parse_resume_time_from_text_skips_unsupported_timezone_abbreviations() -> None:
     """Ambiguous timezone abbreviations should not produce a misleading schedule."""
-    assert (
-        _parse_resume_time_from_text("Usage limit reached. Try again at 14:30 PT.")
-        is None
-    )
+    assert _parse_resume_time_from_text("Usage limit reached. Try again at 14:30 PT.") is None
 
 
 @pytest.mark.asyncio
@@ -342,9 +304,7 @@ async def test_process_queue_skips_item_if_it_is_removed_before_claim():
         chat_update=AsyncMock(),
     )
 
-    with patch(
-        "src.handlers.claude.queue.execute_for_session", new=AsyncMock()
-    ) as mock_execute:
+    with patch("src.handlers.claude.queue.execute_for_session", new=AsyncMock()) as mock_execute:
         with patch("src.handlers.claude.queue.asyncio.sleep", new=AsyncMock()):
             await _process_queue("C123", deps, client, MagicMock())
 
@@ -386,9 +346,7 @@ async def test_process_queue_completes_item_and_updates_message():
     assert deps.db.update_queue_item_status.await_count == 2
     assert deps.db.update_queue_item_status.await_args_list[0].args == (7, "running")
     assert deps.db.update_queue_item_status.await_args_list[1].args == (7, "completed")
-    assert (
-        deps.db.update_queue_item_status.await_args_list[1].kwargs["output"] == "done"
-    )
+    assert deps.db.update_queue_item_status.await_args_list[1].kwargs["output"] == "done"
     assert (
         client.chat_postMessage.await_args_list[0].kwargs["text"]
         == "Processing queue item 1: run tests"
@@ -428,9 +386,7 @@ async def test_process_queue_completion_update_failure_keeps_completed_status():
         with patch("src.handlers.claude.queue.asyncio.sleep", new=AsyncMock()):
             await _process_queue("C123", deps, client, MagicMock())
 
-    statuses = [
-        call.args[1] for call in deps.db.update_queue_item_status.await_args_list
-    ]
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "completed"]
     assert client.chat_postMessage.await_count == 2
 
@@ -461,9 +417,7 @@ async def test_process_queue_failure_notification_error_does_not_crash_worker():
         with patch("src.handlers.claude.queue.asyncio.sleep", new=AsyncMock()):
             await _process_queue("C123", deps, client, MagicMock())
 
-    statuses = [
-        call.args[1] for call in deps.db.update_queue_item_status.await_args_list
-    ]
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "failed"]
     client.chat_update.assert_awaited_once()
 
@@ -492,9 +446,7 @@ async def test_process_queue_streams_updates_during_execution():
 
     async def fake_execute_for_session(**kwargs):
         await kwargs["on_chunk"](
-            SimpleNamespace(
-                type="assistant", content="partial output", tool_activities=[]
-            )
+            SimpleNamespace(type="assistant", content="partial output", tool_activities=[])
         )
         return route_result
 
@@ -510,10 +462,7 @@ async def test_process_queue_streams_updates_during_execution():
         mock_execute.await_args.kwargs["auto_approve_permissions"]
         == config.QUEUE_AUTO_APPROVE_PERMISSIONS
     )
-    assert (
-        mock_execute.await_args.kwargs["pause_on_questions"]
-        == config.QUEUE_PAUSE_ON_QUESTIONS
-    )
+    assert mock_execute.await_args.kwargs["pause_on_questions"] == config.QUEUE_PAUSE_ON_QUESTIONS
     assert client.chat_update.await_count >= 2
 
 
@@ -527,9 +476,7 @@ async def test_execute_queue_item_routes_known_slash_command_through_router():
         dispatch=AsyncMock(return_value=True),
     )
     deps = SimpleNamespace(
-        db=SimpleNamespace(
-            update_queue_item_status=AsyncMock(side_effect=[True, None])
-        ),
+        db=SimpleNamespace(update_queue_item_status=AsyncMock(side_effect=[True, None])),
         codex_executor=None,
         slash_command_router=slash_router,
     )
@@ -538,9 +485,7 @@ async def test_execute_queue_item_routes_known_slash_command_through_router():
         chat_update=AsyncMock(),
     )
 
-    with patch(
-        "src.handlers.claude.queue.execute_for_session", new=AsyncMock()
-    ) as mock_execute:
+    with patch("src.handlers.claude.queue.execute_for_session", new=AsyncMock()) as mock_execute:
         result = await _execute_queue_item(
             item,
             channel_id="C123",
@@ -563,9 +508,7 @@ async def test_execute_queue_item_routes_known_slash_command_through_router():
     assert dispatch_kwargs["command_text"] == ""
     assert dispatch_kwargs["channel_id"] == "C123"
     assert dispatch_kwargs["thread_ts"] == "123.456"
-    statuses = [
-        call.args[1] for call in deps.db.update_queue_item_status.await_args_list
-    ]
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "completed"]
     client.chat_postMessage.assert_not_awaited()
 
@@ -631,9 +574,7 @@ async def test_execute_queue_item_applies_mode_directive_from_metadata():
 @pytest.mark.asyncio
 async def test_execute_queue_item_passes_plan_mode_directive_to_router():
     """Queue mode directives should pass parsed `splan` strategy into command router."""
-    item = _queue_item(
-        75, "(mode: splan cs46h, g54h; sandbox: read-only)\nRun static analysis"
-    )
+    item = _queue_item(75, "(mode: splan cs46h, g54h; sandbox: read-only)\nRun static analysis")
     session = Session(
         id=1,
         channel_id="C123",
@@ -697,12 +638,8 @@ async def test_process_queue_waits_for_active_codex_turn():
     """Queue processor should wait while active Codex turn is in progress for the same scope."""
     item = _queue_item(8, "follow up")
     session = SimpleNamespace(id=1)
-    route_result = SimpleNamespace(
-        result=SimpleNamespace(success=True, output="ok", error=None)
-    )
-    codex_executor = SimpleNamespace(
-        has_active_turn=AsyncMock(side_effect=[True, False, False])
-    )
+    route_result = SimpleNamespace(result=SimpleNamespace(success=True, output="ok", error=None))
+    codex_executor = SimpleNamespace(has_active_turn=AsyncMock(side_effect=[True, False, False]))
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_pending_queue_items=AsyncMock(side_effect=[[item], []]),
@@ -821,9 +758,7 @@ async def test_process_queue_cancelled_marks_running_item_cancelled():
             get_pending_queue_items=AsyncMock(side_effect=[[item]]),
             update_queue_item_status=AsyncMock(),
             get_or_create_session=AsyncMock(return_value=session),
-            get_queue_control=AsyncMock(
-                side_effect=[_queue_control(), _queue_control("stopped")]
-            ),
+            get_queue_control=AsyncMock(side_effect=[_queue_control(), _queue_control("stopped")]),
         ),
         codex_executor=None,
     )
@@ -850,9 +785,7 @@ async def test_process_queue_pause_stops_before_next_item():
     item1 = _queue_item(21, "first task")
     item2 = _queue_item(22, "second task")
     session = SimpleNamespace(id=1)
-    route_result = SimpleNamespace(
-        result=SimpleNamespace(success=True, output="done", error=None)
-    )
+    route_result = SimpleNamespace(result=SimpleNamespace(success=True, output="done", error=None))
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_pending_queue_items=AsyncMock(side_effect=[[item1], [item2], [item2]]),
@@ -880,9 +813,7 @@ async def test_process_queue_pause_stops_before_next_item():
         with patch("src.handlers.claude.queue.asyncio.sleep", new=AsyncMock()):
             await _process_queue("C123", deps, client, MagicMock())
 
-    statuses = [
-        call.args[1] for call in deps.db.update_queue_item_status.await_args_list
-    ]
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "completed"]
     assert client.chat_postMessage.await_args_list[-1].kwargs["text"] == (
         "Queue paused: processed 1 item(s) (1 completed). 1 item(s) remain queued."
@@ -902,9 +833,7 @@ async def test_scheduled_queue_dispatcher_applies_resume_event():
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_due_queue_scheduled_events=AsyncMock(side_effect=[[event], []]),
-            update_queue_control_state=AsyncMock(
-                return_value=_queue_control("running")
-            ),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
             get_pending_queue_items=AsyncMock(return_value=[SimpleNamespace(id=7)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             mark_queue_scheduled_event_executed=AsyncMock(return_value=True),
@@ -974,9 +903,7 @@ async def test_execute_queue_item_plan_approval_posts_implementation_message():
     item = _queue_item(88, "ship fix")
     session = Session(id=1, channel_id="C123", model="opus")
     deps = SimpleNamespace(
-        db=SimpleNamespace(
-            update_queue_item_status=AsyncMock(side_effect=[True, None])
-        ),
+        db=SimpleNamespace(update_queue_item_status=AsyncMock(side_effect=[True, None])),
         codex_executor=None,
     )
     client = SimpleNamespace(
@@ -1003,9 +930,7 @@ async def test_execute_queue_item_plan_approval_posts_implementation_message():
         assert callable(replacement_callback)
         return SimpleNamespace(
             backend="claude",
-            result=SimpleNamespace(
-                success=True, output="done", error=None, session_id=None
-            ),
+            result=SimpleNamespace(success=True, output="done", error=None, session_id=None),
         )
 
     with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
@@ -1034,14 +959,11 @@ async def test_execute_queue_item_plan_approval_posts_implementation_message():
     assert client.chat_postMessage.await_count == 2
     second_message = client.chat_postMessage.await_args_list[1].kwargs
     assert (
-        second_message["text"]
-        == "Processing queue item 1: ship fix (implementing approved plan)"
+        second_message["text"] == "Processing queue item 1: ship fix (implementing approved plan)"
     )
     assert "Plan approved" in second_message["blocks"][0]["text"]["text"]
     assert mock_callback_factory.call_count == 2
-    statuses = [
-        call.args[1] for call in deps.db.update_queue_item_status.await_args_list
-    ]
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "completed"]
 
 
@@ -1054,9 +976,7 @@ async def test_execute_queue_item_pauses_and_requeues_on_claude_usage_limit():
         db=SimpleNamespace(
             update_queue_item_status=AsyncMock(side_effect=[True, True]),
             update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
-            add_queue_scheduled_events=AsyncMock(
-                return_value=[SimpleNamespace(id=901)]
-            ),
+            add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=901)]),
         ),
         codex_executor=None,
     )
@@ -1116,9 +1036,7 @@ async def test_execute_queue_item_pauses_and_requeues_on_claude_usage_limit():
                     )
 
     assert result is None
-    statuses = [
-        call.args[1] for call in deps.db.update_queue_item_status.await_args_list
-    ]
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "pending"]
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
     deps.db.add_queue_scheduled_events.assert_awaited_once()
@@ -1135,9 +1053,7 @@ async def test_execute_queue_item_pauses_and_requeues_on_codex_usage_limit():
         db=SimpleNamespace(
             update_queue_item_status=AsyncMock(side_effect=[True, True]),
             update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
-            add_queue_scheduled_events=AsyncMock(
-                return_value=[SimpleNamespace(id=902)]
-            ),
+            add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=902)]),
         ),
         codex_executor=SimpleNamespace(
             account_rate_limits_read=AsyncMock(
@@ -1211,9 +1127,7 @@ async def test_execute_queue_item_pauses_and_requeues_on_codex_usage_limit():
 
     assert result is None
     deps.codex_executor.account_rate_limits_read.assert_awaited_once_with("~")
-    statuses = [
-        call.args[1] for call in deps.db.update_queue_item_status.await_args_list
-    ]
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "pending"]
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
     deps.db.add_queue_scheduled_events.assert_awaited_once()
@@ -1287,9 +1201,7 @@ async def test_execute_queue_item_pauses_queue_on_prompt_policy_block():
                 )
 
     assert result == "failed"
-    statuses = [
-        call.args[1] for call in deps.db.update_queue_item_status.await_args_list
-    ]
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "failed"]
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
     assert client.chat_postMessage.await_count == 2
@@ -1363,9 +1275,7 @@ async def test_execute_queue_item_pauses_and_requeues_on_question_when_enabled()
                     )
 
     assert result is None
-    statuses = [
-        call.args[1] for call in deps.db.update_queue_item_status.await_args_list
-    ]
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "pending"]
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
     assert client.chat_postMessage.await_count == 2
@@ -1414,16 +1324,10 @@ async def test_qc_view_subcommand_posts_channel_overview_without_thread_context(
         "/qc",
         SimpleNamespace(
             list_queue_scopes_for_channel=AsyncMock(return_value=["123.456"]),
-            get_pending_queue_items=AsyncMock(
-                side_effect=[[], [_queue_item(10, "pending")]]
-            ),
-            get_running_queue_items=AsyncMock(
-                side_effect=[[], [_queue_item(11, "running")]]
-            ),
+            get_pending_queue_items=AsyncMock(side_effect=[[], [_queue_item(10, "pending")]]),
+            get_running_queue_items=AsyncMock(side_effect=[[], [_queue_item(11, "running")]]),
             get_pending_queue_scheduled_events=AsyncMock(side_effect=[[], []]),
-            get_queue_control=AsyncMock(
-                side_effect=[_queue_control(), _queue_control("paused")]
-            ),
+            get_queue_control=AsyncMock(side_effect=[_queue_control(), _queue_control("paused")]),
         ),
     )
     client = await _invoke_slash_handler(handler, command_name="/qc", text="view")
@@ -1431,9 +1335,7 @@ async def test_qc_view_subcommand_posts_channel_overview_without_thread_context(
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Queue status"
     blocks = kwargs["blocks"]
-    assert any(
-        "Thread 123.456" in block.get("text", {}).get("text", "") for block in blocks
-    )
+    assert any("Thread 123.456" in block.get("text", {}).get("text", "") for block in blocks)
 
 
 @pytest.mark.asyncio
@@ -1443,16 +1345,12 @@ async def test_qc_view_subcommand_accepts_explicit_thread_scope():
         "/qc",
         SimpleNamespace(
             get_pending_queue_items=AsyncMock(return_value=[]),
-            get_running_queue_items=AsyncMock(
-                return_value=[_queue_item(12, "running")]
-            ),
+            get_running_queue_items=AsyncMock(return_value=[_queue_item(12, "running")]),
             get_pending_queue_scheduled_events=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control("paused")),
         ),
     )
-    client = await _invoke_slash_handler(
-        handler, command_name="/qc", text="view 123.456"
-    )
+    client = await _invoke_slash_handler(handler, command_name="/qc", text="view 123.456")
 
     deps.db.get_pending_queue_items.assert_awaited_once_with("C123", "123.456")
     deps.db.get_running_queue_items.assert_awaited_once_with("C123", "123.456")
@@ -1474,9 +1372,7 @@ async def test_qc_pause_updates_control_state():
     client = await _invoke_slash_handler(handler, command_name="/qc", text="pause")
 
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
-    assert client.chat_postMessage.await_args.kwargs["text"].startswith(
-        "Channel queue: pause"
-    )
+    assert client.chat_postMessage.await_args.kwargs["text"].startswith("Channel queue: pause")
 
 
 @pytest.mark.asyncio
@@ -1485,20 +1381,14 @@ async def test_qc_append_enqueues_plain_prompt():
     handler, deps = _registered_handler(
         "/qc",
         SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=41, position=4)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=41, position=4)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
     )
     client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-    ) as mock_ensure:
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
         await _invoke_slash_handler(
             handler,
             command_name="/qc",
@@ -1579,20 +1469,13 @@ async def test_qc_timer_cancel_all_cancels_scope_timers():
     """`/qc timer cancel all` should cancel all pending timers for the scope."""
     handler, deps = _registered_handler(
         "/qc",
-        SimpleNamespace(
-            cancel_pending_queue_scheduled_events=AsyncMock(return_value=2)
-        ),
+        SimpleNamespace(cancel_pending_queue_scheduled_events=AsyncMock(return_value=2)),
     )
 
-    client = await _invoke_slash_handler(
-        handler, command_name="/qc", text="timer cancel all"
-    )
+    client = await _invoke_slash_handler(handler, command_name="/qc", text="timer cancel all")
 
     deps.db.cancel_pending_queue_scheduled_events.assert_awaited_once_with("C123", None)
-    assert (
-        "cancelled 2 pending timer(s)"
-        in client.chat_postMessage.await_args.kwargs["text"]
-    )
+    assert "cancelled 2 pending timer(s)" in client.chat_postMessage.await_args.kwargs["text"]
 
 
 @pytest.mark.asyncio
@@ -1615,8 +1498,7 @@ async def test_qc_timer_cancel_single_event_accepts_explicit_scope():
         thread_ts="123.456",
     )
     assert (
-        client.chat_postMessage.await_args.kwargs["text"]
-        == "Thread 123.456: cancelled timer #501."
+        client.chat_postMessage.await_args.kwargs["text"] == "Thread 123.456: cancelled timer #501."
     )
 
 
@@ -1626,20 +1508,14 @@ async def test_qc_prepend_enqueues_plain_prompt_at_front():
     handler, deps = _registered_handler(
         "/qc",
         SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=42, position=1)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=42, position=1)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
     )
     client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-    ) as mock_ensure:
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
         await _invoke_slash_handler(
             handler,
             command_name="/qc",
@@ -1665,20 +1541,14 @@ async def test_qc_insert_enqueues_plain_prompt_at_index():
     handler, deps = _registered_handler(
         "/qc",
         SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=43, position=2)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=43, position=2)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
         ),
     )
     client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-    ) as mock_ensure:
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
         await _invoke_slash_handler(
             handler,
             command_name="/qc",
@@ -1711,15 +1581,12 @@ async def test_qc_stop_cancels_running_processor():
     with patch(
         "src.handlers.claude.queue.TaskManager.cancel", new=AsyncMock(return_value=True)
     ) as mock_cancel:
-        await _invoke_slash_handler(
-            handler, command_name="/qc", text="stop", client=client
-        )
+        await _invoke_slash_handler(handler, command_name="/qc", text="stop", client=client)
 
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "stopped")
     mock_cancel.assert_awaited_once_with(_queue_task_id("C123", None))
     assert (
-        client.chat_postMessage.await_args.kwargs["text"]
-        == "Channel queue: stopped immediately."
+        client.chat_postMessage.await_args.kwargs["text"] == "Channel queue: stopped immediately."
     )
 
 
@@ -1729,9 +1596,7 @@ async def test_qc_resume_restarts_pending_queue():
     handler, deps = _registered_handler(
         "/qc",
         SimpleNamespace(
-            update_queue_control_state=AsyncMock(
-                return_value=_queue_control("running")
-            ),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
             get_pending_queue_items=AsyncMock(
                 return_value=[SimpleNamespace(id=11), SimpleNamespace(id=12)]
             ),
@@ -1739,12 +1604,8 @@ async def test_qc_resume_restarts_pending_queue():
         ),
     )
     client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-    ) as mock_ensure:
-        await _invoke_slash_handler(
-            handler, command_name="/qc", text="resume", client=client
-        )
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+        await _invoke_slash_handler(handler, command_name="/qc", text="resume", client=client)
 
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "running")
     mock_ensure.assert_awaited_once()
@@ -1759,13 +1620,9 @@ async def test_qc_resume_recovers_stale_running_items_and_restarts_pending_queue
     handler, deps = _registered_handler(
         "/qc",
         SimpleNamespace(
-            update_queue_control_state=AsyncMock(
-                return_value=_queue_control("running")
-            ),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("running")),
             get_pending_queue_items=AsyncMock(return_value=[SimpleNamespace(id=21)]),
-            get_running_queue_items=AsyncMock(
-                side_effect=[[SimpleNamespace(id=88)], []]
-            ),
+            get_running_queue_items=AsyncMock(side_effect=[[SimpleNamespace(id=88)], []]),
             update_queue_item_status=AsyncMock(return_value=True),
         ),
     )
@@ -1777,9 +1634,7 @@ async def test_qc_resume_recovers_stale_running_items_and_restarts_pending_queue
         with patch(
             "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
         ) as mock_ensure:
-            await _invoke_slash_handler(
-                handler, command_name="/qc", text="resume", client=client
-            )
+            await _invoke_slash_handler(handler, command_name="/qc", text="resume", client=client)
 
     deps.db.update_queue_item_status.assert_awaited_once_with(
         88,
@@ -1806,17 +1661,12 @@ async def test_qc_stop_accepts_explicit_thread_scope():
     with patch(
         "src.handlers.claude.queue.TaskManager.cancel", new=AsyncMock(return_value=True)
     ) as mock_cancel:
-        await _invoke_slash_handler(
-            handler, command_name="/qc", text="stop 123.456", client=client
-        )
+        await _invoke_slash_handler(handler, command_name="/qc", text="stop 123.456", client=client)
 
-    deps.db.update_queue_control_state.assert_awaited_once_with(
-        "C123", "123.456", "stopped"
-    )
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", "123.456", "stopped")
     mock_cancel.assert_awaited_once_with(_queue_task_id("C123", "123.456"))
     assert (
-        client.chat_postMessage.await_args.kwargs["text"]
-        == "Thread 123.456: stopped immediately."
+        client.chat_postMessage.await_args.kwargs["text"] == "Thread 123.456: stopped immediately."
     )
 
 
@@ -1997,9 +1847,7 @@ async def test_q_parses_structured_plan_and_queues_all_items():
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
             add_many_to_queue=AsyncMock(
                 return_value=[
                     SimpleNamespace(id=1, position=1),
@@ -2015,9 +1863,7 @@ async def test_q_parses_structured_plan_and_queues_all_items():
 
     handler = app.handlers["/q"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.contains_queue_plan_markers", return_value=True
-    ):
+    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
         with patch(
             "src.handlers.claude.queue.materialize_queue_plan_text",
             new=AsyncMock(
@@ -2071,9 +1917,7 @@ async def test_q_parses_structured_plan_and_queues_all_items():
         insertion_mode="append",
         insert_at=None,
     )
-    assert (
-        "Added 3 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
-    )
+    assert "Added 3 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
     mock_ensure.assert_awaited_once()
 
 
@@ -2083,12 +1927,8 @@ async def test_q_add_structured_plan_can_append_with_explicit_directive():
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=4, position=4)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=4, position=4)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
         )
@@ -2097,9 +1937,7 @@ async def test_q_add_structured_plan_can_append_with_explicit_directive():
 
     handler = app.handlers["/q"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.contains_queue_plan_markers", return_value=True
-    ):
+    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
         with patch(
             "src.handlers.claude.queue.materialize_queue_plan_text",
             new=AsyncMock(
@@ -2113,9 +1951,7 @@ async def test_q_add_structured_plan_can_append_with_explicit_directive():
                 ]
             ),
         ):
-            with patch(
-                "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-            ):
+            with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
                 await handler(
                     ack=AsyncMock(),
                     command={
@@ -2137,9 +1973,7 @@ async def test_q_add_structured_plan_can_append_with_explicit_directive():
         insertion_mode="append",
         insert_at=None,
     )
-    assert (
-        "Added 1 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
-    )
+    assert "Added 1 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
 
 
 @pytest.mark.asyncio
@@ -2148,12 +1982,8 @@ async def test_q_structured_auto_directives_add_metadata_and_finish_flag():
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=6, position=6)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=6, position=6)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
             set_queue_auto_finish_pending=AsyncMock(),
@@ -2163,9 +1993,7 @@ async def test_q_structured_auto_directives_add_metadata_and_finish_flag():
 
     handler = app.handlers["/q"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.contains_queue_plan_markers", return_value=True
-    ):
+    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
         with patch(
             "src.handlers.claude.queue.materialize_queue_plan_text",
             new=AsyncMock(
@@ -2179,9 +2007,7 @@ async def test_q_structured_auto_directives_add_metadata_and_finish_flag():
                 ]
             ),
         ):
-            with patch(
-                "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-            ):
+            with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
                 await handler(
                     ack=AsyncMock(),
                     command={
@@ -2215,12 +2041,8 @@ async def test_q_add_structured_plan_defaults_to_append_when_queue_is_running():
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=5, position=5)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=5, position=5)]),
             get_running_queue_items=AsyncMock(
                 side_effect=[[SimpleNamespace(id=77)], [SimpleNamespace(id=77)]]
             ),
@@ -2231,9 +2053,7 @@ async def test_q_add_structured_plan_defaults_to_append_when_queue_is_running():
 
     handler = app.handlers["/q"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.contains_queue_plan_markers", return_value=True
-    ):
+    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
         with patch(
             "src.handlers.claude.queue.materialize_queue_plan_text",
             new=AsyncMock(
@@ -2247,9 +2067,7 @@ async def test_q_add_structured_plan_defaults_to_append_when_queue_is_running():
                 ]
             ),
         ):
-            with patch(
-                "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-            ):
+            with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
                 await handler(
                     ack=AsyncMock(),
                     command={
@@ -2271,9 +2089,7 @@ async def test_q_add_structured_plan_defaults_to_append_when_queue_is_running():
         insertion_mode="append",
         insert_at=None,
     )
-    assert (
-        "Added 1 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
-    )
+    assert "Added 1 item(s) to queue" in client.chat_postMessage.await_args.kwargs["text"]
 
 
 @pytest.mark.asyncio
@@ -2282,12 +2098,8 @@ async def test_q_add_structured_plan_rejects_clear_directive():
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=4, position=4)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=4, position=4)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
         )
@@ -2318,15 +2130,9 @@ async def test_q_add_structured_plan_persists_scheduled_controls():
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=4, position=4)]
-            ),
-            add_queue_scheduled_events=AsyncMock(
-                return_value=[SimpleNamespace(id=501)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=4, position=4)]),
+            add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=501)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control()),
             update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
@@ -2338,9 +2144,7 @@ async def test_q_add_structured_plan_persists_scheduled_controls():
     client = SimpleNamespace(chat_postMessage=AsyncMock())
     scheduled_time = datetime.now(timezone.utc) + timedelta(minutes=30)
     with (
-        patch(
-            "src.handlers.claude.queue.contains_queue_plan_markers", return_value=True
-        ),
+        patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True),
         patch(
             "src.handlers.claude.queue.parse_queue_plan_submission",
             return_value=(
@@ -2403,12 +2207,8 @@ async def test_q_add_does_not_restart_when_queue_is_paused():
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=1, position=1)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control("paused")),
         )
@@ -2417,9 +2217,7 @@ async def test_q_add_does_not_restart_when_queue_is_paused():
 
     handler = app.handlers["/q"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-    ) as mock_ensure:
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
         await handler(
             ack=AsyncMock(),
             command={
@@ -2442,12 +2240,8 @@ async def test_q_structured_plan_stays_paused_by_default():
     app = _FakeApp()
     deps = SimpleNamespace(
         db=SimpleNamespace(
-            get_or_create_session=AsyncMock(
-                return_value=Session(id=1, working_directory="/repo")
-            ),
-            add_many_to_queue=AsyncMock(
-                return_value=[SimpleNamespace(id=1, position=1)]
-            ),
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
             get_running_queue_items=AsyncMock(return_value=[]),
             get_queue_control=AsyncMock(return_value=_queue_control("paused")),
             update_queue_control_state=AsyncMock(),
@@ -2457,9 +2251,7 @@ async def test_q_structured_plan_stays_paused_by_default():
 
     handler = app.handlers["/q"]
     client = SimpleNamespace(chat_postMessage=AsyncMock())
-    with patch(
-        "src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()
-    ) as mock_ensure:
+    with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
         await handler(
             ack=AsyncMock(),
             command={
@@ -2588,9 +2380,7 @@ async def test_process_queue_parallel_group_honors_width_and_uses_isolated_scope
         active -= 1
         return SimpleNamespace(
             backend="claude",
-            result=SimpleNamespace(
-                success=True, output="done", error=None, session_id=None
-            ),
+            result=SimpleNamespace(success=True, output="done", error=None, session_id=None),
         )
 
     with patch(

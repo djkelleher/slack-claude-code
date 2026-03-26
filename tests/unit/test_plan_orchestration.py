@@ -24,18 +24,12 @@ async def test_orchestrate_splan_runs_sequential_revisions() -> None:
     calls: list[tuple[str, str]] = []
     responses = iter(
         [
-            SimpleNamespace(
-                success=True, output=_plan("planner"), session_id="planner-thread"
-            ),
-            SimpleNamespace(
-                success=True, output=_plan("reviewer"), session_id="review-thread"
-            ),
+            SimpleNamespace(success=True, output=_plan("planner"), session_id="planner-thread"),
+            SimpleNamespace(success=True, output=_plan("reviewer"), session_id="review-thread"),
         ]
     )
 
-    async def _run(
-        model: str, prompt: str, resume_session_id: str | None, persist: bool
-    ):
+    async def _run(model: str, prompt: str, resume_session_id: str | None, persist: bool):
         calls.append((model, prompt))
         return next(responses)
 
@@ -59,24 +53,14 @@ async def test_orchestrate_fplan_runs_fanout_then_integrates() -> None:
     calls: list[str] = []
     responses = iter(
         [
-            SimpleNamespace(
-                success=True, output=_plan("planner"), session_id="planner-thread"
-            ),
-            SimpleNamespace(
-                success=True, output=_plan("review-a"), session_id="review-a-thread"
-            ),
-            SimpleNamespace(
-                success=True, output=_plan("review-b"), session_id="review-b-thread"
-            ),
-            SimpleNamespace(
-                success=True, output=_plan("integrated"), session_id="planner-thread"
-            ),
+            SimpleNamespace(success=True, output=_plan("planner"), session_id="planner-thread"),
+            SimpleNamespace(success=True, output=_plan("review-a"), session_id="review-a-thread"),
+            SimpleNamespace(success=True, output=_plan("review-b"), session_id="review-b-thread"),
+            SimpleNamespace(success=True, output=_plan("integrated"), session_id="planner-thread"),
         ]
     )
 
-    async def _run(
-        model: str, prompt: str, resume_session_id: str | None, persist: bool
-    ):
+    async def _run(model: str, prompt: str, resume_session_id: str | None, persist: bool):
         calls.append(model)
         return next(responses)
 
