@@ -2,7 +2,7 @@
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
 _CONTINUE_SIGNAL_PATTERNS = (
@@ -87,6 +87,117 @@ Detailed output context:
 {detailed_output}
 """.strip()
 
+_TASK_STATUS_PROMPT_SUFFIX = """
+---
+
+IMPORTANT — TASK STATUS REPORT (mandatory):
+
+At the very end of your response, you MUST include a task status report inside <task-status> tags.
+
+<task-status>
+status: incomplete
+
+[original-plan]
+- DONE | Description of completed task
+- INCOMPLETE | Description of task not yet finished
+
+[discovered]
+- CRITICAL | Urgent issue found that blocks correctness
+- HIGH | Significant quality or functionality gap
+- MEDIUM | Worthwhile improvement discovered
+- LOW | Minor polish or cleanup
+
+</task-status>
+
+Rules:
+1. "status" must be "complete" or "incomplete".
+2. Set status to "complete" ONLY when ALL original plan tasks are DONE and there are no CRITICAL or HIGH discovered tasks.
+3. [original-plan] lists every task from the original request. Mark each DONE or INCOMPLETE.
+4. [discovered] lists NEW tasks found during work that were NOT in the original request. Rank each: CRITICAL, HIGH, MEDIUM, or LOW. Omit this section if none.
+5. When fully complete with no discovered tasks, use the short form:
+   <task-status>
+   status: complete
+   </task-status>
+6. Keep descriptions concise (one line, under 120 chars).
+7. <task-status> MUST be the last thing in your response.
+""".strip()
+
+_TASK_STATUS_BLOCK_RE = re.compile(r"<task-status>\s*(.*?)\s*</task-status>", re.DOTALL)
+_TASK_STATUS_LINE_RE = re.compile(r"^-\s*(DONE|INCOMPLETE)\s*\|\s*(.+)$", re.MULTILINE)
+_DISCOVERED_TASK_LINE_RE = re.compile(r"^-\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(.+)$", re.MULTILINE)
+_STATUS_VALUE_RE = re.compile(r"^status:\s*(complete|incomplete)", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class TaskStatusReport:
+    """Parsed structured task status from Claude's response."""
+
+    status_complete: bool
+    original_tasks: list[tuple[str, str]] = field(default_factory=list)
+    discovered_tasks: list[tuple[str, str]] = field(default_factory=list)
+
+
+def parse_task_status_block(output: str) -> Optional[TaskStatusReport]:
+    """Extract and parse a <task-status> block from Claude's output.
+
+    Parameters
+    ----------
+    output : str
+        The raw text output from Claude.
+
+    Returns
+    -------
+    Optional[TaskStatusReport]
+        Parsed report, or ``None`` if no valid block was found.
+    """
+    if not output:
+        return None
+
+    block_match = _TASK_STATUS_BLOCK_RE.search(output)
+    if not block_match:
+        return None
+
+    block_text = block_match.group(1)
+
+    status_match = _STATUS_VALUE_RE.search(block_text)
+    if not status_match:
+        return None
+
+    status_complete = status_match.group(1) == "complete"
+
+    original_tasks: list[tuple[str, str]] = []
+    discovered_tasks: list[tuple[str, str]] = []
+
+    # Split into sections for targeted parsing
+    original_section = ""
+    discovered_section = ""
+    if "[original-plan]" in block_text:
+        after_original = block_text.split("[original-plan]", 1)[1]
+        if "[discovered]" in after_original:
+            original_section = after_original.split("[discovered]", 1)[0]
+        else:
+            original_section = after_original
+
+    if "[discovered]" in block_text:
+        discovered_section = block_text.split("[discovered]", 1)[1]
+
+    for match in _TASK_STATUS_LINE_RE.finditer(original_section):
+        original_tasks.append((match.group(1), match.group(2).strip()))
+
+    for match in _DISCOVERED_TASK_LINE_RE.finditer(discovered_section):
+        discovered_tasks.append((match.group(1), match.group(2).strip()))
+
+    return TaskStatusReport(
+        status_complete=status_complete,
+        original_tasks=original_tasks,
+        discovered_tasks=discovered_tasks,
+    )
+
+
+def build_task_status_suffix() -> str:
+    """Return the prompt suffix instructing Claude to include a task status report."""
+    return _TASK_STATUS_PROMPT_SUFFIX
+
 
 @dataclass(frozen=True)
 class QueueAutomationDecision:
@@ -96,6 +207,7 @@ class QueueAutomationDecision:
     include_math_check: bool
     reason: str
     judge_used: bool
+    task_status: Optional[TaskStatusReport] = None
 
 
 @dataclass(frozen=True)
@@ -120,9 +232,47 @@ def build_check_prompts(include_math_check: bool) -> list[str]:
     return prompts
 
 
-def build_continue_prompt() -> str:
-    """Return the standard auto-continue prompt."""
-    return _CONTINUE_PROMPT
+def build_continue_prompt(
+    task_status: Optional[TaskStatusReport] = None,
+) -> str:
+    """Return an auto-continue prompt, optionally targeted to specific remaining tasks.
+
+    Parameters
+    ----------
+    task_status : Optional[TaskStatusReport]
+        If provided, the continue prompt will list the specific incomplete
+        original-plan tasks and CRITICAL/HIGH discovered tasks so Claude
+        knows exactly what to work on next.
+    """
+    if task_status is None:
+        return _CONTINUE_PROMPT
+
+    incomplete = [desc for status, desc in task_status.original_tasks if status == "INCOMPLETE"]
+    urgent_discovered = [
+        desc for priority, desc in task_status.discovered_tasks if priority in ("CRITICAL", "HIGH")
+    ]
+
+    if not incomplete and not urgent_discovered:
+        return _CONTINUE_PROMPT
+
+    parts = [
+        "Continue implementing the remaining work. "
+        "Do not restate completed work. Execute the following tasks now, "
+        "run relevant verification, and report completed changes succinctly.",
+        "",
+    ]
+    if incomplete:
+        parts.append("Remaining original-plan tasks:")
+        for desc in incomplete:
+            parts.append(f"- {desc}")
+        parts.append("")
+    if urgent_discovered:
+        parts.append("Urgent discovered tasks:")
+        for desc in urgent_discovered:
+            parts.append(f"- {desc}")
+        parts.append("")
+
+    return "\n".join(parts).strip()
 
 
 def _parse_bool(value: object, default: bool = False) -> bool:
@@ -232,7 +382,45 @@ async def decide_queue_automation(
     git_tool_events: list[dict],
     judge_runner: Optional[Callable[[str], Awaitable[str]]] = None,
 ) -> QueueAutomationDecision:
-    """Compute balanced-OR auto-follow decision for a queue item."""
+    """Compute auto-follow decision for a queue item.
+
+    Checks for a structured ``<task-status>`` block first. If found, uses
+    that to decide. Otherwise falls back to heuristic + LLM judge logic.
+    """
+    # --- Structured task-status path (preferred) ---
+    combined_output = "\n\n".join(part for part in [output, detailed_output] if part)
+    task_status = parse_task_status_block(combined_output)
+    if task_status is not None:
+        has_urgent_discovered = any(
+            priority in ("CRITICAL", "HIGH") for priority, _ in task_status.discovered_tasks
+        )
+        should_continue = not task_status.status_complete or has_urgent_discovered
+
+        # Still check math heuristic for the math-check pass
+        _, _, heuristic_math, _ = _heuristic_signals(
+            prompt=prompt,
+            output=output,
+            detailed_output=detailed_output,
+            git_tool_events=git_tool_events,
+        )
+
+        reason_parts = ["structured-status"]
+        if not task_status.status_complete:
+            reason_parts.append("incomplete")
+        if has_urgent_discovered:
+            reason_parts.append("urgent-discovered")
+        if task_status.status_complete and not has_urgent_discovered:
+            reason_parts.append("complete")
+
+        return QueueAutomationDecision(
+            should_continue=should_continue,
+            include_math_check=bool(heuristic_math),
+            reason=", ".join(reason_parts),
+            judge_used=False,
+            task_status=task_status,
+        )
+
+    # --- Fallback: heuristic + LLM judge ---
     strong_continue, strong_done, heuristic_math, commit_signal = _heuristic_signals(
         prompt=prompt,
         output=output,
@@ -290,4 +478,5 @@ async def decide_queue_automation(
         include_math_check=bool(include_math_check),
         reason=", ".join(reasons) if reasons else "no-continue-signals",
         judge_used=judge_used,
+        task_status=None,
     )
