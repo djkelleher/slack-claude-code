@@ -37,13 +37,17 @@ class TestNormalizeModelName:
         assert normalize_model_name("opus-4.5") == "claude-opus-4-5"
         assert normalize_model_name("opus-high") == "claude-opus-4-6-high"
         assert normalize_model_name("co46h") == "claude-opus-4-6-high"
+        assert normalize_model_name("cs46h") == "claude-sonnet-4-6-high"
         assert normalize_model_name("claude-opus-4-6-max") == "claude-opus-4-6-max"
 
     def test_normalizes_codex_aliases_with_effort(self):
         """Codex aliases should map to canonical Codex IDs with effort suffixes."""
         assert normalize_model_name("codex") == "gpt-5.3-codex"
         assert normalize_model_name("codex-extra-high") == "gpt-5.3-codex-xhigh"
-        assert normalize_model_name("gpt-5.1-codex-max-high") == "gpt-5.1-codex-max-high"
+        assert normalize_model_name("g54h") == "gpt-5.4-high"
+        assert (
+            normalize_model_name("gpt-5.1-codex-max-high") == "gpt-5.1-codex-max-high"
+        )
 
     def test_passthrough_for_unknown_non_empty_model(self):
         """Unknown model IDs should be preserved."""
@@ -125,7 +129,9 @@ class TestModelOptionsCatalog:
         assert any(option["name"] == "sonnet" for option in claude_options)
         assert any(option["name"] == "gpt-5.3-codex" for option in codex_options)
         assert any(option["name"] == "gpt-5.4" for option in codex_options)
-        assert not any(option["name"] == "gpt-5.3-codex-xhigh" for option in codex_options)
+        assert not any(
+            option["name"] == "gpt-5.3-codex-xhigh" for option in codex_options
+        )
 
     def test_get_all_model_options_combines_backends(self):
         """Combined options should contain both Claude and Codex entries."""

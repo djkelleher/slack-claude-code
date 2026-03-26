@@ -62,12 +62,15 @@ CLAUDE_MODEL_ALIASES: dict[str, str | None] = {
     "claude-haiku-4-5": "haiku",
     "co45m": "claude-opus-4-5-medium",
     "co46h": "claude-opus-4-6-high",
+    "cs46h": "claude-sonnet-4-6-high",
 }
 
 CODEX_MODEL_ALIASES: dict[str, str] = {
     "codex": "gpt-5.3-codex",
     "gpt-5.3-codex": "gpt-5.3-codex",
     "gpt-5.4": "gpt-5.4",
+    "g54": "gpt-5.4",
+    "g54h": "gpt-5.4-high",
     "gpt-5.3-codex-spark": "gpt-5.3-codex-spark",
     "gpt-5.2-codex": "gpt-5.2-codex",
     "gpt-5.1-codex-max": "gpt-5.1-codex-max",
@@ -164,9 +167,13 @@ CODEX_EFFORT_LABELS: dict[str, str] = {
 }
 
 CLAUDE_MODELS: set[str] = {
-    alias for alias, value in CLAUDE_MODEL_ALIASES.items() if alias and value != "sonnet"
+    alias
+    for alias, value in CLAUDE_MODEL_ALIASES.items()
+    if alias and value != "sonnet"
 }
-CLAUDE_MODELS.update(option.value for option in CLAUDE_MODEL_OPTIONS if option.value is not None)
+CLAUDE_MODELS.update(
+    option.value for option in CLAUDE_MODEL_OPTIONS if option.value is not None
+)
 CLAUDE_MODELS.update({"sonnet", "haiku"})
 
 CODEX_MODELS: set[str] = {
@@ -300,7 +307,9 @@ class SlackTimeouts(BaseModel):
     heartbeat_interval: float = 15.0
     heartbeat_threshold: float = 20.0
 
-    @field_validator("message_update_throttle", "heartbeat_interval", "heartbeat_threshold")
+    @field_validator(
+        "message_update_throttle", "heartbeat_interval", "heartbeat_threshold"
+    )
     @classmethod
     def validate_positive_float(cls, v: float, info) -> float:
         """Ensure timeout values are positive."""
@@ -402,7 +411,9 @@ class Config(BaseSettings):
         """Customize settings sources to add encrypted storage with highest priority."""
         return (
             init_settings,
-            EncryptedSettingsSource(settings_cls),  # Encrypted storage (highest priority)
+            EncryptedSettingsSource(
+                settings_cls
+            ),  # Encrypted storage (highest priority)
             env_settings,  # Environment variables
             dotenv_settings,  # .env file
             file_secret_settings,
@@ -417,7 +428,9 @@ class Config(BaseSettings):
 
     # Database - defaults to ~/.slack-claude-code/
     DATABASE_PATH: str = Field(
-        default_factory=lambda: str(Path.home() / ".slack-claude-code" / "slack_claude.db")
+        default_factory=lambda: str(
+            Path.home() / ".slack-claude-code" / "slack_claude.db"
+        )
     )
     DEFAULT_WORKING_DIR: str = Field(default_factory=lambda: str(Path.cwd()))
 
@@ -467,7 +480,9 @@ class Config(BaseSettings):
     CODEX_SANDBOX_MODE: str = "danger-full-access"
     CODEX_APPROVAL_MODE: str = "on-request"
     CODEX_PREPEND_DEFAULT_INSTRUCTIONS: bool = True
-    CODEX_DEFAULT_INSTRUCTIONS_FILE: str = str(Path.home() / ".codex" / "default_instructions.txt")
+    CODEX_DEFAULT_INSTRUCTIONS_FILE: str = str(
+        Path.home() / ".codex" / "default_instructions.txt"
+    )
 
     # Queue behavior
     QUEUE_AUTO_ANSWER_QUESTIONS: bool = False
