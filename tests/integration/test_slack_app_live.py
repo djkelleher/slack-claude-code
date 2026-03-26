@@ -16,6 +16,7 @@ import pytest
 from slack_sdk.web.async_client import AsyncWebClient
 
 from tests.integration.helpers import (
+    delete_message,
     post_user_message_or_skip,
     wait_for_bot_reply,
     wait_for_channel_message,
@@ -58,9 +59,9 @@ async def test_app_mention_roundtrip(
         assert "Hi! I'm the code assistant bot." in bot_message.get("text", "")
     finally:
         if bot_response_ts:
-            await slack_client.chat_delete(channel=slack_test_channel, ts=bot_response_ts)
+            await delete_message(slack_client, slack_test_channel, ts=bot_response_ts)
         if user_message_ts:
-            await slack_user_client.chat_delete(channel=slack_test_channel, ts=user_message_ts)
+            await delete_message(slack_user_client, slack_test_channel, ts=user_message_ts)
 
 
 @pytest.mark.live
@@ -108,8 +109,8 @@ async def test_thread_message_roundtrip(
         bot_response_ts = bot_message["ts"]
     finally:
         if bot_response_ts:
-            await slack_client.chat_delete(channel=slack_test_channel, ts=bot_response_ts)
+            await delete_message(slack_client, slack_test_channel, ts=bot_response_ts)
         if thread_user_ts:
-            await slack_user_client.chat_delete(channel=slack_test_channel, ts=thread_user_ts)
+            await delete_message(slack_user_client, slack_test_channel, ts=thread_user_ts)
         if parent_ts:
-            await slack_user_client.chat_delete(channel=slack_test_channel, ts=parent_ts)
+            await delete_message(slack_user_client, slack_test_channel, ts=parent_ts)

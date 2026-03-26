@@ -2,6 +2,9 @@
 
 Provides polling utilities, predicate factories, and cleanup management so that
 individual test modules stay focused on test logic.
+
+Pass ``--keep-messages`` to pytest to skip cleanup and leave all Slack messages
+in the channel for manual inspection.
 """
 
 import asyncio
@@ -11,6 +14,9 @@ from typing import Any
 import pytest
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
+
+# Set to True by conftest when --keep-messages is passed.
+KEEP_MESSAGES: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +186,8 @@ class MessageCleanup:
         self._user_timestamps.append(ts)
 
     async def cleanup(self) -> None:
+        if KEEP_MESSAGES:
+            return
         for ts in self._bot_timestamps:
             try:
                 await self._bot.chat_delete(channel=self._channel, ts=ts)
@@ -260,7 +268,9 @@ async def dispatch_and_expect(
 
 
 async def delete_message(client: AsyncWebClient, channel: str, ts: str) -> None:
-    """Delete a message, swallowing errors."""
+    """Delete a message, swallowing errors. No-op when ``--keep-messages`` is active."""
+    if KEEP_MESSAGES:
+        return
     try:
         await client.chat_delete(channel=channel, ts=ts)
     except Exception:

@@ -8,6 +8,8 @@ that every slash command posts its output to the live test channel.
 import logging
 import tempfile
 from pathlib import Path
+
+from tests.integration import helpers as _helpers
 from typing import Any
 
 import pytest_asyncio
@@ -152,6 +154,11 @@ class SlashCommandDispatcher:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def pytest_configure(config):
+    """Propagate --keep-messages flag to the helpers module."""
+    _helpers.KEEP_MESSAGES = config.getoption("--keep-messages", default=False)
 
 
 @pytest_asyncio.fixture

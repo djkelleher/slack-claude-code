@@ -41,6 +41,12 @@ def pytest_addoption(parser):
         default=False,
         help="Run live integration tests that require Slack credentials",
     )
+    parser.addoption(
+        "--keep-messages",
+        action="store_true",
+        default=False,
+        help="Keep Slack messages posted during live tests (skip cleanup/deletion)",
+    )
 
 
 def pytest_configure(config):

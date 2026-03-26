@@ -10,6 +10,8 @@ Run with: pytest tests/ --live
 import pytest
 from slack_sdk.web.async_client import AsyncWebClient
 
+from tests.integration.helpers import delete_message
+
 
 @pytest.mark.live
 @pytest.mark.asyncio
@@ -25,7 +27,7 @@ async def test_post_message(slack_client: AsyncWebClient, slack_test_channel: st
     message_ts = response["ts"]
 
     # Cleanup: delete the test message
-    await slack_client.chat_delete(channel=slack_test_channel, ts=message_ts)
+    await delete_message(slack_client, slack_test_channel, ts=message_ts)
 
 
 @pytest.mark.live
@@ -50,7 +52,7 @@ async def test_update_message(slack_client: AsyncWebClient, slack_test_channel: 
     assert update_response["message"]["text"] == "[Live Test] Updated message"
 
     # Cleanup
-    await slack_client.chat_delete(channel=slack_test_channel, ts=message_ts)
+    await delete_message(slack_client, slack_test_channel, ts=message_ts)
 
 
 @pytest.mark.live
@@ -75,8 +77,8 @@ async def test_post_thread_reply(slack_client: AsyncWebClient, slack_test_channe
     assert reply_response["message"]["thread_ts"] == parent_ts
 
     # Cleanup: delete both messages
-    await slack_client.chat_delete(channel=slack_test_channel, ts=reply_response["ts"])
-    await slack_client.chat_delete(channel=slack_test_channel, ts=parent_ts)
+    await delete_message(slack_client, slack_test_channel, ts=reply_response["ts"])
+    await delete_message(slack_client, slack_test_channel, ts=parent_ts)
 
 
 @pytest.mark.live
@@ -121,7 +123,7 @@ async def test_post_blocks(slack_client: AsyncWebClient, slack_test_channel: str
     message_ts = response["ts"]
 
     # Cleanup
-    await slack_client.chat_delete(channel=slack_test_channel, ts=message_ts)
+    await delete_message(slack_client, slack_test_channel, ts=message_ts)
 
 
 @pytest.mark.live
@@ -144,7 +146,10 @@ async def test_file_upload(slack_client: AsyncWebClient, slack_test_channel: str
     assert file_info["title"] == "[Live Test] Code Snippet"
 
     # Cleanup: delete the uploaded file
-    await slack_client.files_delete(file=file_info["id"])
+    from tests.integration.helpers import KEEP_MESSAGES
+
+    if not KEEP_MESSAGES:
+        await slack_client.files_delete(file=file_info["id"])
 
 
 @pytest.mark.live
@@ -180,7 +185,7 @@ async def test_post_message_with_context_blocks(
     message_ts = response["ts"]
 
     # Cleanup
-    await slack_client.chat_delete(channel=slack_test_channel, ts=message_ts)
+    await delete_message(slack_client, slack_test_channel, ts=message_ts)
 
 
 @pytest.mark.live
