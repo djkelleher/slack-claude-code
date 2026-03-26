@@ -161,6 +161,33 @@ def pytest_configure(config):
     _helpers.KEEP_MESSAGES = config.getoption("--keep-messages", default=False)
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _announce_test(request, slack_client, slack_test_channel):
+    """Post a header message to Slack before each live test."""
+    if "live" not in request.keywords:
+        yield
+        return
+
+    test_name = request.node.name
+    docstring = (request.function.__doc__ or "").strip().split("\n")[0]
+    label = f":test_tube: *{test_name}*"
+    if docstring:
+        label += f"\n_{docstring}_"
+
+    resp = await slack_client.chat_postMessage(
+        channel=slack_test_channel,
+        text=label,
+        blocks=[
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": label}],
+            }
+        ],
+    )
+    yield
+    await _helpers.delete_message(slack_client, slack_test_channel, resp["ts"])
+
+
 @pytest_asyncio.fixture
 async def slash_dispatch(
     slack_client: AsyncWebClient,
