@@ -14,9 +14,10 @@ import signal
 import sys
 import time
 import traceback
+from dataclasses import replace
 from datetime import timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from loguru import logger
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -51,6 +52,12 @@ from src.utils.file_downloader import (
     download_slack_file,
 )
 from src.utils.formatters.command import error_message
+from src.utils.mode_directives import (
+    ModeDirectiveError,
+    RuntimeModeOverrides,
+    parse_parenthesized_mode_directive_line,
+    resolve_runtime_mode_value,
+)
 
 _TEXT_MIME_TYPES_FOR_QUEUE_PLAN = {
     "application/json",
@@ -74,6 +81,7 @@ _TEXT_FILE_EXTENSIONS_FOR_QUEUE_PLAN = {
     ".yaml",
     ".yml",
 }
+_RUNTIME_MODE_DIRECTIVE_META_KEY = "runtime_mode_directive"
 
 
 def configure_logging() -> None:
@@ -96,9 +104,81 @@ def configure_logging() -> None:
     )
 
 
+def _apply_runtime_mode_overrides_to_session(
+    session,
+    overrides: RuntimeModeOverrides,
+):
+    """Return a session clone with ephemeral runtime mode overrides applied."""
+    replace_kwargs: dict[str, str] = {}
+    if overrides.permission_mode is not None:
+        replace_kwargs["permission_mode"] = overrides.permission_mode
+    if overrides.approval_mode is not None:
+        replace_kwargs["approval_mode"] = overrides.approval_mode
+    if overrides.sandbox_mode is not None:
+        replace_kwargs["sandbox_mode"] = overrides.sandbox_mode
+    if not replace_kwargs:
+        return session
+    return replace(session, **replace_kwargs)
+
+
+def _extract_single_prompt_mode_directive(prompt: str) -> tuple[str, Optional[str]]:
+    """Extract one leading `(mode: ...)` directive for non-structured prompts."""
+    lines = prompt.splitlines()
+    if not lines:
+        return prompt, None
+
+    mode_directive = parse_parenthesized_mode_directive_line(lines[0].strip())
+    if mode_directive is None:
+        return prompt, None
+
+    remaining_lines = lines[1:]
+    end_indices = [
+        idx
+        for idx, line in enumerate(remaining_lines)
+        if line.strip().lower() in {"(end)", "((end))"}
+    ]
+    if end_indices:
+        last_non_empty_index = max(
+            idx
+            for idx, line in enumerate(remaining_lines)
+            if line.strip()
+        )
+        first_end_index = end_indices[0]
+        if first_end_index != last_non_empty_index:
+            raise ModeDirectiveError(
+                "When using `(mode: ...)` in a regular prompt, `(end)` must be the final "
+                "non-empty line."
+            )
+        if len(end_indices) > 1:
+            raise ModeDirectiveError(
+                "When using `(mode: ...)` in a regular prompt, only one closing `(end)` "
+                "marker is supported."
+            )
+        del remaining_lines[first_end_index]
+
+    stripped_prompt = "\n".join(remaining_lines).strip()
+    if not stripped_prompt:
+        raise ModeDirectiveError("Mode directive must be followed by prompt content.")
+    if contains_queue_plan_markers(stripped_prompt):
+        # Defer to structured queue-plan parser when marker semantics remain.
+        return prompt, None
+    return stripped_prompt, mode_directive
+
+
 def _application_data_dir() -> Path:
     """Return the app's persistent data directory."""
     return Path(config.DATABASE_PATH).expanduser().resolve().parent
+
+
+def _result_field(result: Any, field_name: str, default: Any) -> Any:
+    """Read a field from dataclass/SimpleNamespace-like values safely."""
+    try:
+        values = vars(result)
+    except TypeError:
+        return default
+    if field_name in values:
+        return values[field_name]
+    return default
 
 
 def _slack_uploads_dir() -> Path:
@@ -421,6 +501,7 @@ async def _route_codex_message_to_active_turn_or_queue(
     thread_ts: str | None,
     prompt: str,
     logger,
+    runtime_mode_directive: Optional[str] = None,
 ) -> bool:
     """Route a Codex message to an active turn, or queue it on steer failure.
 
@@ -442,15 +523,20 @@ async def _route_codex_message_to_active_turn_or_queue(
 
     steer_error: str | None = None
     steer_result = None
-    try:
-        steer_result = await deps.codex_executor.steer_active_turn(
-            session_scope=session_scope,
-            text=prompt,
-        )
-    except Exception as e:
-        steer_error = str(e)
-        logger.error(
-            f"Failed to steer active Codex turn in scope {session_scope}: {steer_error}"
+    if runtime_mode_directive is None:
+        try:
+            steer_result = await deps.codex_executor.steer_active_turn(
+                session_scope=session_scope,
+                text=prompt,
+            )
+        except Exception as e:
+            steer_error = str(e)
+            logger.error(
+                f"Failed to steer active Codex turn in scope {session_scope}: {steer_error}"
+            )
+    else:
+        steer_error = (
+            "Active Codex turn steering is skipped when `(mode: ...)` overrides are present."
         )
 
     if steer_result and steer_result.success:
@@ -485,12 +571,20 @@ async def _route_codex_message_to_active_turn_or_queue(
         steer_result.error if steer_result else "unknown error"
     )
     try:
-        queued_item = await deps.db.add_to_queue(
-            session_id=session.id,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            prompt=prompt,
+        queue_meta = (
+            {_RUNTIME_MODE_DIRECTIVE_META_KEY: runtime_mode_directive}
+            if runtime_mode_directive
+            else None
         )
+        queue_kwargs = {
+            "session_id": session.id,
+            "channel_id": channel_id,
+            "thread_ts": thread_ts,
+            "prompt": prompt,
+        }
+        if queue_meta is not None:
+            queue_kwargs["automation_meta"] = queue_meta
+        queued_item = await deps.db.add_to_queue(**queue_kwargs)
         await deps.codex_executor.record_queue_fallback(success=True)
     except Exception as e:
         await deps.codex_executor.record_queue_fallback(success=False)
@@ -585,6 +679,7 @@ async def _route_claude_message_to_active_execution_or_queue(
     thread_ts: str | None,
     prompt: str,
     logger,
+    runtime_mode_directive: Optional[str] = None,
 ) -> bool:
     """Route a Claude message to queue when an execution is already active in scope.
 
@@ -602,12 +697,20 @@ async def _route_claude_message_to_active_execution_or_queue(
     await deps.db.update_command_status(cmd_history.id, "running")
 
     try:
-        queued_item = await deps.db.add_to_queue(
-            session_id=session.id,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            prompt=prompt,
+        queue_meta = (
+            {_RUNTIME_MODE_DIRECTIVE_META_KEY: runtime_mode_directive}
+            if runtime_mode_directive
+            else None
         )
+        queue_kwargs = {
+            "session_id": session.id,
+            "channel_id": channel_id,
+            "thread_ts": thread_ts,
+            "prompt": prompt,
+        }
+        if queue_meta is not None:
+            queue_kwargs["automation_meta"] = queue_meta
+        queued_item = await deps.db.add_to_queue(**queue_kwargs)
     except Exception as e:
         queue_error = str(e)
         logger.error(
@@ -751,31 +854,51 @@ async def _queue_structured_plan_message(
 
     try:
         if auto_after_each_prompt:
-            queue_entries = [
-                (
-                    item.prompt,
-                    item.working_directory_override,
-                    item.parallel_group_id,
-                    item.parallel_limit,
-                    {
-                        "origin": "manual",
-                        "auto_each": True,
-                        "continue_round": 0,
-                        "check_round": 0,
-                    },
+            queue_entries = []
+            for item in materialized_prompts:
+                entry_meta: dict[str, object] = {
+                    "origin": "manual",
+                    "auto_each": True,
+                    "continue_round": 0,
+                    "check_round": 0,
+                }
+                mode_directive = _result_field(item, "mode_directive", None)
+                if isinstance(mode_directive, str) and mode_directive.strip():
+                    entry_meta[_RUNTIME_MODE_DIRECTIVE_META_KEY] = mode_directive.strip()
+                queue_entries.append(
+                    (
+                        item.prompt,
+                        item.working_directory_override,
+                        item.parallel_group_id,
+                        item.parallel_limit,
+                        entry_meta,
+                    )
                 )
-                for item in materialized_prompts
-            ]
         else:
-            queue_entries = [
-                (
-                    item.prompt,
-                    item.working_directory_override,
-                    item.parallel_group_id,
-                    item.parallel_limit,
-                )
-                for item in materialized_prompts
-            ]
+            queue_entries = []
+            for item in materialized_prompts:
+                mode_directive = _result_field(item, "mode_directive", None)
+                if isinstance(mode_directive, str) and mode_directive.strip():
+                    queue_entries.append(
+                        (
+                            item.prompt,
+                            item.working_directory_override,
+                            item.parallel_group_id,
+                            item.parallel_limit,
+                            {
+                                _RUNTIME_MODE_DIRECTIVE_META_KEY: mode_directive.strip(),
+                            },
+                        )
+                    )
+                else:
+                    queue_entries.append(
+                        (
+                            item.prompt,
+                            item.working_directory_override,
+                            item.parallel_group_id,
+                            item.parallel_limit,
+                        )
+                    )
         queued_items = await deps.db.add_many_to_queue(
             session_id=session.id,
             channel_id=channel_id,
@@ -1227,6 +1350,19 @@ async def main():
                         text=f"⚠️ Error processing file: {file_info['name']} - {str(e)}",
                     )
 
+        runtime_mode_directive: Optional[str] = None
+        if prompt:
+            try:
+                prompt, runtime_mode_directive = _extract_single_prompt_mode_directive(prompt)
+            except ModeDirectiveError as e:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=f"Invalid mode directive: {e}",
+                    blocks=error_message(f"Invalid mode directive: {e}"),
+                )
+                return
+
         queue_plan_prompt = prompt
         if not queue_plan_prompt and uploaded_files:
             queue_plan_prompt = (
@@ -1265,9 +1401,28 @@ async def main():
         try:
             # Determine which backend to use based on session model
             backend = get_backend_for_model(session.model)
+            effective_session = session
+            if runtime_mode_directive:
+                try:
+                    runtime_overrides = resolve_runtime_mode_value(
+                        runtime_mode_directive,
+                        backend=backend,
+                    )
+                except ModeDirectiveError as e:
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=f"Invalid mode directive: {e}",
+                        blocks=error_message(f"Invalid mode directive: {e}"),
+                    )
+                    return
+                effective_session = _apply_runtime_mode_overrides_to_session(
+                    session,
+                    runtime_overrides,
+                )
             transport = "Claude CLI" if backend == "claude" else "Codex app-server"
             logger.info(
-                f"Using backend: {backend} via {transport} (model: {session.model})"
+                f"Using backend: {backend} via {transport} (model: {effective_session.model})"
             )
 
             # Route to appropriate execution path
@@ -1276,10 +1431,11 @@ async def main():
                     await _route_codex_message_to_active_turn_or_queue(
                         client=client,
                         deps=deps,
-                        session=session,
+                        session=effective_session,
                         channel_id=channel_id,
                         thread_ts=thread_ts,
                         prompt=prompt,
+                        runtime_mode_directive=runtime_mode_directive,
                         logger=logger,
                     )
                 )
@@ -1290,10 +1446,11 @@ async def main():
                     await _route_claude_message_to_active_execution_or_queue(
                         client=client,
                         deps=deps,
-                        session=session,
+                        session=effective_session,
                         channel_id=channel_id,
                         thread_ts=thread_ts,
                         prompt=prompt,
+                        runtime_mode_directive=runtime_mode_directive,
                         logger=logger,
                     )
                 )
@@ -1302,7 +1459,7 @@ async def main():
 
             await execute_prompt_with_runtime(
                 deps=deps,
-                session=session,
+                session=effective_session,
                 prompt=prompt,
                 channel_id=channel_id,
                 thread_ts=thread_ts,

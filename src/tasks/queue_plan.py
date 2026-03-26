@@ -39,6 +39,7 @@ class QueuePlanPrompt:
     branch_name: Optional[str] = None
     parallel_group_id: Optional[str] = None
     parallel_limit: Optional[int] = None
+    mode_directive: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class MaterializedQueuePlanPrompt:
     working_directory_override: Optional[str] = None
     parallel_group_id: Optional[str] = None
     parallel_limit: Optional[int] = None
+    mode_directive: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -96,13 +98,19 @@ class _ParallelNode:
 
 
 @dataclass
+class _ModeNode:
+    mode_directive: str
+    children: list["_Node"]
+
+
+@dataclass
 class _ForNode:
     variable_name: str
     values: list[str]
     children: list["_Node"]
 
 
-_Node = _PromptNode | _BranchNode | _LoopNode | _ParallelNode | _ForNode
+_Node = _PromptNode | _BranchNode | _LoopNode | _ParallelNode | _ModeNode | _ForNode
 _Marker = tuple[str] | tuple[str, int | None | str] | tuple[str, str, list[str]]
 
 
@@ -113,6 +121,7 @@ class _Frame:
     branch_name: Optional[str] = None
     loop_count: Optional[int] = None
     parallel_limit: Optional[int] = None
+    mode_directive: Optional[str] = None
     substitution_variable: Optional[str] = None
     substitution_values: Optional[list[str]] = None
     nodes: list[_Node] = field(default_factory=list)
@@ -159,6 +168,7 @@ def parse_queue_plan_text(
         active_branch=None,
         active_parallel_group_id=None,
         active_parallel_limit=None,
+        active_mode_directive=None,
         substitutions={},
         out=expanded,
         max_items=max_expanded_items,
@@ -433,6 +443,7 @@ async def materialize_queue_plan_prompts(
                 prompt=item.prompt,
                 parallel_group_id=item.parallel_group_id,
                 parallel_limit=item.parallel_limit,
+                mode_directive=item.mode_directive,
             )
             for item in expanded
         ]
@@ -486,6 +497,7 @@ async def materialize_queue_plan_prompts(
             ),
             parallel_group_id=item.parallel_group_id,
             parallel_limit=item.parallel_limit,
+            mode_directive=item.mode_directive,
         )
         for item in expanded
     ]
@@ -573,6 +585,16 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
 
+        if marker_type == "mode_start":
+            stack.append(
+                _Frame(
+                    kind="mode", start_line=line_number, mode_directive=str(marker[1])
+                )
+            )
+            if inline_prompt:
+                stack[-1].prompt_lines.append(inline_prompt)
+            continue
+
         raise QueuePlanError(f"Line {line_number}: unsupported queue-plan marker.")
 
     _flush_prompt(stack[-1])
@@ -599,6 +621,14 @@ def _close_frame(stack: list[_Frame]) -> None:
     if finished.kind == "parallel":
         stack[-1].nodes.append(
             _ParallelNode(limit=finished.parallel_limit, children=finished.nodes)
+        )
+        return
+    if finished.kind == "mode":
+        stack[-1].nodes.append(
+            _ModeNode(
+                mode_directive=finished.mode_directive or "",
+                children=finished.nodes,
+            )
         )
         return
     if finished.kind == "for":
@@ -632,6 +662,12 @@ def _unexpected_block_close_detail(current: _Frame) -> str:
             f"You are currently inside parallel block opened on line {current.start_line}. "
             "Close it first with `(end)`."
         )
+    if current.kind == "mode":
+        return (
+            "You are currently inside mode block "
+            f"`{current.mode_directive or ''}` opened on line {current.start_line}. "
+            "Close it first with `(end)`."
+        )
     if current.kind == "for":
         return (
             "You are currently inside substitution loop "
@@ -646,6 +682,7 @@ def _expand_nodes(
     active_branch: Optional[str],
     active_parallel_group_id: Optional[str],
     active_parallel_limit: Optional[int],
+    active_mode_directive: Optional[str],
     substitutions: dict[str, str],
     out: list[QueuePlanPrompt],
     max_items: int,
@@ -663,6 +700,7 @@ def _expand_nodes(
                     branch_name=active_branch,
                     parallel_group_id=active_parallel_group_id,
                     parallel_limit=active_parallel_limit,
+                    mode_directive=active_mode_directive,
                 )
             )
             continue
@@ -673,6 +711,7 @@ def _expand_nodes(
                 active_branch=node.branch_name,
                 active_parallel_group_id=active_parallel_group_id,
                 active_parallel_limit=active_parallel_limit,
+                active_mode_directive=active_mode_directive,
                 substitutions=substitutions,
                 out=out,
                 max_items=max_items,
@@ -687,6 +726,7 @@ def _expand_nodes(
                     active_branch=active_branch,
                     active_parallel_group_id=active_parallel_group_id,
                     active_parallel_limit=active_parallel_limit,
+                    active_mode_directive=active_mode_directive,
                     substitutions=substitutions,
                     out=out,
                     max_items=max_items,
@@ -701,6 +741,21 @@ def _expand_nodes(
                 active_branch=active_branch,
                 active_parallel_group_id=f"parallel-{group_counter[0]}",
                 active_parallel_limit=node.limit,
+                active_mode_directive=active_mode_directive,
+                substitutions=substitutions,
+                out=out,
+                max_items=max_items,
+                group_counter=group_counter,
+            )
+            continue
+
+        if isinstance(node, _ModeNode):
+            _expand_nodes(
+                node.children,
+                active_branch=active_branch,
+                active_parallel_group_id=active_parallel_group_id,
+                active_parallel_limit=active_parallel_limit,
+                active_mode_directive=node.mode_directive,
                 substitutions=substitutions,
                 out=out,
                 max_items=max_items,
@@ -719,6 +774,7 @@ def _expand_nodes(
                     active_branch=active_branch,
                     active_parallel_group_id=active_parallel_group_id,
                     active_parallel_limit=active_parallel_limit,
+                    active_mode_directive=active_mode_directive,
                     substitutions=next_substitutions,
                     out=out,
                     max_items=max_items,
@@ -885,6 +941,8 @@ def _parse_block_marker_part(
         return _parse_branch_marker_value(
             body[len("branch ") :], marker_type="branch_start"
         )
+    if lowered.startswith("mode:"):
+        return _parse_mode_marker_value(body[len("mode:") :], marker_type="mode_start")
     return None
 
 
@@ -911,6 +969,7 @@ def _looks_like_queue_directive_part(body: str) -> bool:
         or lowered.startswith("clear")
         or lowered.startswith("replace")
         or lowered.startswith("branch ")
+        or lowered.startswith("mode:")
         or lowered.startswith("loop")
         or lowered.startswith("parallel")
     )
@@ -974,6 +1033,14 @@ def _parse_branch_marker_value(branch_text: str, marker_type: str) -> tuple[str,
     if not branch_name:
         raise QueuePlanError("Branch marker must include a branch name.")
     return marker_type, branch_name
+
+
+def _parse_mode_marker_value(mode_text: str, marker_type: str) -> tuple[str, str]:
+    """Parse and validate mode marker payload."""
+    mode_value = mode_text.strip()
+    if not mode_value:
+        raise QueuePlanError("Mode marker must include a mode value.")
+    return marker_type, mode_value
 
 
 def _parse_parallel_marker_value(

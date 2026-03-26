@@ -230,6 +230,11 @@ Queue control behavior:
 - Set `QUEUE_AUTO_MAX_CHECK_ROUNDS` to cap auto-check rounds per auto-follow chain (default `10`).
 - Set `QUEUE_AUTO_JUDGE_TIMEOUT_SECONDS` to cap per-item LLM judge runtime (default `30` seconds).
 
+Inline runtime mode directives are also supported in prompt text:
+- `(mode: plan)` (or `((mode: plan))`) applies a one-prompt runtime mode override without changing stored session mode.
+- Optional wrapper form `(mode: ...) ... (end)` is supported for regular prompts when `(end)` is the final non-empty line.
+- Supported values mirror `/mode` compatibility aliases and Codex policy forms: `plan`, `default`, `ask`, `bypass`, `accept`, `delegate`, `approval <mode>`, `sandbox <mode>`.
+
 #### Structured Queue DSL (Queues + Worktree + Loops)
 
 `/q` also supports a structured DSL so one command can enqueue many prompts.
@@ -249,6 +254,7 @@ Queue submission directives supported before the first content block:
 | `FOR <name> IN ((a, b))` ... `((end))` | Repeat enclosed prompts for each value, substituting `((<name>))` or `((((<name>))))` |
 | `((parallel))` ... `((end))` | Run all enclosed prompts concurrently as one barriered queue group |
 | `((parallel<n>))` ... `((end))` | Keep up to `<n>` enclosed prompts running concurrently until the block is drained |
+| `((mode: <value>))` ... `((end))` | Apply runtime mode override to enclosed prompts (nestable; inner mode overrides outer mode) |
 | `((at <time> [action]))` | Schedule queue control action (`start`, `pause`, `resume`, `stop`) for this queue scope; default action is `resume` |
 | `((save <name>))` | Save a queue item's final output into variable `<name>` for later prompts |
 | `((p<n>output))` | Inject the final output from authored queue position `n` |
@@ -272,6 +278,7 @@ Rules:
 - Branch blocks require your current session directory to be a git repo.
 - Missing branch worktrees are auto-created for that branch when needed.
 - Parallel blocks are barriers: later queue items do not start until the parallel block fully finishes.
+- Mode blocks are fully nestable and can wrap branch/loop/parallel blocks; runtime mode changes are per-queue-item and do not update stored session mode.
 
 Structured queue plans can be submitted as normal message text or uploaded as a text file/snippet. If an uploaded file contains queue-plan markers, the bot parses it directly.
 

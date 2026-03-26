@@ -24,6 +24,7 @@ def test_contains_queue_plan_markers_detects_known_markers() -> None:
     assert contains_queue_plan_markers("(loop2)\nrun\n(end)") is True
     assert contains_queue_plan_markers("(branch feature/x)\nrun\n(end)") is True
     assert contains_queue_plan_markers("(parallel2)\nrun\n***\nmore\n(end)") is True
+    assert contains_queue_plan_markers("(mode: plan)\nrun\n(end)") is True
     assert (
         contains_queue_plan_markers("FOR name IN (joe, tod)\nrun (name)\n(end)") is True
     )
@@ -60,6 +61,30 @@ def test_parse_queue_plan_branch_supports_single_line_statement() -> None:
     prompts = parse_queue_plan_text("(branch feature/auth) run here")
     assert [item.prompt for item in prompts] == ["run here"]
     assert [item.branch_name for item in prompts] == ["feature/auth"]
+
+
+def test_parse_queue_plan_mode_block_scopes_prompts() -> None:
+    prompts = parse_queue_plan_text("(mode: plan)\nfirst\n***\nsecond\n(end)\noutside")
+    assert [item.prompt for item in prompts] == ["first", "second", "outside"]
+    assert [item.mode_directive for item in prompts] == ["plan", "plan", None]
+
+
+def test_parse_queue_plan_nested_mode_block_overrides_parent() -> None:
+    prompts = parse_queue_plan_text(
+        "(mode: plan)\n"
+        "outer\n"
+        "(mode: sandbox read-only)\n"
+        "inner\n"
+        "(end)\n"
+        "outer again\n"
+        "(end)"
+    )
+    assert [item.prompt for item in prompts] == ["outer", "inner", "outer again"]
+    assert [item.mode_directive for item in prompts] == [
+        "plan",
+        "sandbox read-only",
+        "plan",
+    ]
 
 
 def test_parse_queue_plan_loop_expands_prompts() -> None:
@@ -192,6 +217,11 @@ def test_parse_queue_plan_rejects_branch_end_without_open_block() -> None:
         QueuePlanError, match="end marker without a matching open block"
     ):
         parse_queue_plan_text("run\n(end)")
+
+
+def test_parse_queue_plan_rejects_empty_mode_marker() -> None:
+    with pytest.raises(QueuePlanError, match="Mode marker must include a mode value"):
+        parse_queue_plan_text("(mode:)\nrun")
 
 
 def test_parse_queue_plan_end_closes_innermost_open_block() -> None:

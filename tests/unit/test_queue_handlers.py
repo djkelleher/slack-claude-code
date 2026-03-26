@@ -150,7 +150,7 @@ async def test_resolve_queue_runtime_prompt_supports_named_output_references() -
     )
     item = SimpleNamespace(position=3)
 
-    resolved_prompt, model_override = await _resolve_queue_runtime_prompt(
+    resolved_prompt, model_override, mode_directive = await _resolve_queue_runtime_prompt(
         deps,
         item=item,
         channel_id="C123",
@@ -160,6 +160,7 @@ async def test_resolve_queue_runtime_prompt_supports_named_output_references() -
 
     assert resolved_prompt == "Compare first output against (missing_value)."
     assert model_override is None
+    assert mode_directive is None
 
 
 @pytest.mark.asyncio
@@ -182,7 +183,7 @@ async def test_resolve_queue_runtime_prompt_supports_saved_output_in_file_write_
     )
     item = SimpleNamespace(position=2)
 
-    resolved_prompt, model_override = await _resolve_queue_runtime_prompt(
+    resolved_prompt, model_override, mode_directive = await _resolve_queue_runtime_prompt(
         deps,
         item=item,
         channel_id="C123",
@@ -195,6 +196,7 @@ async def test_resolve_queue_runtime_prompt_supports_saved_output_in_file_write_
         == "Write the following content to notes/release.md exactly as-is:\nline one\nline two"
     )
     assert model_override is None
+    assert mode_directive is None
 
 
 @pytest.mark.asyncio
@@ -219,7 +221,7 @@ async def test_resolve_queue_runtime_prompt_supports_absolute_output_references(
     )
     item = SimpleNamespace(position=4)
 
-    resolved_prompt, model_override = await _resolve_queue_runtime_prompt(
+    resolved_prompt, model_override, mode_directive = await _resolve_queue_runtime_prompt(
         deps,
         item=item,
         channel_id="C123",
@@ -229,6 +231,7 @@ async def test_resolve_queue_runtime_prompt_supports_absolute_output_references(
 
     assert resolved_prompt == "Use first output and second output."
     assert model_override is None
+    assert mode_directive is None
 
 
 @pytest.mark.asyncio
@@ -255,6 +258,29 @@ async def test_resolve_queue_runtime_prompt_rejects_unavailable_absolute_output_
             thread_ts="123.456",
             prompt="Use (p2output).",
         )
+
+
+@pytest.mark.asyncio
+async def test_resolve_queue_runtime_prompt_extracts_mode_directive() -> None:
+    """Queue runtime prompt resolution should surface leading mode directives."""
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_completed_queue_items_before_position=AsyncMock(return_value=[])
+        )
+    )
+    item = SimpleNamespace(position=2)
+
+    resolved_prompt, model_override, mode_directive = await _resolve_queue_runtime_prompt(
+        deps,
+        item=item,
+        channel_id="C123",
+        thread_ts="123.456",
+        prompt="(mode: plan)\nReview API surface",
+    )
+
+    assert resolved_prompt == "Review API surface"
+    assert model_override is None
+    assert mode_directive == "plan"
 
 
 def test_queue_processing_log_line_keeps_full_prompt() -> None:
@@ -534,6 +560,64 @@ async def test_execute_queue_item_routes_known_slash_command_through_router():
     ]
     assert statuses == ["running", "completed"]
     client.chat_postMessage.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_queue_item_applies_mode_directive_from_metadata():
+    """Queue item metadata mode directives should override runtime session modes."""
+    item = _queue_item(74, "Run static analysis")
+    item.automation_meta = {"runtime_mode_directive": "sandbox read-only"}
+    session = Session(
+        id=1,
+        channel_id="C123",
+        model="gpt-5.3-codex",
+        sandbox_mode="workspace-write",
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, None]),
+        ),
+        codex_executor=None,
+        slash_command_router=SimpleNamespace(has_command=MagicMock(return_value=False)),
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.456"}),
+        chat_update=AsyncMock(),
+    )
+
+    seen_sessions: list[Session] = []
+
+    async def _fake_execute_for_session(**kwargs):
+        seen_sessions.append(kwargs["session"])
+        return SimpleNamespace(
+            backend="codex",
+            result=SimpleNamespace(
+                success=True,
+                output="done",
+                error=None,
+                session_id="codex-session",
+            ),
+        )
+
+    with patch(
+        "src.handlers.claude.queue.execute_for_session",
+        new=AsyncMock(side_effect=_fake_execute_for_session),
+    ):
+        result = await _execute_queue_item(
+            item,
+            channel_id="C123",
+            thread_ts="123.456",
+            scope="C123:123.456",
+            deps=deps,
+            client=client,
+            log=MagicMock(),
+            base_session=session,
+            sequence_label="1",
+            override_resume_ids={},
+        )
+
+    assert result == "completed"
+    assert seen_sessions[0].sandbox_mode == "read-only"
 
 
 @pytest.mark.asyncio

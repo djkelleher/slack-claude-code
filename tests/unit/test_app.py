@@ -10,6 +10,7 @@ import pytest
 
 from src.app import (
     _application_data_dir,
+    _extract_single_prompt_mode_directive,
     _event_dedupe_key,
     _extract_structured_queue_plan_from_uploaded_files,
     _handle_typed_model_command,
@@ -111,6 +112,13 @@ class TestEventHelpers:
         assert _is_duplicate_event(event, seen, now_monotonic=100.0, ttl_seconds=30.0) is False
         assert _is_duplicate_event(event, seen, now_monotonic=105.0, ttl_seconds=30.0) is True
         assert _is_duplicate_event(event, seen, now_monotonic=131.0, ttl_seconds=30.0) is False
+
+    def test_extract_single_prompt_mode_directive_strips_wrapper(self):
+        prompt, mode = _extract_single_prompt_mode_directive(
+            "(mode: plan)\nCreate migration plan\n(end)"
+        )
+        assert prompt == "Create migration plan"
+        assert mode == "plan"
 
 
 class TestUploadedStructuredQueuePlanDetection:
@@ -614,6 +622,64 @@ class TestStructuredQueuePlanRouting:
         assert (
             "Added 2 item(s) from structured plan."
             in client.chat_postMessage.await_args.kwargs["text"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_queues_structured_plan_mode_directive_into_item_metadata(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
+                get_running_queue_items=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="running")),
+            )
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.materialize_queue_plan_text",
+                new=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(
+                            prompt="first",
+                            working_directory_override=None,
+                            parallel_group_id=None,
+                            parallel_limit=None,
+                            mode_directive="plan",
+                        )
+                    ]
+                ),
+            ):
+                with patch("src.app.ensure_queue_processor", new=AsyncMock()):
+                    handled = await _queue_structured_plan_message(
+                        client=client,
+                        deps=deps,
+                        session=session,
+                        channel_id="C123",
+                        thread_ts="123.456",
+                        prompt="(mode: plan)\nfirst\n(end)",
+                        logger=MagicMock(),
+                    )
+
+        assert handled is True
+        deps.db.add_many_to_queue.assert_awaited_once_with(
+            session_id=1,
+            channel_id="C123",
+            thread_ts="123.456",
+            queue_entries=[
+                (
+                    "first",
+                    None,
+                    None,
+                    None,
+                    {"runtime_mode_directive": "plan"},
+                )
+            ],
+            replace_pending=False,
+            insertion_mode="append",
+            insert_at=None,
         )
 
     @pytest.mark.asyncio

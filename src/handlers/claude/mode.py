@@ -13,18 +13,12 @@ from src.codex.capabilities import (
 from src.config import config
 from src.database.models import Session
 from src.utils.formatters.command import error_message
+from src.utils.mode_directives import (
+    CLAUDE_MODE_ALIASES,
+    map_codex_alias_to_permission_mode,
+)
 
 from ..base import CommandContext, HandlerDependencies, slack_command
-
-# Mode aliases: short name -> CLI mode value
-CLAUDE_MODE_ALIASES = {
-    "bypass": config.DEFAULT_BYPASS_MODE,
-    "accept": "acceptEdits",
-    "default": "default",
-    "plan": "plan",
-    "ask": "default",
-    "delegate": "delegate",
-}
 
 # Reverse lookup for display
 CLAUDE_MODE_DISPLAY = {v: k for k, v in CLAUDE_MODE_ALIASES.items()}
@@ -212,7 +206,7 @@ async def _handle_codex_mode(
         )
         return
 
-    cli_mode = _map_codex_alias_to_permission_mode(text)
+    cli_mode = map_codex_alias_to_permission_mode(text)
     await deps.db.update_session_mode(ctx.channel_id, ctx.thread_ts, cli_mode)
     if resolved.approval_mode:
         await deps.db.update_session_approval_mode(
@@ -293,16 +287,6 @@ async def _handle_codex_direct_mode(
             }
         ],
     )
-
-
-def _map_codex_alias_to_permission_mode(alias: str) -> str:
-    """Map Codex `/mode` alias to stored permission mode."""
-    if alias == "bypass":
-        return config.DEFAULT_BYPASS_MODE
-    if alias == "plan":
-        return "plan"
-    return "default"
-
 
 def _get_codex_display_mode(permission_mode: str | None, approval_mode: str | None) -> str:
     """Get Codex mode alias for display."""

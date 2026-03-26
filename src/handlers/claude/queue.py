@@ -38,6 +38,12 @@ from src.utils.formatters.queue import (
 )
 from src.utils.formatters.streaming import processing_message
 from src.utils.model_selection import normalize_model_name
+from src.utils.mode_directives import (
+    ModeDirectiveError,
+    RuntimeModeOverrides,
+    parse_parenthesized_mode_directive_line,
+    resolve_runtime_mode_value,
+)
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from ..base import CommandContext, HandlerDependencies, slack_command
@@ -98,6 +104,7 @@ _QUEUE_TIMER_HHMM_RE = re.compile(r"^(?:[01]?\d|2[0-3]):[0-5]\d$")
 _AUTO_META_ORIGIN_MANUAL = "manual"
 _AUTO_META_ORIGIN_CHECK = "auto_check"
 _AUTO_META_ORIGIN_CONTINUE = "auto_continue"
+_RUNTIME_MODE_DIRECTIVE_META_KEY = "runtime_mode_directive"
 
 
 @dataclass(frozen=True)
@@ -158,6 +165,32 @@ def _normalize_automation_meta(raw_meta: Any) -> dict[str, Any]:
     else:
         normalized.pop("root_token", None)
     return normalized
+
+
+def _runtime_mode_directive_from_meta(raw_meta: Any) -> Optional[str]:
+    """Extract queue-item runtime mode directive from automation metadata."""
+    normalized_meta = _normalize_automation_meta(raw_meta)
+    directive = normalized_meta.get(_RUNTIME_MODE_DIRECTIVE_META_KEY)
+    if not isinstance(directive, str):
+        return None
+    cleaned = directive.strip()
+    return cleaned or None
+
+
+def _apply_runtime_mode_overrides(
+    session: Session, overrides: RuntimeModeOverrides
+) -> Session:
+    """Apply ephemeral runtime mode overrides to an execution session."""
+    replace_kwargs: dict[str, str] = {}
+    if overrides.permission_mode is not None:
+        replace_kwargs["permission_mode"] = overrides.permission_mode
+    if overrides.approval_mode is not None:
+        replace_kwargs["approval_mode"] = overrides.approval_mode
+    if overrides.sandbox_mode is not None:
+        replace_kwargs["sandbox_mode"] = overrides.sandbox_mode
+    if not replace_kwargs:
+        return session
+    return replace(session, **replace_kwargs)
 
 
 def _auto_root_token(item: Any, meta: dict[str, Any]) -> str:
@@ -650,12 +683,13 @@ def _first_matched_group(match: re.Match[str]) -> str:
 
 def _strip_runtime_directive_lines(
     prompt: str,
-) -> tuple[str, Optional[str], Optional[str]]:
+) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
     """Strip leading prompt-local directives and return prompt, model override, save target."""
     lines = prompt.splitlines()
     stripped_lines = list(lines)
     model_override: Optional[str] = None
     save_output_as: Optional[str] = None
+    mode_directive: Optional[str] = None
 
     while stripped_lines:
         current_line = stripped_lines[0].strip()
@@ -669,6 +703,11 @@ def _strip_runtime_directive_lines(
         if not match:
             break
         directive_body = _first_matched_group(match).strip()
+        parsed_mode = parse_parenthesized_mode_directive_line(current_line)
+        if parsed_mode is not None:
+            mode_directive = parsed_mode
+            stripped_lines.pop(0)
+            continue
         normalized_model = normalize_model_name(directive_body)
         lowered = directive_body.lower()
         if (
@@ -689,7 +728,7 @@ def _strip_runtime_directive_lines(
             continue
         break
 
-    return "\n".join(stripped_lines).strip(), model_override, save_output_as
+    return "\n".join(stripped_lines).strip(), model_override, save_output_as, mode_directive
 
 
 async def _resolve_queue_runtime_prompt(
@@ -699,9 +738,9 @@ async def _resolve_queue_runtime_prompt(
     channel_id: str,
     thread_ts: Optional[str],
     prompt: str,
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, Optional[str], Optional[str]]:
     """Resolve prompt-local runtime substitutions and model overrides for a queue item."""
-    stripped_prompt, model_override, _ = _strip_runtime_directive_lines(prompt)
+    stripped_prompt, model_override, _, mode_directive = _strip_runtime_directive_lines(prompt)
     try:
         completed_items = await deps.db.get_completed_queue_items_before_position(
             channel_id,
@@ -745,7 +784,7 @@ async def _resolve_queue_runtime_prompt(
     resolved_prompt = _QUEUE_NAMED_OUTPUT_REFERENCE_RE.sub(
         replace_named_output_reference, resolved_prompt
     )
-    return resolved_prompt.strip(), model_override
+    return resolved_prompt.strip(), model_override, mode_directive
 
 
 def _displayed_queue_range(
@@ -1237,7 +1276,7 @@ async def _execute_queue_item(
             )
             persist_session_ids = False
 
-        resolved_prompt, model_override = await _resolve_queue_runtime_prompt(
+        resolved_prompt, model_override, prompt_mode_directive = await _resolve_queue_runtime_prompt(
             deps,
             item=item,
             channel_id=channel_id,
@@ -1247,6 +1286,23 @@ async def _execute_queue_item(
         effective_prompt = resolved_prompt or effective_prompt
         if model_override:
             effective_session = replace(effective_session, model=model_override)
+        meta_mode_directive = _runtime_mode_directive_from_meta(
+            _result_field(item, "automation_meta", None)
+        )
+        selected_mode_directive = prompt_mode_directive or meta_mode_directive
+        if selected_mode_directive:
+            try:
+                runtime_overrides = resolve_runtime_mode_value(
+                    selected_mode_directive,
+                    backend=effective_session.get_backend(),
+                )
+            except ModeDirectiveError as mode_error:
+                raise ValueError(
+                    f"Invalid mode directive `(mode: {selected_mode_directive})`: {mode_error}"
+                ) from mode_error
+            effective_session = _apply_runtime_mode_overrides(
+                effective_session, runtime_overrides
+            )
 
         route = await execute_for_session(
             deps=deps,
@@ -1884,6 +1940,15 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     working_directory=session.working_directory,
                     git_service=git_service,
                 )
+
+                def build_entry_metadata(
+                    item_mode_directive: Optional[str],
+                    base_meta: Optional[dict[str, object]] = None,
+                ) -> Optional[dict[str, object]]:
+                    merged: dict[str, object] = dict(base_meta or {})
+                    if item_mode_directive:
+                        merged[_RUNTIME_MODE_DIRECTIVE_META_KEY] = item_mode_directive
+                    return merged or None
             except QueuePlanError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -1899,26 +1964,44 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                         item.working_directory_override,
                         item.parallel_group_id,
                         item.parallel_limit,
-                        _build_auto_meta(
-                            root_token="",
-                            origin=_AUTO_META_ORIGIN_MANUAL,
-                            continue_round=0,
-                            check_round=0,
-                            auto_each=True,
+                        build_entry_metadata(
+                            _result_field(item, "mode_directive", None),
+                            _build_auto_meta(
+                                root_token="",
+                                origin=_AUTO_META_ORIGIN_MANUAL,
+                                continue_round=0,
+                                check_round=0,
+                                auto_each=True,
+                            ),
                         ),
                     )
                     for item in materialized_prompts
                 ]
             else:
-                queue_entries = [
-                    (
-                        item.prompt,
-                        item.working_directory_override,
-                        item.parallel_group_id,
-                        item.parallel_limit,
+                queue_entries = []
+                for item in materialized_prompts:
+                    entry_meta = build_entry_metadata(
+                        _result_field(item, "mode_directive", None)
                     )
-                    for item in materialized_prompts
-                ]
+                    if entry_meta is None:
+                        queue_entries.append(
+                            (
+                                item.prompt,
+                                item.working_directory_override,
+                                item.parallel_group_id,
+                                item.parallel_limit,
+                            )
+                        )
+                    else:
+                        queue_entries.append(
+                            (
+                                item.prompt,
+                                item.working_directory_override,
+                                item.parallel_group_id,
+                                item.parallel_limit,
+                                entry_meta,
+                            )
+                        )
         else:
             queue_entries = [(ctx.text, None, None, None)]
 
