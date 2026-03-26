@@ -186,11 +186,11 @@ class _AppServerConnection:
 
         return await future
 
-    async def send_result(self, request_id: int, payload: dict) -> None:
+    async def send_result(self, request_id: Any, payload: dict) -> None:
         """Send a JSON-RPC success response."""
         await self._send_rpc({"jsonrpc": "2.0", "id": request_id, "result": payload})
 
-    async def send_error(self, request_id: int, code: int, message: str) -> None:
+    async def send_error(self, request_id: Any, code: int, message: str) -> None:
         """Send a JSON-RPC error response."""
         await self._send_rpc(
             {
@@ -279,7 +279,7 @@ class _AppServerConnection:
                 handler = self._server_request_handler
             if handler is None:
                 await self.send_error(
-                    int(response_id),
+                    response_id,
                     -32601,
                     f"Unsupported app-server request method: {normalized_method}",
                 )
@@ -917,7 +917,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if not isinstance(response_payload, dict):
                     response_payload = self._empty_user_input_response(questions)
 
-                await connection.send_result(int(request_id), response_payload)
+                await connection.send_result(request_id, response_payload)
 
                 tool_result_msg = parser.parse_line(
                     json.dumps(
@@ -937,7 +937,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 tool_name = str(params.get("tool") or "unknown")
                 call_id = str(params.get("callId") or f"request_{request_id}")
                 response_payload = self._dynamic_tool_call_not_supported_response(tool_name)
-                await connection.send_result(int(request_id), response_payload)
+                await connection.send_result(request_id, response_payload)
 
                 tool_result_msg = parser.parse_line(
                     json.dumps(
@@ -964,11 +964,11 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if not self._is_valid_approval_response(method, response_payload):
                     response_payload = default_approval_payload(method, approval)
 
-                await connection.send_result(int(request_id), response_payload)
+                await connection.send_result(request_id, response_payload)
                 return
 
             await connection.send_error(
-                int(request_id),
+                request_id,
                 -32601,
                 f"Unsupported app-server request method: {method}",
             )
