@@ -2,7 +2,7 @@
 
 import re
 
-from src.claude.streaming import ToolActivity
+from src.claude.sdk_stream_adapter import ToolActivity
 from src.utils.formatters import tool_blocks
 
 

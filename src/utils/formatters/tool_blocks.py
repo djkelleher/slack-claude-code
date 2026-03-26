@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from .base import MAX_TEXT_LENGTH
 
 if TYPE_CHECKING:
-    from src.claude.streaming import ToolActivity
+    from src.claude.sdk_stream_adapter import ToolActivity
 
 
 def _split_code_into_blocks(

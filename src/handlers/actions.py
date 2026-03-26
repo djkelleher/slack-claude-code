@@ -10,7 +10,7 @@ from slack_bolt.async_app import AsyncApp
 from src.approval.handler import PermissionManager
 from src.approval.plan_manager import PlanApprovalManager
 from src.approval.slack_ui import build_approval_result_blocks, build_plan_result_blocks
-from src.claude.streaming import ToolActivity
+from src.claude.sdk_stream_adapter import ToolActivity
 from src.config import config
 from src.git.service import GitError, GitService
 from src.question.manager import QuestionManager

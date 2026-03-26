@@ -13,7 +13,7 @@ from src.config import PLANS_DIR, config
 from src.utils.formatters.streaming import processing_fallback_text, streaming_update
 
 if TYPE_CHECKING:
-    from src.claude.streaming import ToolActivity
+    from src.claude.sdk_stream_adapter import ToolActivity
 
 # Number of consecutive failures before triggering error callback
 MAX_CONSECUTIVE_UPDATE_FAILURES = 3

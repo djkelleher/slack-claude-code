@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.claude.streaming import ToolActivity, _concat_with_spacing
+from src.claude.sdk_stream_adapter import ToolActivity
 from src.config import PLANS_DIR
+from src.utils.stream_models import concat_with_spacing as _concat_with_spacing
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 

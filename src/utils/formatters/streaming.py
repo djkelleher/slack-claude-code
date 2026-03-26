@@ -11,7 +11,7 @@ from .base import (
 from .tool_blocks import format_tool_activity_section
 
 if TYPE_CHECKING:
-    from src.claude.streaming import ToolActivity
+    from src.claude.sdk_stream_adapter import ToolActivity
 
 
 _ELLIPSIS = "..."

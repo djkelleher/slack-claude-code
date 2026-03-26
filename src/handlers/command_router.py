@@ -457,7 +457,6 @@ async def _run_workspace_follow_up(
         pause_on_questions=pause_on_questions,
         on_plan_approved=None,
         on_interaction_resumed=None,
-        allow_live_pty=False,
         plan_mode_directive=None,
     )
 
@@ -996,7 +995,6 @@ async def _execute_codex_backend(
                     model=model,
                     channel_id=channel_id,
                     thread_ts=thread_ts,
-                    allow_live_pty=False,
                 )
 
             try:
@@ -1143,7 +1141,6 @@ async def _execute_claude_backend(
     pause_on_questions: bool,
     on_plan_approved: Any,
     on_interaction_resumed: Any,
-    allow_live_pty: bool,
     plan_mode_directive: Optional[PlanModeDirective],
 ) -> Any:
     """Execute prompt against Claude backend, including questions and plan approval."""
@@ -1195,7 +1192,6 @@ async def _execute_claude_backend(
             model=model_override or session.model,
             channel_id=channel_id,
             thread_ts=thread_ts,
-            allow_live_pty=allow_live_pty,
         )
         if result.session_id and persist_ids and persist_session_ids:
             await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
@@ -1477,7 +1473,6 @@ async def execute_for_session(
     session_scope_override: Optional[str] = None,
     on_plan_approved: Any = None,
     on_interaction_resumed: Any = None,
-    allow_live_pty: bool = False,
     plan_mode_directive: Optional[PlanModeDirective] = None,
 ) -> CommandRouteResult:
     """Execute a prompt with the correct backend and persist resumed session IDs."""
@@ -1568,7 +1563,6 @@ async def execute_for_session(
                 pause_on_questions=pause_on_questions,
                 on_plan_approved=on_plan_approved,
                 on_interaction_resumed=on_interaction_resumed,
-                allow_live_pty=allow_live_pty,
                 plan_mode_directive=plan_mode_directive,
             )
 

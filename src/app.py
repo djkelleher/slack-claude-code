@@ -25,7 +25,7 @@ from slack_bolt.async_app import AsyncApp
 from slack_sdk.errors import SlackApiError
 
 from src.approval.plan_manager import PlanApprovalManager
-from src.claude.subprocess_executor import SubprocessExecutor as ClaudeExecutor
+from src.claude.sdk_executor import SDKExecutor as ClaudeExecutor
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
 from src.config import config, get_backend_for_model
 from src.database.migrations import init_database
@@ -697,50 +697,45 @@ async def _route_claude_message_to_active_execution_or_queue(
     await deps.db.update_command_status(cmd_history.id, "running")
 
     steer_error: Optional[str] = None
-    if deps.executor.is_live_pty_enabled() and await deps.executor.has_active_live_pty(
-        session_scope
-    ):
-        if runtime_mode_directive is None:
-            try:
-                steer_result = await deps.executor.steer_active_execution(session_scope, prompt)
-            except Exception as e:
-                steer_error = str(e)
-                logger.error(
-                    f"Failed to steer active Claude PTY turn in scope {session_scope}: {steer_error}"
-                )
-            else:
-                if steer_result.success:
-                    await deps.db.update_command_status(
-                        cmd_history.id,
-                        "completed",
-                        output=(
-                            "Routed to active Claude PTY turn via live input."
-                            f" turn_id={steer_result.turn_id or 'unknown'}"
-                        ),
-                    )
-                    await client.chat_postMessage(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        text="Message merged into active Claude execution.",
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": (
-                                        ":compass: Routed your message to the active Claude PTY run "
-                                        "using live input injection."
-                                    ),
-                                },
-                            }
-                        ],
-                    )
-                    return True
-                steer_error = steer_result.error or "unknown error"
-        else:
-            steer_error = (
-                "Active Claude PTY steering is skipped when `(mode: ...)` overrides are present."
+    if runtime_mode_directive is None:
+        try:
+            steer_result = await deps.executor.steer_active_turn(session_scope, prompt)
+        except Exception as e:
+            steer_error = str(e)
+            logger.error(
+                f"Failed to steer active Claude turn in scope {session_scope}: {steer_error}"
             )
+        else:
+            if steer_result.success:
+                await deps.db.update_command_status(
+                    cmd_history.id,
+                    "completed",
+                    output=(
+                        "Routed to active Claude turn via steer."
+                        f" turn_id={steer_result.turn_id or 'unknown'}"
+                    ),
+                )
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text="Message merged into active Claude execution.",
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": (
+                                    ":compass: Routed your message to the active Claude "
+                                    "execution via steer."
+                                ),
+                            },
+                        }
+                    ],
+                )
+                return True
+            steer_error = steer_result.error or "unknown error"
+    else:
+        steer_error = "Active Claude steering is skipped when `(mode: ...)` overrides are present."
 
     try:
         queue_meta = (

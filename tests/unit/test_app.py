@@ -401,8 +401,7 @@ class TestClaudeActiveExecutionRouting:
         deps = SimpleNamespace(
             executor=SimpleNamespace(
                 has_active_execution=AsyncMock(return_value=False),
-                is_live_pty_enabled=MagicMock(return_value=False),
-                has_active_live_pty=AsyncMock(return_value=False),
+                steer_active_turn=AsyncMock(),
             ),
             db=SimpleNamespace(
                 add_command=AsyncMock(),
@@ -429,13 +428,13 @@ class TestClaudeActiveExecutionRouting:
 
     @pytest.mark.asyncio
     async def test_queues_message_when_active_execution_exists(self):
-        """Active Claude execution should auto-queue follow-up messages."""
+        """Active Claude execution should attempt steer then auto-queue on failure."""
         session = SimpleNamespace(id=1)
+        steer_result = SimpleNamespace(success=False, error="No active turn for scope")
         deps = SimpleNamespace(
             executor=SimpleNamespace(
                 has_active_execution=AsyncMock(return_value=True),
-                is_live_pty_enabled=MagicMock(return_value=False),
-                has_active_live_pty=AsyncMock(return_value=False),
+                steer_active_turn=AsyncMock(return_value=steer_result),
             ),
             db=SimpleNamespace(
                 add_command=AsyncMock(return_value=SimpleNamespace(id=21)),
@@ -457,12 +456,17 @@ class TestClaudeActiveExecutionRouting:
             )
 
         assert handled is True
+        deps.executor.steer_active_turn.assert_awaited_once()
         deps.db.add_to_queue.assert_awaited_once()
         mock_ensure_queue.assert_awaited_once()
         deps.db.update_command_status.assert_any_await(
             21,
             "completed",
-            output="Active Claude execution detected. Auto-queued item #88.",
+            output=(
+                "Active Claude execution detected "
+                "(steer failed: No active turn for scope). "
+                "Auto-queued item #88."
+            ),
         )
 
     @pytest.mark.asyncio
@@ -471,11 +475,11 @@ class TestClaudeActiveExecutionRouting:
     ):
         """Queued Claude fallback should report queue startup failures instead of going silent."""
         session = SimpleNamespace(id=1)
+        steer_result = SimpleNamespace(success=False, error="No active turn")
         deps = SimpleNamespace(
             executor=SimpleNamespace(
                 has_active_execution=AsyncMock(return_value=True),
-                is_live_pty_enabled=MagicMock(return_value=False),
-                has_active_live_pty=AsyncMock(return_value=False),
+                steer_active_turn=AsyncMock(return_value=steer_result),
             ),
             db=SimpleNamespace(
                 add_command=AsyncMock(return_value=SimpleNamespace(id=22)),
@@ -504,7 +508,9 @@ class TestClaudeActiveExecutionRouting:
             22,
             "failed",
             output=(
-                "Active Claude execution detected. Auto-queued item #89, "
+                "Active Claude execution detected "
+                "(steer failed: No active turn). "
+                "Auto-queued item #89, "
                 "but queue processor startup failed: queue task start failed"
             ),
             error_message="queue task start failed",
@@ -515,11 +521,11 @@ class TestClaudeActiveExecutionRouting:
     async def test_reports_queue_failure_when_active_execution_exists(self):
         """Queue fallback failures should update command status and notify user."""
         session = SimpleNamespace(id=1)
+        steer_result = SimpleNamespace(success=False, error="No active turn")
         deps = SimpleNamespace(
             executor=SimpleNamespace(
                 has_active_execution=AsyncMock(return_value=True),
-                is_live_pty_enabled=MagicMock(return_value=False),
-                has_active_live_pty=AsyncMock(return_value=False),
+                steer_active_turn=AsyncMock(return_value=steer_result),
             ),
             db=SimpleNamespace(
                 add_command=AsyncMock(return_value=SimpleNamespace(id=22)),
@@ -552,16 +558,14 @@ class TestClaudeActiveExecutionRouting:
         assert client.chat_postMessage.await_count >= 1
 
     @pytest.mark.asyncio
-    async def test_routes_to_active_live_pty_when_steer_succeeds(self):
-        """Active live PTY turn should consume follow-up message via steer."""
+    async def test_routes_to_active_turn_when_steer_succeeds(self):
+        """Active turn should consume follow-up message via steer."""
         session = SimpleNamespace(id=1)
         deps = SimpleNamespace(
             executor=SimpleNamespace(
                 has_active_execution=AsyncMock(return_value=True),
-                is_live_pty_enabled=MagicMock(return_value=True),
-                has_active_live_pty=AsyncMock(return_value=True),
-                steer_active_execution=AsyncMock(
-                    return_value=SimpleNamespace(success=True, turn_id="pty-turn-1", error=None)
+                steer_active_turn=AsyncMock(
+                    return_value=SimpleNamespace(success=True, turn_id="turn-1", error=None)
                 ),
             ),
             db=SimpleNamespace(
@@ -587,19 +591,17 @@ class TestClaudeActiveExecutionRouting:
         deps.db.update_command_status.assert_any_await(
             31,
             "completed",
-            output="Routed to active Claude PTY turn via live input. turn_id=pty-turn-1",
+            output="Routed to active Claude turn via steer. turn_id=turn-1",
         )
 
     @pytest.mark.asyncio
-    async def test_queues_when_active_live_pty_steer_fails(self):
-        """Live PTY steer failure should fall back to queue processing."""
+    async def test_queues_when_steer_fails(self):
+        """Steer failure should fall back to queue processing."""
         session = SimpleNamespace(id=1)
         deps = SimpleNamespace(
             executor=SimpleNamespace(
                 has_active_execution=AsyncMock(return_value=True),
-                is_live_pty_enabled=MagicMock(return_value=True),
-                has_active_live_pty=AsyncMock(return_value=True),
-                steer_active_execution=AsyncMock(
+                steer_active_turn=AsyncMock(
                     return_value=SimpleNamespace(success=False, turn_id=None, error="busy")
                 ),
             ),

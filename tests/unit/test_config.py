@@ -138,11 +138,9 @@ class TestConfig:
         """Queue pause-on-question should be disabled by default."""
         assert config.QUEUE_PAUSE_ON_QUESTIONS is False
 
-    def test_default_live_pty_setting_enabled(self):
-        """Live PTY mode should be enabled by default."""
-        assert config.CLAUDE_LIVE_PTY_ENABLED is True
-        assert config.CLAUDE_LIVE_PTY_MAX_OUTPUT_CHARS == 500000
-        assert config.CLAUDE_LIVE_PTY_JANITOR_INTERVAL_SECONDS == 30.0
+    def test_default_sdk_idle_timeout(self):
+        """SDK idle timeout should default to 15 minutes."""
+        assert config.CLAUDE_SDK_IDLE_TIMEOUT_SECONDS == 900
 
     def test_codex_approval_modes_include_v2_values(self):
         """Codex approval mode list matches supported app-server v2 values."""

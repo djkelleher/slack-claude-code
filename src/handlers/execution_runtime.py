@@ -53,7 +53,6 @@ async def execute_prompt_with_runtime(
     user_id: Optional[str] = None,
     api_with_retry: Optional[Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]] = None,
     processing_text: Optional[str] = None,
-    allow_live_pty: bool = True,
     plan_mode_directive: Optional[PlanModeDirective] = None,
 ) -> ExecutionDeliveryResult:
     """Execute a prompt through backend router and deliver final Slack output."""
@@ -148,7 +147,6 @@ async def execute_prompt_with_runtime(
             logger=logger,
             on_plan_approved=on_plan_approved,
             on_interaction_resumed=on_interaction_resumed,
-            allow_live_pty=allow_live_pty,
             plan_mode_directive=plan_mode_directive,
         )
         result = route.result
