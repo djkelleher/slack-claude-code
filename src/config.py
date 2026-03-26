@@ -441,6 +441,8 @@ class Config(BaseSettings):
     CLAUDE_LIVE_PTY_SETTLE_SECONDS: float = 2.5
     CLAUDE_LIVE_PTY_CANCEL_SETTLE_SECONDS: float = 0.75
     CLAUDE_LIVE_PTY_PROMPTLESS_IDLE_FALLBACK_SECONDS: float = 12.0
+    CLAUDE_LIVE_PTY_MAX_OUTPUT_CHARS: int = 500000
+    CLAUDE_LIVE_PTY_JANITOR_INTERVAL_SECONDS: float = 30.0
 
     # Default permission mode constant (used as fallback when invalid mode specified)
     DEFAULT_BYPASS_MODE: str = "bypassPermissions"

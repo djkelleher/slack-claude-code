@@ -203,6 +203,10 @@ class SubprocessExecutor(ProcessExecutorBase):
         )
         added_dirs = await self._get_session_added_dirs(db_session_id)
         try:
+            await self._live_pty_manager.ensure_idle_janitor(
+                idle_timeout_seconds=config.CLAUDE_LIVE_PTY_IDLE_TIMEOUT_SECONDS,
+                interval_seconds=config.CLAUDE_LIVE_PTY_JANITOR_INTERVAL_SECONDS,
+            )
             pty_result = await self._live_pty_manager.execute_turn(
                 session_scope=session_scope,
                 prompt=prompt,
@@ -220,6 +224,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 promptless_idle_fallback_seconds=(
                     config.CLAUDE_LIVE_PTY_PROMPTLESS_IDLE_FALLBACK_SECONDS
                 ),
+                max_output_chars=config.CLAUDE_LIVE_PTY_MAX_OUTPUT_CHARS,
                 idle_session_timeout_seconds=config.CLAUDE_LIVE_PTY_IDLE_TIMEOUT_SECONDS,
                 log_prefix=log_prefix,
             )

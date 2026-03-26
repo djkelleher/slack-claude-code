@@ -16,7 +16,8 @@ from src.config import parse_claude_model_effort
 from src.utils.stream_models import StreamMessage
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-PROMPT_MARKER_RE = re.compile(r"(?:^|\n)\s*(?:>|❯)\s?$")
+PROMPT_MARKER_RE = re.compile(r"(?:^|\n)[^\S\n]{0,4}(?:>|❯) {1,2}$")
+TRUNCATION_NOTICE = "_Output truncated to recent PTY buffer window._"
 
 
 @dataclass
@@ -75,6 +76,10 @@ class ClaudeLivePtyManager:
     def __init__(self) -> None:
         self._sessions: dict[str, _LivePtySession] = {}
         self._sessions_lock = asyncio.Lock()
+        self._scope_locks: dict[str, asyncio.Lock] = {}
+        self._janitor_task: Optional[asyncio.Task[None]] = None
+        self._janitor_idle_timeout_seconds: int = 0
+        self._janitor_interval_seconds: float = 30.0
 
     async def has_active_run(self, session_scope: str) -> bool:
         """Return True when the scope currently has an active PTY turn."""
@@ -115,6 +120,7 @@ class ClaudeLivePtyManager:
         settle_seconds: float,
         cancel_settle_seconds: float,
         promptless_idle_fallback_seconds: float,
+        max_output_chars: int,
         idle_session_timeout_seconds: int,
         log_prefix: str,
     ) -> PtyTurnResult:
@@ -136,7 +142,7 @@ class ClaudeLivePtyManager:
             session.cancel_requested = False
             session.last_activity = monotonic()
             started_at = monotonic()
-            output_chunks: list[str] = []
+            output_buffer = ""
             echo_suppressed = False
             got_output = False
             last_output_at = started_at
@@ -144,6 +150,7 @@ class ClaudeLivePtyManager:
             cancel_seen_at: Optional[float] = None
             prompt_seen = False
             tail_window = ""
+            output_truncated = False
 
             try:
                 await self._drain_pending_output(session, timeout_seconds=0.15)
@@ -217,15 +224,24 @@ class ClaudeLivePtyManager:
                     if not normalized:
                         continue
 
-                    output_chunks.append(normalized)
+                    output_buffer += normalized
+                    if max_output_chars > 0 and len(output_buffer) > max_output_chars:
+                        output_buffer = output_buffer[-max_output_chars:]
+                        output_truncated = True
                     if on_chunk:
                         await on_chunk(
                             StreamMessage(type="assistant", content=normalized)
                         )
 
                 finished_at = monotonic()
-                raw_output = "".join(output_chunks)
+                raw_output = output_buffer
                 output = self._finalize_output_text(raw_output)
+                if output_truncated:
+                    output = (
+                        f"{TRUNCATION_NOTICE}\n\n{output}"
+                        if output
+                        else TRUNCATION_NOTICE
+                    )
                 session.turn_count += 1
 
                 if was_cancelled:
@@ -298,7 +314,7 @@ class ClaudeLivePtyManager:
                     self._sessions.pop(scope, None)
                     to_close.append(session)
                     continue
-                if session.is_active():
+                if session.is_active() or session.turn_lock.locked():
                     continue
                 if (now - session.last_activity) >= float(idle_timeout_seconds):
                     self._sessions.pop(scope, None)
@@ -308,11 +324,45 @@ class ClaudeLivePtyManager:
 
     async def shutdown(self) -> None:
         """Terminate all PTY processes and clear session registry."""
+        await self.stop_idle_janitor()
         async with self._sessions_lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
         for session in sessions:
             await self._terminate_session(session)
+
+    async def ensure_idle_janitor(
+        self,
+        *,
+        idle_timeout_seconds: int,
+        interval_seconds: float,
+    ) -> None:
+        """Start or reconfigure the background idle-session janitor."""
+        self._janitor_idle_timeout_seconds = max(1, int(idle_timeout_seconds))
+        self._janitor_interval_seconds = max(0.2, float(interval_seconds))
+        if self._janitor_task and not self._janitor_task.done():
+            return
+        self._janitor_task = asyncio.create_task(self._idle_janitor_loop())
+
+    async def stop_idle_janitor(self) -> None:
+        """Stop the background idle-session janitor task."""
+        task = self._janitor_task
+        self._janitor_task = None
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _idle_janitor_loop(self) -> None:
+        """Periodically close stale idle PTY sessions."""
+        try:
+            while True:
+                await asyncio.sleep(self._janitor_interval_seconds)
+                await self.close_idle_sessions(self._janitor_idle_timeout_seconds)
+        except asyncio.CancelledError:
+            return
 
     async def _ensure_session(
         self,
@@ -330,82 +380,120 @@ class ClaudeLivePtyManager:
         requested_resume = (
             resume_session_id if self._is_uuid(resume_session_id) else None
         )
+        scope_lock = await self._get_scope_lock(session_scope)
+        sessions_to_close: list[_LivePtySession] = []
 
-        async with self._sessions_lock:
-            existing = self._sessions.get(session_scope)
+        async with scope_lock:
+            while True:
+                async with self._sessions_lock:
+                    existing = self._sessions.get(session_scope)
 
-            if existing and not existing.is_running():
-                self._sessions.pop(session_scope, None)
-                await self._terminate_session(existing)
-                existing = None
+                    if existing and not existing.is_running():
+                        self._sessions.pop(session_scope, None)
+                        sessions_to_close.append(existing)
+                        existing = None
 
-            if existing:
-                reset_requested = requested_resume is None and existing.turn_count > 0
-                compatibility_mismatch = (
-                    existing.working_directory != working_directory
-                    or existing.model != model
-                    or existing.permission_mode != permission_mode
-                    or existing.added_dirs != normalized_dirs
-                    or (
-                        requested_resume is not None
-                        and existing.session_id != requested_resume
-                    )
+                    if existing:
+                        reset_requested = (
+                            requested_resume is None and existing.turn_count > 0
+                        )
+                        compatibility_mismatch = (
+                            existing.working_directory != working_directory
+                            or existing.model != model
+                            or existing.permission_mode != permission_mode
+                            or existing.added_dirs != normalized_dirs
+                            or (
+                                requested_resume is not None
+                                and existing.session_id != requested_resume
+                            )
+                        )
+                        if reset_requested or compatibility_mismatch:
+                            self._sessions.pop(session_scope, None)
+                            sessions_to_close.append(existing)
+                            existing = None
+
+                    if existing:
+                        return existing
+
+                while sessions_to_close:
+                    stale = sessions_to_close.pop()
+                    await self._terminate_session(stale)
+
+                session = await self._spawn_session(
+                    session_scope=session_scope,
+                    working_directory=working_directory,
+                    requested_resume=requested_resume,
+                    model=model,
+                    permission_mode=permission_mode,
+                    normalized_dirs=normalized_dirs,
+                    log_prefix=log_prefix,
                 )
-                if reset_requested or compatibility_mismatch:
-                    self._sessions.pop(session_scope, None)
-                    await self._terminate_session(existing)
-                    existing = None
-
-            if existing:
-                return existing
-
-            master_fd, slave_fd = os.openpty()
-            os.set_blocking(master_fd, False)
-            session_id = requested_resume or str(uuid.uuid4())
-
-            cmd = ["claude"]
-            if model:
-                claude_model, claude_effort = parse_claude_model_effort(model)
-                cmd.extend(["--model", claude_model])
-                if claude_effort:
-                    cmd.extend(["--effort", claude_effort])
-            cmd.extend(["--permission-mode", permission_mode])
-            for directory in normalized_dirs:
-                cmd.extend(["--add-dir", directory])
-            if requested_resume:
-                cmd.extend(["--resume", requested_resume])
-            else:
-                cmd.extend(["--session-id", session_id])
-
-            logger.info(
-                f"{log_prefix}Starting live Claude PTY for scope {session_scope} "
-                f"(session_id={session_id})"
-            )
-            try:
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdin=slave_fd,
-                    stdout=slave_fd,
-                    stderr=slave_fd,
-                    cwd=working_directory,
-                )
-            finally:
-                os.close(slave_fd)
-
-            session = _LivePtySession(
-                scope=session_scope,
-                process=process,
-                master_fd=master_fd,
-                session_id=session_id,
-                working_directory=working_directory,
-                model=model,
-                permission_mode=permission_mode,
-                added_dirs=normalized_dirs,
-            )
-            self._sessions[session_scope] = session
+                async with self._sessions_lock:
+                    current = self._sessions.get(session_scope)
+                    if current is None:
+                        self._sessions[session_scope] = session
+                        break
+                await self._terminate_session(session)
+                # Another task won insertion race despite scope lock; retry safely.
 
         await self._drain_pending_output(session, timeout_seconds=0.5)
         return session
+
+    async def _spawn_session(
+        self,
+        *,
+        session_scope: str,
+        working_directory: str,
+        requested_resume: Optional[str],
+        model: Optional[str],
+        permission_mode: str,
+        normalized_dirs: tuple[str, ...],
+        log_prefix: str,
+    ) -> _LivePtySession:
+        """Spawn a new interactive Claude PTY process."""
+        master_fd, slave_fd = os.openpty()
+        os.set_blocking(master_fd, False)
+        session_id = requested_resume or str(uuid.uuid4())
+
+        cmd = ["claude"]
+        if model:
+            claude_model, claude_effort = parse_claude_model_effort(model)
+            cmd.extend(["--model", claude_model])
+            if claude_effort:
+                cmd.extend(["--effort", claude_effort])
+        cmd.extend(["--permission-mode", permission_mode])
+        for directory in normalized_dirs:
+            cmd.extend(["--add-dir", directory])
+        if requested_resume:
+            cmd.extend(["--resume", requested_resume])
+        else:
+            cmd.extend(["--session-id", session_id])
+
+        logger.info(
+            f"{log_prefix}Starting live Claude PTY for scope {session_scope} "
+            f"(session_id={session_id})"
+        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd=working_directory,
+            )
+        finally:
+            os.close(slave_fd)
+
+        return _LivePtySession(
+            scope=session_scope,
+            process=process,
+            master_fd=master_fd,
+            session_id=session_id,
+            working_directory=working_directory,
+            model=model,
+            permission_mode=permission_mode,
+            added_dirs=normalized_dirs,
+        )
 
     async def _terminate_session(self, session: _LivePtySession) -> None:
         """Stop process and close PTY file descriptors for one session."""
@@ -515,7 +603,16 @@ class ClaudeLivePtyManager:
     @staticmethod
     def _tail_has_prompt_marker(text: str) -> bool:
         """Return True when terminal tail looks like Claude's input prompt."""
-        return bool(PROMPT_MARKER_RE.search(text.rstrip()))
+        return bool(PROMPT_MARKER_RE.search(text))
+
+    async def _get_scope_lock(self, session_scope: str) -> asyncio.Lock:
+        """Return scope-scoped lock used for PTY session creation/replacement."""
+        async with self._sessions_lock:
+            lock = self._scope_locks.get(session_scope)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._scope_locks[session_scope] = lock
+            return lock
 
     @staticmethod
     def _is_uuid(value: Optional[str]) -> bool:
