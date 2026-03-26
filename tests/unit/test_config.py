@@ -130,6 +130,10 @@ class TestConfig:
         assert config.SLACK_BLOCK_TEXT_LIMIT == 2900
         assert config.SLACK_FILE_THRESHOLD == 2000
 
+    def test_default_plan_review_mention(self):
+        """Plan review prompts should notify the channel by default."""
+        assert config.SLACK_PLAN_MENTION == "@channel"
+
     def test_default_queue_question_pause_setting(self):
         """Queue pause-on-question should be disabled by default."""
         assert config.QUEUE_PAUSE_ON_QUESTIONS is False

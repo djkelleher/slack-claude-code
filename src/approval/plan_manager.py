@@ -14,6 +14,7 @@ from typing import Optional
 from loguru import logger
 from slack_sdk.web.async_client import AsyncWebClient
 
+from src.config import config
 from src.utils.pending_manager import PendingManager
 from src.utils.slack_helpers import post_text_snippet, sanitize_snippet_content
 
@@ -45,6 +46,14 @@ class PlanApprovalManager:
     """
 
     _pending = PendingManager[PendingPlanApproval]()
+
+    @staticmethod
+    def _mention_prefix() -> str:
+        """Return normalized mention prefix for plan review prompts."""
+        mention = (config.SLACK_PLAN_MENTION or "").strip()
+        if mention:
+            return f"{mention} "
+        return ""
 
     @classmethod
     async def request_approval(
@@ -124,7 +133,7 @@ class PlanApprovalManager:
                 channel=channel_id,
                 thread_ts=thread_ts,
                 blocks=blocks,
-                text="Plan ready for review",
+                text=f"{cls._mention_prefix()}Plan ready for review".strip(),
             )
 
             approval.message_ts = result.get("ts")

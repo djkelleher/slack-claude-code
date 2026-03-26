@@ -421,6 +421,7 @@ class Config(BaseSettings):
     SLACK_APP_TOKEN: str = ""
     SLACK_SIGNING_SECRET: str = ""
     SLACK_QUESTION_MENTION: str = ""
+    SLACK_PLAN_MENTION: str = "@channel"
 
     # Database - defaults to ~/.slack-claude-code/
     DATABASE_PATH: str = Field(
