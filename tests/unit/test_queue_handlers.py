@@ -574,7 +574,7 @@ async def test_execute_queue_item_routes_known_slash_command_through_router():
 async def test_execute_queue_item_applies_mode_directive_from_metadata():
     """Queue item metadata mode directives should override runtime session modes."""
     item = _queue_item(74, "Run static analysis")
-    item.automation_meta = {"runtime_mode_directive": "sandbox read-only"}
+    item.automation_meta = {"runtime_mode_directive": "sandbox: read-only"}
     session = Session(
         id=1,
         channel_id="C123",
@@ -632,7 +632,7 @@ async def test_execute_queue_item_applies_mode_directive_from_metadata():
 async def test_execute_queue_item_passes_plan_mode_directive_to_router():
     """Queue mode directives should pass parsed `splan` strategy into command router."""
     item = _queue_item(
-        75, "(mode: splan: cs46h, g54h; sandbox read-only)\nRun static analysis"
+        75, "(mode: splan cs46h, g54h; sandbox: read-only)\nRun static analysis"
     )
     session = Session(
         id=1,

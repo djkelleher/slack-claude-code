@@ -131,10 +131,10 @@ class TestEventHelpers:
 
     def test_extract_single_prompt_mode_directive_keeps_semicolon_subdirectives(self):
         prompt, mode = _extract_single_prompt_mode_directive(
-            "(mode: splan: cs46h, g54h; sandbox read-only)\nCreate migration plan"
+            "(mode: splan cs46h, g54h; sandbox: read-only)\nCreate migration plan"
         )
         assert prompt == "Create migration plan"
-        assert mode == "splan: cs46h, g54h; sandbox read-only"
+        assert mode == "splan cs46h, g54h; sandbox: read-only"
 
 
 class TestUploadedStructuredQueuePlanDetection:

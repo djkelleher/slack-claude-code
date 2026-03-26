@@ -98,11 +98,18 @@ def _resolve_single_mode_token(token: str, *, backend: str) -> RuntimeModeOverri
         raise ModeDirectiveError("Mode directive must include a mode value.")
 
     if normalized.startswith("approval "):
+        raise ModeDirectiveError(
+            "Unsupported `approval` syntax. Use `approval: <mode>`."
+        )
+    if normalized.startswith("sandbox "):
+        raise ModeDirectiveError("Unsupported `sandbox` syntax. Use `sandbox: <mode>`.")
+
+    if normalized.startswith("approval:"):
         if backend != "codex":
             raise ModeDirectiveError(
-                "`approval ...` mode directives are only supported for Codex sessions."
+                "`approval: ...` mode directives are only supported for Codex sessions."
             )
-        approval_mode = normalized[len("approval ") :].strip()
+        approval_mode = normalized[len("approval:") :].strip()
         if approval_mode not in config.VALID_APPROVAL_MODES:
             valid = ", ".join(f"`{mode}`" for mode in config.VALID_APPROVAL_MODES)
             raise ModeDirectiveError(
@@ -112,12 +119,12 @@ def _resolve_single_mode_token(token: str, *, backend: str) -> RuntimeModeOverri
             approval_mode=normalize_codex_approval_mode(approval_mode)
         )
 
-    if normalized.startswith("sandbox "):
+    if normalized.startswith("sandbox:"):
         if backend != "codex":
             raise ModeDirectiveError(
-                "`sandbox ...` mode directives are only supported for Codex sessions."
+                "`sandbox: ...` mode directives are only supported for Codex sessions."
             )
-        sandbox_mode = normalized[len("sandbox ") :].strip()
+        sandbox_mode = normalized[len("sandbox:") :].strip()
         if sandbox_mode not in config.VALID_SANDBOX_MODES:
             valid = ", ".join(f"`{mode}`" for mode in config.VALID_SANDBOX_MODES)
             raise ModeDirectiveError(
@@ -146,16 +153,34 @@ def _resolve_single_mode_token(token: str, *, backend: str) -> RuntimeModeOverri
 def _parse_plan_mode_token(token: str) -> Optional[PlanModeDirective]:
     """Parse one `splan`/`fplan` mode token."""
     normalized = (token or "").strip()
-    if not normalized or ":" not in normalized:
+    lowered = normalized.lower()
+    if not normalized:
         return None
 
-    key, raw_values = normalized.split(":", 1)
-    strategy = key.strip().lower()
-    if strategy not in {"splan", "fplan"}:
+    if lowered.startswith(("splan:", "fplan:")):
+        raise ModeDirectiveError(
+            "Unsupported plan strategy syntax. Use `splan <models>` or `fplan <models>`."
+        )
+    if lowered.startswith(("advs", "advf")):
+        strategy = lowered.split(":", 1)[0].split(maxsplit=1)[0]
         if strategy in {"advs", "advf"}:
             raise ModeDirectiveError(
                 f"`{strategy}` has been renamed. Use `splan`/`fplan` instead."
             )
+    if lowered in {"splan", "fplan"}:
+        raise ModeDirectiveError(
+            f"`{lowered}` must include a comma-separated model list."
+        )
+
+    strategy: Optional[str] = None
+    raw_values: Optional[str] = None
+    for candidate in ("splan", "fplan"):
+        prefix = f"{candidate} "
+        if lowered.startswith(prefix):
+            strategy = candidate
+            raw_values = normalized[len(prefix) :].strip()
+            break
+    if strategy is None or raw_values is None:
         return None
 
     raw_models = [entry.strip() for entry in raw_values.split(",")]
@@ -211,7 +236,7 @@ def resolve_runtime_mode_directives(
 
         if "," in token:
             raise ModeDirectiveError(
-                "Commas are only supported inside `splan:`/`fplan:` model lists. "
+                "Commas are only supported inside `splan`/`fplan` model lists. "
                 "Use semicolons to separate directives."
             )
 

@@ -14,11 +14,11 @@ from src.utils.mode_directives import (
 def test_parse_parenthesized_mode_directive_line_extracts_value() -> None:
     assert parse_parenthesized_mode_directive_line("(mode: plan)") == "plan"
     assert (
-        parse_parenthesized_mode_directive_line("((mode: sandbox workspace-write))")
-        == "sandbox workspace-write"
+        parse_parenthesized_mode_directive_line("((mode: sandbox: workspace-write))")
+        == "sandbox: workspace-write"
     )
-    assert parse_parenthesized_mode_directive_line("(mode: splan: cs46h, g54h)") == (
-        "splan: cs46h, g54h"
+    assert parse_parenthesized_mode_directive_line("(mode: splan cs46h, g54h)") == (
+        "splan cs46h, g54h"
     )
 
 
@@ -43,7 +43,7 @@ def test_resolve_runtime_mode_value_codex_alias_sets_permission_and_approval() -
 
 
 def test_resolve_runtime_mode_value_codex_sandbox_directive() -> None:
-    resolved = resolve_runtime_mode_value("sandbox read-only", backend="codex")
+    resolved = resolve_runtime_mode_value("sandbox: read-only", backend="codex")
     assert resolved.permission_mode is None
     assert resolved.approval_mode is None
     assert resolved.sandbox_mode == "read-only"
@@ -51,7 +51,7 @@ def test_resolve_runtime_mode_value_codex_sandbox_directive() -> None:
 
 def test_resolve_runtime_mode_value_rejects_codex_only_directives_for_claude() -> None:
     with pytest.raises(ModeDirectiveError, match="only supported for Codex sessions"):
-        resolve_runtime_mode_value("approval never", backend="claude")
+        resolve_runtime_mode_value("approval: never", backend="claude")
 
 
 def test_resolve_runtime_mode_value_rejects_unknown_claude_mode_alias() -> None:
@@ -61,7 +61,7 @@ def test_resolve_runtime_mode_value_rejects_unknown_claude_mode_alias() -> None:
 
 def test_resolve_runtime_mode_directives_supports_semicolon_subdirectives() -> None:
     resolved = resolve_runtime_mode_directives(
-        "splan: cs46h, g54h; approval on-request; sandbox workspace-write",
+        "splan cs46h, g54h; approval: on-request; sandbox: workspace-write",
         backend="codex",
     )
     assert resolved.plan_mode is not None
@@ -74,3 +74,13 @@ def test_resolve_runtime_mode_directives_supports_semicolon_subdirectives() -> N
 def test_resolve_runtime_mode_directives_rejects_legacy_adversary_keys() -> None:
     with pytest.raises(ModeDirectiveError, match="renamed"):
         resolve_runtime_mode_directives("advs: cs46h, g54h", backend="codex")
+
+
+def test_resolve_runtime_mode_directives_rejects_old_splan_colon_format() -> None:
+    with pytest.raises(ModeDirectiveError, match="Unsupported plan strategy syntax"):
+        resolve_runtime_mode_directives("splan: cs46h, g54h", backend="codex")
+
+
+def test_resolve_runtime_mode_directives_rejects_old_sandbox_space_format() -> None:
+    with pytest.raises(ModeDirectiveError, match="Use `sandbox: <mode>`"):
+        resolve_runtime_mode_directives("sandbox read-only", backend="codex")
