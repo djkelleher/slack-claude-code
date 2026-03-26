@@ -288,6 +288,7 @@ async def _handle_codex_direct_mode(
         ],
     )
 
+
 def _get_codex_display_mode(permission_mode: str | None, approval_mode: str | None) -> str:
     """Get Codex mode alias for display."""
     if (permission_mode or "").strip().lower() == "plan":

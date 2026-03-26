@@ -43,10 +43,7 @@ async def test_file_response_posts_detail_button_in_channel_when_thread_missing(
     )
 
     assert client.chat_postMessage.await_args.kwargs["thread_ts"] is None
-    assert (
-        client.chat_postMessage.await_args.kwargs["text"]
-        == "📋 Detailed output available"
-    )
+    assert client.chat_postMessage.await_args.kwargs["text"] == "📋 Detailed output available"
     db.store_command_detailed_output.assert_awaited_once_with(7, "full output")
     update_blocks = client.chat_update.await_args.kwargs["blocks"]
     assert update_blocks[-1]["type"] == "actions"
@@ -92,10 +89,7 @@ async def test_file_response_notifies_when_detail_button_post_fails(
     )
 
     assert client.chat_postMessage.await_count == 2
-    assert (
-        "Could not post detailed output"
-        in client.chat_postMessage.await_args.kwargs["text"]
-    )
+    assert "Could not post detailed output" in client.chat_postMessage.await_args.kwargs["text"]
     db.store_command_detailed_output.assert_awaited_once_with(7, "full output")
 
 
@@ -161,9 +155,7 @@ async def test_uploads_git_diff_file_when_enabled(monkeypatch) -> None:
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
         get_status=AsyncMock(return_value=status),
-        get_diff=AsyncMock(
-            side_effect=["diff --git a/app.py b/app.py", "(no changes)"]
-        ),
+        get_diff=AsyncMock(side_effect=["diff --git a/app.py b/app.py", "(no changes)"]),
     )
     monkeypatch.setattr(response_delivery, "GitService", lambda: git_service)
 
@@ -207,9 +199,7 @@ async def test_skips_git_diff_upload_when_repo_is_clean(monkeypatch) -> None:
         lambda **_kwargs: [[{"type": "section"}]],
     )
 
-    status = SimpleNamespace(
-        is_clean=True, untracked=[], summary=lambda: "Branch: main | (clean)"
-    )
+    status = SimpleNamespace(is_clean=True, untracked=[], summary=lambda: "Branch: main | (clean)")
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
         get_status=AsyncMock(return_value=status),

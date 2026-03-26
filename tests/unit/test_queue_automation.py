@@ -23,9 +23,7 @@ async def test_decide_queue_automation_detects_textual_continue_signal() -> None
 
 
 @pytest.mark.asyncio
-async def test_decide_queue_automation_respects_done_signal_without_other_signals() -> (
-    None
-):
+async def test_decide_queue_automation_respects_done_signal_without_other_signals() -> None:
     decision = await decide_queue_automation(
         prompt="Implement feature X",
         output="All done. Nothing left to do.",

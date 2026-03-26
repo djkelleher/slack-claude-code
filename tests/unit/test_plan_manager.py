@@ -15,11 +15,15 @@ async def test_request_approval_uses_default_plan_mention() -> None:
         chat_postMessage=AsyncMock(return_value={"ts": "123.456"}),
     )
 
-    with patch.object(PlanApprovalManager._pending, "add", new=AsyncMock()), patch.object(
-        PlanApprovalManager._pending, "wait_for_result", new=AsyncMock(return_value=True)
-    ), patch(
-        "src.approval.plan_manager.post_text_snippet",
-        new=AsyncMock(),
+    with (
+        patch.object(PlanApprovalManager._pending, "add", new=AsyncMock()),
+        patch.object(
+            PlanApprovalManager._pending, "wait_for_result", new=AsyncMock(return_value=True)
+        ),
+        patch(
+            "src.approval.plan_manager.post_text_snippet",
+            new=AsyncMock(),
+        ),
     ):
         approved = await PlanApprovalManager.request_approval(
             session_id="session-123",
@@ -33,8 +37,7 @@ async def test_request_approval_uses_default_plan_mention() -> None:
     assert approved is True
     slack_client.chat_postMessage.assert_awaited_once()
     assert (
-        slack_client.chat_postMessage.await_args.kwargs["text"]
-        == "@channel Plan ready for review"
+        slack_client.chat_postMessage.await_args.kwargs["text"] == "@channel Plan ready for review"
     )
 
 
@@ -45,14 +48,19 @@ async def test_request_approval_omits_mention_when_plan_mention_empty() -> None:
         chat_postMessage=AsyncMock(return_value={"ts": "123.456"}),
     )
 
-    with patch.object(PlanApprovalManager._pending, "add", new=AsyncMock()), patch.object(
-        PlanApprovalManager._pending, "wait_for_result", new=AsyncMock(return_value=False)
-    ), patch(
-        "src.approval.plan_manager.post_text_snippet",
-        new=AsyncMock(),
-    ), patch(
-        "src.approval.plan_manager.config.SLACK_PLAN_MENTION",
-        "",
+    with (
+        patch.object(PlanApprovalManager._pending, "add", new=AsyncMock()),
+        patch.object(
+            PlanApprovalManager._pending, "wait_for_result", new=AsyncMock(return_value=False)
+        ),
+        patch(
+            "src.approval.plan_manager.post_text_snippet",
+            new=AsyncMock(),
+        ),
+        patch(
+            "src.approval.plan_manager.config.SLACK_PLAN_MENTION",
+            "",
+        ),
     ):
         approved = await PlanApprovalManager.request_approval(
             session_id="session-123",

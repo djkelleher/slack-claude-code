@@ -2,7 +2,12 @@
 
 from typing import TYPE_CHECKING, Optional
 
-from .base import MAX_TEXT_LENGTH, escape_markdown, text_to_rich_text_blocks, truncate_from_start
+from .base import (
+    MAX_TEXT_LENGTH,
+    escape_markdown,
+    text_to_rich_text_blocks,
+    truncate_from_start,
+)
 from .tool_blocks import format_tool_activity_section
 
 if TYPE_CHECKING:

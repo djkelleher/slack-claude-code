@@ -64,9 +64,7 @@ def _build_git_diff_upload_content(
 
 def _build_git_activity_upload_content(git_tool_events: list[dict[str, Any]]) -> str:
     """Build a readable text payload for raw git tool activity uploads."""
-    sections = [
-        f"# Git tool activity\nRecorded {len(git_tool_events)} git-related tool result(s)."
-    ]
+    sections = [f"# Git tool activity\nRecorded {len(git_tool_events)} git-related tool result(s)."]
 
     for index, event in enumerate(git_tool_events, start=1):
         lines = [f"## Event {index}"]
@@ -146,9 +144,7 @@ async def _maybe_upload_git_diff(
             return
 
         unstaged_diff = await git_service.get_diff(working_directory, max_size=500_000)
-        staged_diff = await git_service.get_diff(
-            working_directory, staged=True, max_size=500_000
-        )
+        staged_diff = await git_service.get_diff(working_directory, staged=True, max_size=500_000)
         content = _build_git_diff_upload_content(
             status=status,
             unstaged_diff=unstaged_diff,
@@ -186,9 +182,7 @@ async def deliver_command_response(
     detailed_output: Optional[str] = None,
     post_detail_button: bool = False,
     notify_on_snippet_failure: bool = False,
-    api_with_retry: Optional[
-        Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]
-    ] = None,
+    api_with_retry: Optional[Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]] = None,
     terminal_style: bool = False,
     working_directory: Optional[str] = None,
     upload_git_diff: bool = False,
@@ -238,8 +232,7 @@ async def deliver_command_response(
                             "text": {
                                 "type": "mrkdwn",
                                 "text": (
-                                    f"📋 *Detailed output* "
-                                    f"({len(detail_content):,} chars)"
+                                    f"📋 *Detailed output* " f"({len(detail_content):,} chars)"
                                 ),
                             },
                             "accessory": {
@@ -293,9 +286,7 @@ async def deliver_command_response(
         terminal_style=terminal_style,
     )
     if message_blocks_list:
-        message_blocks_list[0] = _maybe_add_copy_output_button(
-            message_blocks_list[0], command_id
-        )
+        message_blocks_list[0] = _maybe_add_copy_output_button(message_blocks_list[0], command_id)
     await _run_update(
         lambda: client.chat_update(
             channel=channel_id,

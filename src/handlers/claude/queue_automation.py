@@ -262,9 +262,7 @@ async def decide_queue_automation(
         llm_reason = judge_verdict.reason
         llm_math = judge_verdict.math_heavy
 
-    should_continue = (
-        llm_continue or strong_continue or (commit_signal and not strong_done)
-    )
+    should_continue = llm_continue or strong_continue or (commit_signal and not strong_done)
     if (
         strong_done
         and not llm_continue

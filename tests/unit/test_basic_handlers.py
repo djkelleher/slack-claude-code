@@ -78,9 +78,7 @@ async def test_history_single_index_fetches_latest_prompt():
                             session_id=7,
                             command="latest prompt",
                             status="completed",
-                            created_at=datetime(
-                                2026, 3, 25, 15, 30, tzinfo=timezone.utc
-                            ),
+                            created_at=datetime(2026, 3, 25, 15, 30, tzinfo=timezone.utc),
                         )
                     ],
                     4,
@@ -132,18 +130,14 @@ async def test_history_range_clamps_when_fewer_prompts_exist():
                             session_id=8,
                             command="most recent",
                             status="completed",
-                            created_at=datetime(
-                                2026, 3, 25, 15, 31, tzinfo=timezone.utc
-                            ),
+                            created_at=datetime(2026, 3, 25, 15, 31, tzinfo=timezone.utc),
                         ),
                         CommandHistory(
                             id=20,
                             session_id=8,
                             command="second most recent",
                             status="failed",
-                            created_at=datetime(
-                                2026, 3, 25, 15, 0, tzinfo=timezone.utc
-                            ),
+                            created_at=datetime(2026, 3, 25, 15, 0, tzinfo=timezone.utc),
                         ),
                     ],
                     2,

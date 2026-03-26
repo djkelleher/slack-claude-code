@@ -156,9 +156,7 @@ def _build_copy_output_modal_view(command_id: int, content: str) -> dict[str, An
     }
 
 
-async def _get_copyable_command_output(
-    command_id: int, deps: HandlerDependencies
-) -> str | None:
+async def _get_copyable_command_output(command_id: int, deps: HandlerDependencies) -> str | None:
     """Resolve the best available command output for copy-focused display."""
     content = DetailCache.get(command_id)
     if content:
@@ -177,9 +175,7 @@ async def _get_copyable_command_output(
     return None
 
 
-async def _get_github_file_url(
-    tool: ToolActivity, working_directory: str
-) -> str | None:
+async def _get_github_file_url(tool: ToolActivity, working_directory: str) -> str | None:
     """Generate a GitHub URL for viewing a file.
 
     Parameters
@@ -629,9 +625,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
     # Worktree action handlers
     # -------------------------------------------------------------------------
 
-    async def _run_worktree_action(
-        handler, body: dict, action: dict, client, logger
-    ) -> None:
+    async def _run_worktree_action(handler, body: dict, action: dict, client, logger) -> None:
         """Execute a worktree command handler from a button action payload."""
         try:
             channel_id = body["channel"]["id"]
@@ -741,9 +735,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ack()
 
         async def resolver(approval_id, user_id):
-            return await PermissionManager.resolve(
-                approval_id, approved=True, resolved_by=user_id
-            )
+            return await PermissionManager.resolve(approval_id, approved=True, resolved_by=user_id)
 
         def block_builder(resolved, user_id):
             return build_approval_result_blocks(
@@ -763,9 +755,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ack()
 
         async def resolver(approval_id, user_id):
-            return await PermissionManager.resolve(
-                approval_id, approved=False, resolved_by=user_id
-            )
+            return await PermissionManager.resolve(approval_id, approved=False, resolved_by=user_id)
 
         def block_builder(resolved, user_id):
             return build_approval_result_blocks(
@@ -946,9 +936,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         # Open modal for custom answer
         await client.views_open(
             trigger_id=body["trigger_id"],
-            view=build_custom_answer_modal(
-                question_id, question_index, question_header
-            ),
+            view=build_custom_answer_modal(question_id, question_index, question_header),
         )
 
     # Register handlers for question option buttons (question_select_*)
@@ -1001,9 +989,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                     channel_id=channel_id,
                     message_ts=message_ts,
                 )
-                logger.info(
-                    f"Question {question_id} answered by {user_id}: {resolved.answers}"
-                )
+                logger.info(f"Question {question_id} answered by {user_id}: {resolved.answers}")
         else:
             # Multi-question: show ephemeral confirmation, wait for Confirm button
             answered_count = len(pending.answers)
@@ -1099,9 +1085,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 channel_id=channel_id,
                 message_ts=message_ts,
             )
-            logger.info(
-                f"Question {question_id} confirmed by {user_id}: {resolved.answers}"
-            )
+            logger.info(f"Question {question_id} confirmed by {user_id}: {resolved.answers}")
 
     @app.view("question_custom_submit")
     async def handle_question_custom_submit(ack, body, client, view, logger):
@@ -1117,9 +1101,9 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             logger.error(f"Invalid custom answer modal metadata: {e}")
             return
 
-        custom_answer = view["state"]["values"]["custom_answer_block"][
-            "custom_answer_input"
-        ]["value"]
+        custom_answer = view["state"]["values"]["custom_answer_block"]["custom_answer_input"][
+            "value"
+        ]
 
         pending = await QuestionManager.get_pending(question_id)
         if not pending:
@@ -1295,9 +1279,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             view={
                 "type": "modal",
                 "callback_id": "custom_model_submit",
-                "private_metadata": json.dumps(
-                    {"channel_id": channel_id, "thread_ts": thread_ts}
-                ),
+                "private_metadata": json.dumps({"channel_id": channel_id, "thread_ts": thread_ts}),
                 "title": {"type": "plain_text", "text": "Custom Model"},
                 "submit": {"type": "plain_text", "text": "Set Model"},
                 "close": {"type": "plain_text", "text": "Cancel"},
@@ -1341,9 +1323,9 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             return
 
         # Get the custom model value
-        model_name_raw = view["state"]["values"]["custom_model_block"][
-            "custom_model_input"
-        ]["value"]
+        model_name_raw = view["state"]["values"]["custom_model_block"]["custom_model_input"][
+            "value"
+        ]
         model_name = model_name_raw.strip().lower()
 
         if not model_name:
@@ -1409,9 +1391,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             if value:
                 value_parts = value.split("|")
                 channel_id = value_parts[0]
-                thread_ts = (
-                    value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
-                )
+                thread_ts = value_parts[1] if len(value_parts) > 1 and value_parts[1] else None
             else:
                 channel_id = body["channel"]["id"]
                 message = body.get("message", {})
@@ -1421,9 +1401,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         model_value = model_base
         if action_id == "select_model_menu":
             _, current_effort = split_model_and_effort(session.model)
-            model_value, effort_error = apply_effort_to_model(
-                model_base, current_effort
-            )
+            model_value, effort_error = apply_effort_to_model(model_base, current_effort)
             if effort_error:
                 # If existing effort is incompatible with the new model backend,
                 # drop effort and keep the chosen model.
@@ -1460,9 +1438,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             default_cwd=config.DEFAULT_WORKING_DIR,
         )
         current_model_base, _ = split_model_and_effort(session.model)
-        model_value, effort_error = apply_effort_to_model(
-            current_model_base, effort_name
-        )
+        model_value, effort_error = apply_effort_to_model(current_model_base, effort_name)
         if effort_error:
             await client.chat_postMessage(
                 channel=channel_id,

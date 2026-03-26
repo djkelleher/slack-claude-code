@@ -25,9 +25,7 @@ def test_contains_queue_plan_markers_detects_known_markers() -> None:
     assert contains_queue_plan_markers("(branch feature/x)\nrun\n(end)") is True
     assert contains_queue_plan_markers("(parallel2)\nrun\n***\nmore\n(end)") is True
     assert contains_queue_plan_markers("(mode: plan)\nrun\n(end)") is True
-    assert (
-        contains_queue_plan_markers("FOR name IN (joe, tod)\nrun (name)\n(end)") is True
-    )
+    assert contains_queue_plan_markers("FOR name IN (joe, tod)\nrun (name)\n(end)") is True
 
 
 def test_contains_queue_plan_markers_ignores_non_marker_plain_text() -> None:
@@ -130,9 +128,7 @@ def test_parse_queue_plan_substitution_loop_preserves_runtime_references() -> No
     ]
 
 
-def test_parse_queue_plan_substitution_loop_preserves_save_then_file_write_flow() -> (
-    None
-):
+def test_parse_queue_plan_substitution_loop_preserves_save_then_file_write_flow() -> None:
     prompts = parse_queue_plan_text(
         "FOR name IN (joe, tod)\n"
         "(save draft)\n"
@@ -213,9 +209,7 @@ def test_parse_queue_plan_allows_unclosed_branch_block_at_eof() -> None:
 
 
 def test_parse_queue_plan_rejects_branch_end_without_open_block() -> None:
-    with pytest.raises(
-        QueuePlanError, match="end marker without a matching open block"
-    ):
+    with pytest.raises(QueuePlanError, match="end marker without a matching open block"):
         parse_queue_plan_text("run\n(end)")
 
 
@@ -269,9 +263,7 @@ def test_parse_queue_plan_submission_defaults_to_append_pending() -> None:
 
 
 def test_parse_queue_plan_submission_supports_append_directive() -> None:
-    options, body = parse_queue_plan_submission(
-        "(append)\nfirst task\n***\nsecond task"
-    )
+    options, body = parse_queue_plan_submission("(append)\nfirst task\n***\nsecond task")
     assert options.replace_pending is False
     assert options.directive_explicit is True
     assert options.insertion_mode == "append"
@@ -280,9 +272,7 @@ def test_parse_queue_plan_submission_supports_append_directive() -> None:
 
 
 def test_parse_queue_plan_submission_supports_prepend_directive() -> None:
-    options, body = parse_queue_plan_submission(
-        "(prepend)\nfirst task\n***\nsecond task"
-    )
+    options, body = parse_queue_plan_submission("(prepend)\nfirst task\n***\nsecond task")
     assert options.replace_pending is False
     assert options.directive_explicit is True
     assert options.insertion_mode == "prepend"
@@ -291,9 +281,7 @@ def test_parse_queue_plan_submission_supports_prepend_directive() -> None:
 
 
 def test_parse_queue_plan_submission_supports_insert_directive() -> None:
-    options, body = parse_queue_plan_submission(
-        "(insert2)\nfirst task\n***\nsecond task"
-    )
+    options, body = parse_queue_plan_submission("(insert2)\nfirst task\n***\nsecond task")
     assert options.replace_pending is False
     assert options.directive_explicit is True
     assert options.insertion_mode == "insert"
@@ -315,9 +303,7 @@ def test_parse_queue_plan_submission_supports_auto_finish_directive() -> None:
     assert body == "first task"
 
 
-def test_parse_queue_plan_submission_supports_auto_and_timer_directives_together() -> (
-    None
-):
+def test_parse_queue_plan_submission_supports_auto_and_timer_directives_together() -> None:
     now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
     options, body = parse_queue_plan_submission(
         "(auto, auto-finish, at 2026-03-13T18:30:00+00:00)\nfirst task",
@@ -351,9 +337,7 @@ def test_parse_queue_plan_submission_supports_combined_directives() -> None:
     assert options.directive_explicit is True
     assert options.insertion_mode == "append"
     assert options.insert_at is None
-    assert [
-        (control.action, control.execute_at) for control in options.scheduled_controls
-    ] == [
+    assert [(control.action, control.execute_at) for control in options.scheduled_controls] == [
         ("start", datetime(2026, 3, 13, 18, 30, tzinfo=timezone.utc)),
         ("pause", datetime(2026, 3, 13, 18, 45, tzinfo=timezone.utc)),
     ]
@@ -386,9 +370,7 @@ def test_parse_queue_plan_submission_parses_timer_directives_with_hhmm_time() ->
     future_local = local_now + timedelta(minutes=5)
     hhmm = future_local.strftime("%H:%M")
 
-    options, _ = parse_queue_plan_submission(
-        f"(at {hhmm})\nfirst task", now_utc=now_utc
-    )
+    options, _ = parse_queue_plan_submission(f"(at {hhmm})\nfirst task", now_utc=now_utc)
 
     assert len(options.scheduled_controls) == 1
     assert options.scheduled_controls[0].action == "resume"
@@ -440,9 +422,7 @@ async def test_materialize_queue_plan_resolves_existing_worktree() -> None:
         validate_git_repo=AsyncMock(return_value=True),
         list_worktrees=AsyncMock(
             return_value=[
-                SimpleNamespace(
-                    branch="feature/auth", path="/repo-worktrees/feature/auth"
-                )
+                SimpleNamespace(branch="feature/auth", path="/repo-worktrees/feature/auth")
             ]
         ),
         add_worktree=AsyncMock(),
@@ -458,17 +438,13 @@ async def test_materialize_queue_plan_resolves_existing_worktree() -> None:
 
 
 @pytest.mark.asyncio
-async def test_materialize_queue_plan_preserves_session_subdirectory_in_worktree() -> (
-    None
-):
+async def test_materialize_queue_plan_preserves_session_subdirectory_in_worktree() -> None:
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
         list_worktrees=AsyncMock(
             return_value=[
                 SimpleNamespace(branch="main", path="/repo"),
-                SimpleNamespace(
-                    branch="feature/auth", path="/repo-worktrees/feature/auth"
-                ),
+                SimpleNamespace(branch="feature/auth", path="/repo-worktrees/feature/auth"),
             ]
         ),
         add_worktree=AsyncMock(),
@@ -480,10 +456,7 @@ async def test_materialize_queue_plan_preserves_session_subdirectory_in_worktree
         git_service=git_service,
     )
 
-    assert (
-        materialized[0].working_directory_override
-        == "/repo-worktrees/feature/auth/services/api"
-    )
+    assert materialized[0].working_directory_override == "/repo-worktrees/feature/auth/services/api"
     git_service.add_worktree.assert_not_called()
 
 
@@ -501,15 +474,11 @@ async def test_materialize_queue_plan_creates_missing_worktree() -> None:
     )
 
     assert materialized[0].working_directory_override == "/repo-worktrees/feature/new"
-    git_service.add_worktree.assert_awaited_once_with(
-        "/repo", "feature/new", from_ref=None
-    )
+    git_service.add_worktree.assert_awaited_once_with("/repo", "feature/new", from_ref=None)
 
 
 @pytest.mark.asyncio
-async def test_materialize_queue_plan_rejects_branch_sections_outside_git_repo() -> (
-    None
-):
+async def test_materialize_queue_plan_rejects_branch_sections_outside_git_repo() -> None:
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=False),
         list_worktrees=AsyncMock(),
@@ -549,9 +518,7 @@ async def test_materialize_queue_plan_preserves_subdirectory_for_new_worktree() 
     prompts = parse_queue_plan_text("(branch feature/a)\nfirst\n(end)")
     git_service = SimpleNamespace(
         validate_git_repo=AsyncMock(return_value=True),
-        list_worktrees=AsyncMock(
-            return_value=[SimpleNamespace(branch="main", path="/repo")]
-        ),
+        list_worktrees=AsyncMock(return_value=[SimpleNamespace(branch="main", path="/repo")]),
         add_worktree=AsyncMock(return_value="/repo-worktrees/feature/a"),
     )
 
@@ -561,10 +528,7 @@ async def test_materialize_queue_plan_preserves_subdirectory_for_new_worktree() 
         git_service=git_service,
     )
 
-    assert (
-        materialized[0].working_directory_override
-        == "/repo-worktrees/feature/a/services/api"
-    )
+    assert materialized[0].working_directory_override == "/repo-worktrees/feature/a/services/api"
 
 
 @pytest.mark.asyncio

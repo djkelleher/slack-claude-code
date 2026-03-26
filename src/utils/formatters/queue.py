@@ -67,13 +67,9 @@ def _scheduled_event_text(event: Any) -> str:
     return f":alarm_clock: {id_prefix}*{event.action}* at `{execute_at_utc}`"
 
 
-def queue_status(
-    pending: list, running: Any, scheduled_events: list | None = None
-) -> list[dict]:
+def queue_status(pending: list, running: Any, scheduled_events: list | None = None) -> list[dict]:
     """Format queue status for /qv command."""
-    running_items = (
-        running if isinstance(running, list) else ([running] if running else [])
-    )
+    running_items = running if isinstance(running, list) else ([running] if running else [])
     scheduled = scheduled_events or []
     blocks = [
         {

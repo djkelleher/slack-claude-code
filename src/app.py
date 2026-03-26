@@ -138,11 +138,7 @@ def _extract_single_prompt_mode_directive(prompt: str) -> tuple[str, Optional[st
         if line.strip().lower() in {"(end)", "((end))"}
     ]
     if end_indices:
-        last_non_empty_index = max(
-            idx
-            for idx, line in enumerate(remaining_lines)
-            if line.strip()
-        )
+        last_non_empty_index = max(idx for idx, line in enumerate(remaining_lines) if line.strip())
         first_end_index = end_indices[0]
         if first_end_index != last_non_empty_index:
             raise ModeDirectiveError(
@@ -275,15 +271,11 @@ async def post_channel_notification(
 
         # Build thread link if we have a thread_ts
         if thread_ts:
-            thread_link = (
-                f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
-            )
+            thread_link = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
             if notification_type == "completion":
                 message = f"✅ Assistant finished • <{thread_link}|View thread>"
             else:
-                message = (
-                    f"⚠️ Assistant needs permission • <{thread_link}|Respond in thread>"
-                )
+                message = f"⚠️ Assistant needs permission • <{thread_link}|Respond in thread>"
         else:
             if notification_type == "completion":
                 message = "✅ Assistant finished"
@@ -301,9 +293,7 @@ async def post_channel_notification(
 
     except Exception as e:
         # Don't fail the main operation if all notification attempts fail
-        logger.error(
-            f"Failed to post channel notification after {max_retries} attempts: {e}"
-        )
+        logger.error(f"Failed to post channel notification after {max_retries} attempts: {e}")
 
 
 def _strip_leading_slack_mention(text: str) -> str:
@@ -327,9 +317,7 @@ def _is_text_upload_for_queue_plan(uploaded_file) -> bool:
     return suffix in _TEXT_FILE_EXTENSIONS_FOR_QUEUE_PLAN
 
 
-def _extract_structured_queue_plan_from_uploaded_files(
-    uploaded_files: list, logger
-) -> str | None:
+def _extract_structured_queue_plan_from_uploaded_files(uploaded_files: list, logger) -> str | None:
     """Return first uploaded text file content that looks like a structured queue plan."""
     for uploaded_file in uploaded_files:
         if not _is_text_upload_for_queue_plan(uploaded_file):
@@ -487,9 +475,7 @@ async def _post_message_processing_error(
         channel=channel_id,
         thread_ts=thread_ts,
         text=f"Error: {summary}",
-        blocks=error_message(
-            "Unexpected error while processing this message.\n" f"{details}"
-        ),
+        blocks=error_message("Unexpected error while processing this message.\n" f"{details}"),
     )
 
 
@@ -567,9 +553,7 @@ async def _route_codex_message_to_active_turn_or_queue(
         )
         return True
 
-    steer_error = steer_error or (
-        steer_result.error if steer_result else "unknown error"
-    )
+    steer_error = steer_error or (steer_result.error if steer_result else "unknown error")
     try:
         queue_meta = (
             {_RUNTIME_MODE_DIRECTIVE_META_KEY: runtime_mode_directive}
@@ -612,9 +596,7 @@ async def _route_codex_message_to_active_turn_or_queue(
     await deps.db.update_command_status(
         cmd_history.id,
         "completed",
-        output=(
-            f"Steer failed ({steer_error}). " f"Auto-queued item #{queued_item.id}."
-        ),
+        output=(f"Steer failed ({steer_error}). " f"Auto-queued item #{queued_item.id}."),
     )
     try:
         await ensure_queue_processor(
@@ -740,9 +722,7 @@ async def _route_claude_message_to_active_execution_or_queue(
     await deps.db.update_command_status(
         cmd_history.id,
         "completed",
-        output=(
-            "Active Claude execution detected." f" Auto-queued item #{queued_item.id}."
-        ),
+        output=("Active Claude execution detected." f" Auto-queued item #{queued_item.id}."),
     )
     try:
         await ensure_queue_processor(
@@ -824,9 +804,7 @@ async def _queue_structured_plan_message(
         insertion_mode = str(getattr(submission_options, "insertion_mode", "append"))
         insert_at = getattr(submission_options, "insert_at", None)
         scheduled_controls = list(getattr(submission_options, "scheduled_controls", []))
-        auto_after_each_prompt = bool(
-            getattr(submission_options, "auto_after_each_prompt", False)
-        )
+        auto_after_each_prompt = bool(getattr(submission_options, "auto_after_each_prompt", False))
         auto_after_queue_finish = bool(
             getattr(submission_options, "auto_after_queue_finish", False)
         )
@@ -914,10 +892,7 @@ async def _queue_structured_plan_message(
             await deps.db.add_queue_scheduled_events(
                 channel_id=channel_id,
                 thread_ts=thread_ts,
-                events=[
-                    (control.action, control.execute_at)
-                    for control in scheduled_controls
-                ],
+                events=[(control.action, control.execute_at) for control in scheduled_controls],
             )
         if auto_after_queue_finish:
             try:
@@ -989,9 +964,7 @@ async def _queue_structured_plan_message(
     if auto_after_each_prompt:
         auto_summary_parts.append("Auto checks/continuation enabled after each prompt.")
     if auto_after_queue_finish:
-        auto_summary_parts.append(
-            "Auto-finish checks/continuation enabled for queue drain."
-        )
+        auto_summary_parts.append("Auto-finish checks/continuation enabled for queue drain.")
     auto_summary = " ".join(auto_summary_parts).strip()
     if auto_summary:
         confirmation_text = f"{confirmation_text} {auto_summary}"
@@ -1053,9 +1026,7 @@ async def _restore_pending_queue_processors(client, deps, logger) -> None:
     if not pending_scopes:
         return
 
-    logger.info(
-        f"Startup queue recovery found {len(pending_scopes)} scope(s) with pending items"
-    )
+    logger.info(f"Startup queue recovery found {len(pending_scopes)} scope(s) with pending items")
     started_count = 0
     skipped_count = 0
     for channel_id, thread_ts in pending_scopes:
@@ -1216,9 +1187,7 @@ async def main():
 
         normalized_prompt = prompt.strip().lower()
         if normalized_prompt == "/model" or normalized_prompt.startswith("/model "):
-            logger.info(
-                "Detected typed /model message; redirecting user to slash command handler"
-            )
+            logger.info("Detected typed /model message; redirecting user to slash command handler")
             await _handle_typed_model_command(
                 client=client,
                 channel_id=channel_id,
@@ -1241,9 +1210,7 @@ async def main():
                 f"Cancelled {cancelled_questions} pending question(s) for session {session.id} "
                 "due to new message"
             )
-        cancelled_plan_approvals = await PlanApprovalManager.cancel_for_session(
-            str(session.id)
-        )
+        cancelled_plan_approvals = await PlanApprovalManager.cancel_for_session(str(session.id))
         if cancelled_plan_approvals:
             logger.info(
                 f"Cancelled {cancelled_plan_approvals} pending plan approval(s) for session {session.id} "
@@ -1252,9 +1219,7 @@ async def main():
 
         # Validate working directory exists
         if not os.path.isdir(session.working_directory):
-            logger.error(
-                f"Working directory does not exist: {session.working_directory}"
-            )
+            logger.error(f"Working directory does not exist: {session.working_directory}")
             await client.chat_postMessage(
                 channel=channel_id,
                 thread_ts=thread_ts,
@@ -1301,9 +1266,7 @@ async def main():
 
                     # For images, show thumbnail in thread
                     if file_info.get("mimetype", "").startswith("image/"):
-                        thumb_url = file_info.get("thumb_360") or file_info.get(
-                            "thumb_160"
-                        )
+                        thumb_url = file_info.get("thumb_360") or file_info.get("thumb_160")
                         if thumb_url:
                             await client.chat_postMessage(
                                 channel=channel_id,
@@ -1388,9 +1351,7 @@ async def main():
 
         # Enhance prompt with uploaded file references for normal (non-queue-plan) execution
         if uploaded_files:
-            file_refs = "\n".join(
-                [f"- {f.filename} (at {f.local_path})" for f in uploaded_files]
-            )
+            file_refs = "\n".join([f"- {f.filename} (at {f.local_path})" for f in uploaded_files])
 
             if prompt:
                 prompt = f"{prompt}\n\nUploaded files:\n{file_refs}"
@@ -1427,32 +1388,28 @@ async def main():
 
             # Route to appropriate execution path
             if backend == "codex":
-                handled_active_turn = (
-                    await _route_codex_message_to_active_turn_or_queue(
-                        client=client,
-                        deps=deps,
-                        session=effective_session,
-                        channel_id=channel_id,
-                        thread_ts=thread_ts,
-                        prompt=prompt,
-                        runtime_mode_directive=runtime_mode_directive,
-                        logger=logger,
-                    )
+                handled_active_turn = await _route_codex_message_to_active_turn_or_queue(
+                    client=client,
+                    deps=deps,
+                    session=effective_session,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    prompt=prompt,
+                    runtime_mode_directive=runtime_mode_directive,
+                    logger=logger,
                 )
                 if handled_active_turn:
                     return
             elif backend == "claude":
-                handled_active_execution = (
-                    await _route_claude_message_to_active_execution_or_queue(
-                        client=client,
-                        deps=deps,
-                        session=effective_session,
-                        channel_id=channel_id,
-                        thread_ts=thread_ts,
-                        prompt=prompt,
-                        runtime_mode_directive=runtime_mode_directive,
-                        logger=logger,
-                    )
+                handled_active_execution = await _route_claude_message_to_active_execution_or_queue(
+                    client=client,
+                    deps=deps,
+                    session=effective_session,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    prompt=prompt,
+                    runtime_mode_directive=runtime_mode_directive,
+                    logger=logger,
                 )
                 if handled_active_execution:
                     return
@@ -1483,9 +1440,7 @@ async def main():
                     error_text=str(e),
                 )
             except Exception as notify_error:
-                logger.error(
-                    f"Failed to post message-processing error notice: {notify_error}"
-                )
+                logger.error(f"Failed to post message-processing error notice: {notify_error}")
             return
 
     # Start Socket Mode handler
@@ -1509,9 +1464,7 @@ async def main():
     await handler.connect_async()
     logger.info("Connected to Slack")
     await _restore_pending_queue_processors(client=app.client, deps=deps, logger=logger)
-    await ensure_queue_schedule_dispatcher(
-        deps=deps, client=app.client, task_logger=logger
-    )
+    await ensure_queue_schedule_dispatcher(deps=deps, client=app.client, task_logger=logger)
 
     # Wait for shutdown signal
     await shutdown_event.wait()

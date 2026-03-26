@@ -37,13 +37,13 @@ from src.utils.formatters.queue import (
     queue_status,
 )
 from src.utils.formatters.streaming import processing_message
-from src.utils.model_selection import normalize_model_name
 from src.utils.mode_directives import (
     ModeDirectiveError,
     RuntimeModeOverrides,
     parse_parenthesized_mode_directive_line,
     resolve_runtime_mode_value,
 )
+from src.utils.model_selection import normalize_model_name
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
 from ..base import CommandContext, HandlerDependencies, slack_command
@@ -96,9 +96,7 @@ _RESUME_TIME_PATTERNS = (
         r"(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?:\s*(?P<tz>[A-Za-z]{1,5}|[+-]\d{2}:?\d{2}))?",
         re.IGNORECASE,
     ),
-    re.compile(
-        r"\b(?P<time>\d{4}-\d{2}-\d{2}[tT]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)\b"
-    ),
+    re.compile(r"\b(?P<time>\d{4}-\d{2}-\d{2}[tT]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)\b"),
 )
 _QUEUE_TIMER_HHMM_RE = re.compile(r"^(?:[01]?\d|2[0-3]):[0-5]\d$")
 _AUTO_META_ORIGIN_MANUAL = "manual"
@@ -151,13 +149,9 @@ def _normalize_automation_meta(raw_meta: Any) -> dict[str, Any]:
     if not isinstance(raw_meta, dict):
         return {}
     normalized = dict(raw_meta)
-    normalized["origin"] = (
-        str(normalized.get("origin") or _AUTO_META_ORIGIN_MANUAL).strip().lower()
-    )
+    normalized["origin"] = str(normalized.get("origin") or _AUTO_META_ORIGIN_MANUAL).strip().lower()
     normalized["auto_each"] = bool(normalized.get("auto_each"))
-    normalized["continue_round"] = max(
-        0, _coerce_int(normalized.get("continue_round"), 0)
-    )
+    normalized["continue_round"] = max(0, _coerce_int(normalized.get("continue_round"), 0))
     normalized["check_round"] = max(0, _coerce_int(normalized.get("check_round"), 0))
     root_token = str(normalized.get("root_token") or "").strip()
     if root_token:
@@ -177,9 +171,7 @@ def _runtime_mode_directive_from_meta(raw_meta: Any) -> Optional[str]:
     return cleaned or None
 
 
-def _apply_runtime_mode_overrides(
-    session: Session, overrides: RuntimeModeOverrides
-) -> Session:
+def _apply_runtime_mode_overrides(session: Session, overrides: RuntimeModeOverrides) -> Session:
     """Apply ephemeral runtime mode overrides to an execution session."""
     replace_kwargs: dict[str, str] = {}
     if overrides.permission_mode is not None:
@@ -282,9 +274,7 @@ async def _create_queue_task(
     return task
 
 
-async def _is_queue_processor_running(
-    channel_id: str, thread_ts: Optional[str]
-) -> bool:
+async def _is_queue_processor_running(channel_id: str, thread_ts: Optional[str]) -> bool:
     """Check if a queue processor is already running for a scope."""
     task_id = _queue_task_id(channel_id, thread_ts)
     tracked = await TaskManager.get(task_id)
@@ -425,9 +415,7 @@ def _parse_resume_time_from_text(text: str) -> Optional[datetime]:
         tz_token = match.groupdict().get("tz")
         try:
             if "T" in value or "t" in value:
-                return _normalize_resume_at(
-                    datetime.fromisoformat(value.replace("Z", "+00:00"))
-                )
+                return _normalize_resume_at(datetime.fromisoformat(value.replace("Z", "+00:00")))
             parsed = datetime.strptime(value.lower(), "%I:%M %p")
         except ValueError:
             try:
@@ -442,9 +430,7 @@ def _parse_resume_time_from_text(text: str) -> Optional[datetime]:
         if tz_token and parsed_timezone is None:
             continue
 
-        now_reference = datetime.now(
-            parsed_timezone or datetime.now().astimezone().tzinfo
-        )
+        now_reference = datetime.now(parsed_timezone or datetime.now().astimezone().tzinfo)
         candidate = now_reference.replace(
             hour=parsed.hour,
             minute=parsed.minute,
@@ -457,13 +443,9 @@ def _parse_resume_time_from_text(text: str) -> Optional[datetime]:
     return None
 
 
-def _result_text_for_limit_detection(
-    output: Optional[str], error: Optional[str]
-) -> str:
+def _result_text_for_limit_detection(output: Optional[str], error: Optional[str]) -> str:
     """Combine backend result fields into a single searchable string."""
-    parts = [
-        part.strip() for part in (error or "", output or "") if part and part.strip()
-    ]
+    parts = [part.strip() for part in (error or "", output or "") if part and part.strip()]
     return "\n".join(parts)
 
 
@@ -479,9 +461,7 @@ async def _codex_usage_limit_state(
     resume_at: Optional[datetime] = None
     if deps.codex_executor:
         try:
-            payload = await deps.codex_executor.account_rate_limits_read(
-                working_directory
-            )
+            payload = await deps.codex_executor.account_rate_limits_read(working_directory)
             snapshots = _extract_rate_limits_from_rpc(payload)
             reset_epochs = [
                 window.resets_at
@@ -504,7 +484,9 @@ async def _codex_usage_limit_state(
 
     detail = "Codex usage limit reached."
     if resume_at is not None:
-        detail = f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+        detail = (
+            f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+        )
     else:
         detail = f"{detail} Resume time could not be determined automatically."
     return _QueueUsageLimitState(resume_at=resume_at, detail=detail)
@@ -522,7 +504,9 @@ async def _claude_usage_limit_state(
     resume_at = _parse_resume_time_from_text(result_text)
     detail = "Claude usage limit reached."
     if resume_at is not None:
-        detail = f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+        detail = (
+            f"{detail} Auto-resume scheduled for {_format_scheduled_event_timestamp(resume_at)}."
+        )
     else:
         detail = f"{detail} Resume time could not be determined automatically."
     return _QueueUsageLimitState(resume_at=resume_at, detail=detail)
@@ -544,9 +528,7 @@ async def _resolve_usage_limit_state(
     if not result_text:
         return None
     if backend == "codex":
-        return await _codex_usage_limit_state(
-            deps, session.working_directory, result_text
-        )
+        return await _codex_usage_limit_state(deps, session.working_directory, result_text)
     return await _claude_usage_limit_state(result_text)
 
 
@@ -584,9 +566,7 @@ async def _pause_queue_for_usage_limit(
     )
 
 
-def _is_prompt_policy_block(
-    result_output: Optional[str], result_error: Optional[str]
-) -> bool:
+def _is_prompt_policy_block(result_output: Optional[str], result_error: Optional[str]) -> bool:
     """Return True when backend output indicates prompt policy rejection."""
     result_text = _result_text_for_limit_detection(result_output, result_error)
     if not result_text:
@@ -763,13 +743,9 @@ async def _resolve_queue_runtime_prompt(
     def replace_position_output_reference(match: re.Match[str]) -> str:
         position = int(_first_matched_group(match))
         if position < 1 or position >= item.position:
-            raise ValueError(
-                f"Queue output reference `(p{position}output)` is not available yet."
-            )
+            raise ValueError(f"Queue output reference `(p{position}output)` is not available yet.")
         if position not in completed_outputs_by_position:
-            raise ValueError(
-                f"Queue output reference `(p{position}output)` was not found."
-            )
+            raise ValueError(f"Queue output reference `(p{position}output)` was not found.")
         return completed_outputs_by_position[position]
 
     def replace_named_output_reference(match: re.Match[str]) -> str:
@@ -931,9 +907,7 @@ async def _recover_stale_running_items(
 
     if recovered:
         scope = build_session_scope(channel_id, thread_ts)
-        log.warning(
-            f"Recovered {recovered} stale running queue item(s) for scope {scope}"
-        )
+        log.warning(f"Recovered {recovered} stale running queue item(s) for scope {scope}")
     return recovered
 
 
@@ -951,9 +925,7 @@ def _extract_codex_thread_id(response: dict) -> Optional[str]:
     return None
 
 
-async def _build_claude_parallel_preamble(
-    deps: HandlerDependencies, session: Session
-) -> str:
+async def _build_claude_parallel_preamble(deps: HandlerDependencies, session: Session) -> str:
     """Build a bounded lossy Claude context preamble for parallel queue items."""
     history, _ = await deps.db.get_command_history(
         session.id, limit=_PARALLEL_HISTORY_COMMAND_LIMIT
@@ -983,10 +955,7 @@ async def _build_claude_parallel_preamble(
     if not sections:
         return ""
 
-    return (
-        "Recent session context (lossy local history approximation):\n\n"
-        + "\n\n".join(sections)
-    )
+    return "Recent session context (lossy local history approximation):\n\n" + "\n\n".join(sections)
 
 
 def _build_parallel_prompt(prompt: str, claude_preamble: str) -> str:
@@ -1061,9 +1030,7 @@ def _build_auto_generated_queue_entries(
     list[str],
 ]:
     """Create auto-generated queue entries and cap notices for one automation decision."""
-    entries: list[
-        tuple[str, Optional[str], Optional[str], Optional[int], dict[str, object]]
-    ] = []
+    entries: list[tuple[str, Optional[str], Optional[str], Optional[int], dict[str, object]]] = []
     notices: list[str] = []
     next_check_round = check_round
 
@@ -1087,8 +1054,7 @@ def _build_auto_generated_queue_entries(
             )
     else:
         notices.append(
-            f"Auto-check cap reached for {root_token} "
-            f"({config.QUEUE_AUTO_MAX_CHECK_ROUNDS})."
+            f"Auto-check cap reached for {root_token} " f"({config.QUEUE_AUTO_MAX_CHECK_ROUNDS})."
         )
 
     if should_continue:
@@ -1235,12 +1201,8 @@ async def _execute_queue_item(
 
         if parallel_config:
             persist_session_ids = False
-            working_directory = (
-                item.working_directory_override or base_session.working_directory
-            )
-            session_scope_override = (
-                f"{scope}:parallel:{parallel_config.group_id}:{item.id}"
-            )
+            working_directory = item.working_directory_override or base_session.working_directory
+            session_scope_override = f"{scope}:parallel:{parallel_config.group_id}:{item.id}"
             if effective_session.get_backend() == "codex":
                 codex_thread_id = None
                 if parallel_config.codex_base_thread_id and deps.codex_executor:
@@ -1276,12 +1238,14 @@ async def _execute_queue_item(
             )
             persist_session_ids = False
 
-        resolved_prompt, model_override, prompt_mode_directive = await _resolve_queue_runtime_prompt(
-            deps,
-            item=item,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            prompt=effective_prompt,
+        resolved_prompt, model_override, prompt_mode_directive = (
+            await _resolve_queue_runtime_prompt(
+                deps,
+                item=item,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                prompt=effective_prompt,
+            )
         )
         effective_prompt = resolved_prompt or effective_prompt
         if model_override:
@@ -1300,9 +1264,7 @@ async def _execute_queue_item(
                 raise ValueError(
                     f"Invalid mode directive `(mode: {selected_mode_directive})`: {mode_error}"
                 ) from mode_error
-            effective_session = _apply_runtime_mode_overrides(
-                effective_session, runtime_overrides
-            )
+            effective_session = _apply_runtime_mode_overrides(effective_session, runtime_overrides)
 
         route = await execute_for_session(
             deps=deps,
@@ -1331,9 +1293,7 @@ async def _execute_queue_item(
             backend_resume = override_resume_ids.setdefault(override_key, {})
             backend_resume[route_backend] = result.session_id
 
-        if config.QUEUE_PAUSE_ON_QUESTIONS and _result_field(
-            result, "paused_on_question", False
-        ):
+        if config.QUEUE_PAUSE_ON_QUESTIONS and _result_field(result, "paused_on_question", False):
             await _pause_queue_for_question(
                 item=item,
                 channel_id=channel_id,
@@ -1342,9 +1302,7 @@ async def _execute_queue_item(
                 client=client,
             )
             if streaming_state and not streaming_state.accumulated_output.strip():
-                streaming_state.accumulated_output = (
-                    "Queue paused: assistant requested user input."
-                )
+                streaming_state.accumulated_output = "Queue paused: assistant requested user input."
             if streaming_state:
                 await streaming_state.finalize(is_error=True)
             return None
@@ -1374,21 +1332,15 @@ async def _execute_queue_item(
 
         automation_notices: list[str] = []
         if result.success:
-            await deps.db.update_queue_item_status(
-                item.id, "completed", output=result.output
-            )
+            await deps.db.update_queue_item_status(item.id, "completed", output=result.output)
             final_status = "completed"
 
-            automation_meta = _normalize_automation_meta(
-                getattr(item, "automation_meta", None)
-            )
+            automation_meta = _normalize_automation_meta(getattr(item, "automation_meta", None))
             if automation_meta.get("auto_each"):
                 root_token = _auto_root_token(item, automation_meta)
                 continue_round = _coerce_int(automation_meta.get("continue_round"), 0)
                 check_round = _coerce_int(automation_meta.get("check_round"), 0)
-                detailed_output = str(
-                    _result_field(result, "detailed_output", "") or ""
-                )
+                detailed_output = str(_result_field(result, "detailed_output", "") or "")
                 git_events = _result_field(result, "git_tool_events", [])
                 if not isinstance(git_events, list):
                     git_events = []
@@ -1420,9 +1372,7 @@ async def _execute_queue_item(
                 )
                 automation_notices.extend(cap_notices)
                 if generated_entries:
-                    insert_session_id = (
-                        getattr(item, "session_id", None) or effective_session.id
-                    )
+                    insert_session_id = getattr(item, "session_id", None) or effective_session.id
                     queued_auto_items = await deps.db.add_many_to_queue(
                         session_id=insert_session_id,
                         channel_id=channel_id,
@@ -1457,11 +1407,7 @@ async def _execute_queue_item(
         if automation_notices:
             notice_block = "\n".join(f"- {note}" for note in automation_notices)
             final_output = f"{final_output}\n\nQueue Automation\n{notice_block}"
-        if (
-            streaming_state
-            and not streaming_state.accumulated_output.strip()
-            and final_output
-        ):
+        if streaming_state and not streaming_state.accumulated_output.strip() and final_output:
             streaming_state.accumulated_output = final_output
         if streaming_state:
             await streaming_state.finalize(is_error=not result.success)
@@ -1475,9 +1421,7 @@ async def _execute_queue_item(
         )
         if streaming_state:
             if not streaming_state.accumulated_output.strip():
-                streaming_state.accumulated_output = (
-                    "Queue item cancelled while processing."
-                )
+                streaming_state.accumulated_output = "Queue item cancelled while processing."
             await streaming_state.finalize(is_error=True)
         elif message_ts:
             await client.chat_update(
@@ -1570,9 +1514,7 @@ async def _run_parallel_group(
             start_task(pending_items.pop(0))
 
         while active_tasks:
-            done, _ = await asyncio.wait(
-                active_tasks.keys(), return_when=asyncio.FIRST_COMPLETED
-            )
+            done, _ = await asyncio.wait(active_tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
             queue_state = await _get_queue_state(deps, channel_id, thread_ts)
             for task in done:
                 active_tasks.pop(task, None)
@@ -1648,14 +1590,11 @@ async def _post_scheduled_queue_action_notice(client, event, text: str, log) -> 
         )
     except Exception as notify_error:
         log.error(
-            f"Failed to post scheduled queue action notice for event {event.id}: "
-            f"{notify_error}"
+            f"Failed to post scheduled queue action notice for event {event.id}: " f"{notify_error}"
         )
 
 
-async def _apply_scheduled_queue_action(
-    event, deps: HandlerDependencies, client, log
-) -> None:
+async def _apply_scheduled_queue_action(event, deps: HandlerDependencies, client, log) -> None:
     """Apply one scheduled queue action for a scope."""
     action = (event.action or "").strip().lower()
     effective_action = "resume" if action == "start" else action
@@ -1664,12 +1603,8 @@ async def _apply_scheduled_queue_action(
     scheduled_at_text = _format_scheduled_event_timestamp(event.execute_at)
 
     if effective_action == "pause":
-        running_items = await deps.db.get_running_queue_items(
-            event.channel_id, event.thread_ts
-        )
-        await deps.db.update_queue_control_state(
-            event.channel_id, event.thread_ts, "paused"
-        )
+        running_items = await deps.db.get_running_queue_items(event.channel_id, event.thread_ts)
+        await deps.db.update_queue_control_state(event.channel_id, event.thread_ts, "paused")
         text = (
             f"{scope_label}: scheduled {action_label} at {scheduled_at_text}. "
             "Current item(s) will finish before stopping."
@@ -1680,12 +1615,8 @@ async def _apply_scheduled_queue_action(
         return
 
     if effective_action == "stop":
-        await deps.db.update_queue_control_state(
-            event.channel_id, event.thread_ts, "stopped"
-        )
-        cancelled = await TaskManager.cancel(
-            _queue_task_id(event.channel_id, event.thread_ts)
-        )
+        await deps.db.update_queue_control_state(event.channel_id, event.thread_ts, "stopped")
+        cancelled = await TaskManager.cancel(_queue_task_id(event.channel_id, event.thread_ts))
         text = (
             f"{scope_label}: scheduled stop at {scheduled_at_text}. Queue stopped immediately."
             if cancelled
@@ -1697,9 +1628,7 @@ async def _apply_scheduled_queue_action(
     if effective_action != "resume":
         raise ValueError(f"Unsupported scheduled queue action `{event.action}`")
 
-    await deps.db.update_queue_control_state(
-        event.channel_id, event.thread_ts, "running"
-    )
+    await deps.db.update_queue_control_state(event.channel_id, event.thread_ts, "running")
     recovered_stale_count = await _recover_stale_running_items(
         channel_id=event.channel_id,
         thread_ts=event.thread_ts,
@@ -1707,14 +1636,10 @@ async def _apply_scheduled_queue_action(
         log=log,
     )
     pending = await deps.db.get_pending_queue_items(event.channel_id, event.thread_ts)
-    running_items = await deps.db.get_running_queue_items(
-        event.channel_id, event.thread_ts
-    )
+    running_items = await deps.db.get_running_queue_items(event.channel_id, event.thread_ts)
 
     if pending:
-        await ensure_queue_processor(
-            event.channel_id, event.thread_ts, deps, client, log
-        )
+        await ensure_queue_processor(event.channel_id, event.thread_ts, deps, client, log)
         if running_items:
             text = (
                 f"{scope_label}: scheduled {action_label} at {scheduled_at_text}. "
@@ -1726,9 +1651,7 @@ async def _apply_scheduled_queue_action(
                 f"{len(pending)} pending item(s) ready to run."
             )
             if recovered_stale_count:
-                text = (
-                    f"{text} Recovered {recovered_stale_count} stale running item(s)."
-                )
+                text = f"{text} Recovered {recovered_stale_count} stale running item(s)."
     elif running_items:
         text = (
             f"{scope_label}: scheduled {action_label} at {scheduled_at_text}. "
@@ -1804,9 +1727,7 @@ async def ensure_queue_schedule_dispatcher(
             if not t.cancelled():
                 exc = t.exception()
                 if exc:
-                    log.error(
-                        f"Queue scheduled-event dispatcher failed: {exc}", exc_info=exc
-                    )
+                    log.error(f"Queue scheduled-event dispatcher failed: {exc}", exc_info=exc)
 
         task.add_done_callback(done_callback)
 
@@ -1884,9 +1805,7 @@ async def _enqueue_plain_queue_text(
         ],
     )
     if queue_state == "running":
-        await ensure_queue_processor(
-            ctx.channel_id, ctx.thread_ts, deps, ctx.client, ctx.logger
-        )
+        await ensure_queue_processor(ctx.channel_id, ctx.thread_ts, deps, ctx.client, ctx.logger)
 
 
 def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
@@ -1916,19 +1835,13 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             is_structured_submission = True
             try:
                 submission_options, plan_text = parse_queue_plan_submission(ctx.text)
-                replace_pending = bool(
-                    getattr(submission_options, "replace_pending", False)
-                )
-                insertion_mode = str(
-                    getattr(submission_options, "insertion_mode", "append")
-                )
+                replace_pending = bool(getattr(submission_options, "replace_pending", False))
+                insertion_mode = str(getattr(submission_options, "insertion_mode", "append"))
                 insert_at = getattr(submission_options, "insert_at", None)
                 has_explicit_submission_directive = bool(
                     getattr(submission_options, "directive_explicit", False)
                 )
-                scheduled_controls = list(
-                    getattr(submission_options, "scheduled_controls", [])
-                )
+                scheduled_controls = list(getattr(submission_options, "scheduled_controls", []))
                 auto_after_each_prompt = bool(
                     getattr(submission_options, "auto_after_each_prompt", False)
                 )
@@ -1949,6 +1862,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     if item_mode_directive:
                         merged[_RUNTIME_MODE_DIRECTIVE_META_KEY] = item_mode_directive
                     return merged or None
+
             except QueuePlanError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -1980,9 +1894,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             else:
                 queue_entries = []
                 for item in materialized_prompts:
-                    entry_meta = build_entry_metadata(
-                        _result_field(item, "mode_directive", None)
-                    )
+                    entry_meta = build_entry_metadata(_result_field(item, "mode_directive", None))
                     if entry_meta is None:
                         queue_entries.append(
                             (
@@ -2027,29 +1939,20 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             insert_at=insert_at,
         )
         if scheduled_controls:
-            await deps.db.update_queue_control_state(
-                ctx.channel_id, ctx.thread_ts, "paused"
-            )
+            await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "paused")
         if scheduled_controls:
             await deps.db.add_queue_scheduled_events(
                 channel_id=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
-                events=[
-                    (control.action, control.execute_at)
-                    for control in scheduled_controls
-                ],
+                events=[(control.action, control.execute_at) for control in scheduled_controls],
             )
         if auto_after_queue_finish:
             try:
-                await deps.db.set_queue_auto_finish_pending(
-                    ctx.channel_id, ctx.thread_ts, True
-                )
+                await deps.db.set_queue_auto_finish_pending(ctx.channel_id, ctx.thread_ts, True)
             except AttributeError:
                 pass
 
-        running_items = await deps.db.get_running_queue_items(
-            ctx.channel_id, ctx.thread_ts
-        )
+        running_items = await deps.db.get_running_queue_items(ctx.channel_id, ctx.thread_ts)
         item_count = len(queued_items)
         position_text = _displayed_queue_range(
             running_count=len(running_items),
@@ -2072,9 +1975,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             action_verb = "Inserted"
         else:
             action_verb = "Added"
-        confirmation_text = (
-            f"{action_verb} {item_count} item(s) to queue ({position_text})."
-        )
+        confirmation_text = f"{action_verb} {item_count} item(s) to queue ({position_text})."
         if paused_notice:
             confirmation_text = f"{confirmation_text} {paused_notice}"
         scheduled_summary = _scheduled_controls_summary(scheduled_controls)
@@ -2082,13 +1983,9 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             confirmation_text = f"{confirmation_text} {scheduled_summary}"
         auto_summary_parts: list[str] = []
         if auto_after_each_prompt:
-            auto_summary_parts.append(
-                "Auto checks/continuation enabled after each prompt."
-            )
+            auto_summary_parts.append("Auto checks/continuation enabled after each prompt.")
         if auto_after_queue_finish:
-            auto_summary_parts.append(
-                "Auto-finish checks/continuation enabled for queue drain."
-            )
+            auto_summary_parts.append("Auto-finish checks/continuation enabled for queue drain.")
         auto_summary = " ".join(auto_summary_parts).strip()
         if auto_summary:
             confirmation_text = f"{confirmation_text} {auto_summary}"
@@ -2147,15 +2044,9 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         if scheduled_controls:
             await ensure_queue_schedule_dispatcher(deps, ctx.client, ctx.logger)
 
-    async def _post_queue_status(
-        ctx: CommandContext, target_thread_ts: Optional[str]
-    ) -> None:
-        pending = await deps.db.get_pending_queue_items(
-            ctx.channel_id, target_thread_ts
-        )
-        running = await deps.db.get_running_queue_items(
-            ctx.channel_id, target_thread_ts
-        )
+    async def _post_queue_status(ctx: CommandContext, target_thread_ts: Optional[str]) -> None:
+        pending = await deps.db.get_pending_queue_items(ctx.channel_id, target_thread_ts)
+        running = await deps.db.get_running_queue_items(ctx.channel_id, target_thread_ts)
         scheduled = await deps.db.get_pending_queue_scheduled_events(
             ctx.channel_id, target_thread_ts
         )
@@ -2166,9 +2057,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 2,
                 {
                     "type": "context",
-                    "elements": [
-                        {"type": "mrkdwn", "text": _queue_state_notice(queue_state)}
-                    ],
+                    "elements": [{"type": "mrkdwn", "text": _queue_state_notice(queue_state)}],
                 },
             )
         blocks.insert(
@@ -2200,9 +2089,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         for thread_ts in scope_thread_ids:
             pending = await deps.db.get_pending_queue_items(ctx.channel_id, thread_ts)
             running = await deps.db.get_running_queue_items(ctx.channel_id, thread_ts)
-            scheduled = await deps.db.get_pending_queue_scheduled_events(
-                ctx.channel_id, thread_ts
-            )
+            scheduled = await deps.db.get_pending_queue_scheduled_events(ctx.channel_id, thread_ts)
             queue_state = await _get_queue_state(deps, ctx.channel_id, thread_ts)
             if (
                 not pending
@@ -2257,9 +2144,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     async def _clear_pending_queue(ctx: CommandContext) -> None:
         cleared = await deps.db.clear_queue(ctx.channel_id, ctx.thread_ts)
         try:
-            await deps.db.set_queue_auto_finish_pending(
-                ctx.channel_id, ctx.thread_ts, False
-            )
+            await deps.db.set_queue_auto_finish_pending(ctx.channel_id, ctx.thread_ts, False)
         except AttributeError:
             pass
 
@@ -2279,23 +2164,17 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
 
     async def _delete_entire_queue(ctx: CommandContext) -> None:
-        await deps.db.update_queue_control_state(
-            ctx.channel_id, ctx.thread_ts, "stopped"
-        )
+        await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "stopped")
         await TaskManager.cancel(_queue_task_id(ctx.channel_id, ctx.thread_ts))
         deleted = await deps.db.delete_queue(ctx.channel_id, ctx.thread_ts)
         deleted_scheduled = await deps.db.delete_pending_queue_scheduled_events(
             ctx.channel_id, ctx.thread_ts
         )
         try:
-            await deps.db.set_queue_auto_finish_pending(
-                ctx.channel_id, ctx.thread_ts, False
-            )
+            await deps.db.set_queue_auto_finish_pending(ctx.channel_id, ctx.thread_ts, False)
         except AttributeError:
             pass
-        await deps.db.update_queue_control_state(
-            ctx.channel_id, ctx.thread_ts, "running"
-        )
+        await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "running")
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
@@ -2316,13 +2195,9 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             ],
         )
 
-    async def _remove_pending_queue_item(
-        ctx: CommandContext, item_id: Optional[int]
-    ) -> None:
+    async def _remove_pending_queue_item(ctx: CommandContext, item_id: Optional[int]) -> None:
         if item_id is None:
-            pending = await deps.db.get_pending_queue_items(
-                ctx.channel_id, ctx.thread_ts
-            )
+            pending = await deps.db.get_pending_queue_items(ctx.channel_id, ctx.thread_ts)
             if not pending:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -2333,9 +2208,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 return
             item_id = pending[0].id
 
-        removed = await deps.db.remove_queue_item(
-            item_id, ctx.channel_id, ctx.thread_ts
-        )
+        removed = await deps.db.remove_queue_item(item_id, ctx.channel_id, ctx.thread_ts)
 
         if removed:
             await ctx.client.chat_postMessage(
@@ -2358,9 +2231,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             channel=ctx.channel_id,
             thread_ts=ctx.thread_ts,
             text=f"Item #{item_id} not found or not pending",
-            blocks=error_message(
-                f"Item #{item_id} not found or is already running/completed."
-            ),
+            blocks=error_message(f"Item #{item_id} not found or is already running/completed."),
         )
 
     @app.command("/qc")
@@ -2373,9 +2244,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             "timer cancel <event_id|all> [channel|thread_ts]>"
         ),
     )
-    async def handle_queue_command(
-        ctx: CommandContext, deps: HandlerDependencies = deps
-    ):
+    async def handle_queue_command(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /qc queue control subcommands."""
         parts = ctx.text.split()
         subcommand = parts[0].lower()
@@ -2491,9 +2360,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await ensure_queue_schedule_dispatcher(deps, ctx.client, ctx.logger)
                 created_event = created_events[0]
                 scope_label = _queue_scope_label(target_thread_ts)
-                execute_text = _format_scheduled_event_timestamp(
-                    created_event.execute_at
-                )
+                execute_text = _format_scheduled_event_timestamp(created_event.execute_at)
                 text = (
                     f"{scope_label}: scheduled {action} at {execute_text} "
                     f"(timer #{created_event.id})."
@@ -2502,9 +2369,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text=text,
-                    blocks=[
-                        {"type": "section", "text": {"type": "mrkdwn", "text": text}}
-                    ],
+                    blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
                 )
                 return
 
@@ -2625,9 +2490,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 await _post_channel_queue_overview(ctx)
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -2650,9 +2513,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -2678,9 +2539,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -2714,9 +2573,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                         channel=ctx.channel_id,
                         thread_ts=ctx.thread_ts,
                         text="Invalid item ID",
-                        blocks=error_message(
-                            "Invalid item ID. Usage: /qc remove [item_id]"
-                        ),
+                        blocks=error_message("Invalid item ID. Usage: /qc remove [item_id]"),
                     )
                     return
             else:
@@ -2735,9 +2592,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -2747,12 +2602,8 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
 
-            running_items = await deps.db.get_running_queue_items(
-                ctx.channel_id, target_thread_ts
-            )
-            await deps.db.update_queue_control_state(
-                ctx.channel_id, target_thread_ts, "paused"
-            )
+            running_items = await deps.db.get_running_queue_items(ctx.channel_id, target_thread_ts)
+            await deps.db.update_queue_control_state(ctx.channel_id, target_thread_ts, "paused")
             scope_label = _queue_scope_label(target_thread_ts)
             text = (
                 f"{scope_label}: pause requested. Current item(s) will finish before stopping."
@@ -2782,9 +2633,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -2794,17 +2643,11 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
 
-            await deps.db.update_queue_control_state(
-                ctx.channel_id, target_thread_ts, "stopped"
-            )
-            cancelled = await TaskManager.cancel(
-                _queue_task_id(ctx.channel_id, target_thread_ts)
-            )
+            await deps.db.update_queue_control_state(ctx.channel_id, target_thread_ts, "stopped")
+            cancelled = await TaskManager.cancel(_queue_task_id(ctx.channel_id, target_thread_ts))
             scope_label = _queue_scope_label(target_thread_ts)
             text = (
-                f"{scope_label}: stopped immediately."
-                if cancelled
-                else f"{scope_label}: stopped."
+                f"{scope_label}: stopped immediately." if cancelled else f"{scope_label}: stopped."
             )
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
@@ -2829,9 +2672,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
             try:
-                target_thread_ts = (
-                    _parse_scope_selector(args[0]) if args else ctx.thread_ts
-                )
+                target_thread_ts = _parse_scope_selector(args[0]) if args else ctx.thread_ts
             except ValueError as e:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,
@@ -2841,21 +2682,15 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 )
                 return
 
-            await deps.db.update_queue_control_state(
-                ctx.channel_id, target_thread_ts, "running"
-            )
+            await deps.db.update_queue_control_state(ctx.channel_id, target_thread_ts, "running")
             recovered_stale_count = await _recover_stale_running_items(
                 channel_id=ctx.channel_id,
                 thread_ts=target_thread_ts,
                 deps=deps,
                 log=ctx.logger,
             )
-            pending = await deps.db.get_pending_queue_items(
-                ctx.channel_id, target_thread_ts
-            )
-            running_items = await deps.db.get_running_queue_items(
-                ctx.channel_id, target_thread_ts
-            )
+            pending = await deps.db.get_pending_queue_items(ctx.channel_id, target_thread_ts)
+            running_items = await deps.db.get_running_queue_items(ctx.channel_id, target_thread_ts)
             scope_label = _queue_scope_label(target_thread_ts)
             if pending:
                 await ensure_queue_processor(
@@ -2940,9 +2775,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
     @app.command("/qdelete")
     @slack_command()
-    async def handle_queue_delete(
-        ctx: CommandContext, deps: HandlerDependencies = deps
-    ):
+    async def handle_queue_delete(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /qdelete command - delete all queue items in the current scope."""
         if ctx.text:
             await ctx.client.chat_postMessage(
@@ -2957,9 +2790,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
     @app.command("/qr")
     @slack_command()
-    async def handle_queue_remove(
-        ctx: CommandContext, deps: HandlerDependencies = deps
-    ):
+    async def handle_queue_remove(ctx: CommandContext, deps: HandlerDependencies = deps):
         """Handle /qr command - remove next queue item or specific item by id."""
         if ctx.text:
             parts = ctx.text.split()
@@ -3021,16 +2852,12 @@ async def _process_queue(
                 # Ensure we never overlap with a currently running Codex turn in this scope.
                 active_turn_wait_started_at: float | None = None
                 next_wait_log_at: float = 0.0
-                while deps.codex_executor and await deps.codex_executor.has_active_turn(
-                    scope
-                ):
+                while deps.codex_executor and await deps.codex_executor.has_active_turn(scope):
                     now = time.monotonic()
                     if active_turn_wait_started_at is None:
                         active_turn_wait_started_at = now
                         next_wait_log_at = now + 30.0
-                        log.info(
-                            f"Queue waiting for active Codex turn to finish in scope {scope}"
-                        )
+                        log.info(f"Queue waiting for active Codex turn to finish in scope {scope}")
                     elif now >= next_wait_log_at:
                         waited = now - active_turn_wait_started_at
                         log.info(
@@ -3050,15 +2877,11 @@ async def _process_queue(
                 pending = await deps.db.get_pending_queue_items(channel_id, thread_ts)
                 if not pending:
                     remaining_pending = 0
-                    final_queue_state = await _get_queue_state(
-                        deps, channel_id, thread_ts
-                    )
+                    final_queue_state = await _get_queue_state(deps, channel_id, thread_ts)
                     if final_queue_state == "running":
                         try:
-                            consumed_auto_finish = (
-                                await deps.db.consume_queue_auto_finish_pending(
-                                    channel_id, thread_ts
-                                )
+                            consumed_auto_finish = await deps.db.consume_queue_auto_finish_pending(
+                                channel_id, thread_ts
                             )
                         except AttributeError:
                             consumed_auto_finish = False
@@ -3069,19 +2892,15 @@ async def _process_queue(
                                 default_cwd=config.DEFAULT_WORKING_DIR,
                             )
                             try:
-                                recent_completed = (
-                                    await deps.db.get_recent_completed_queue_items(
-                                        channel_id,
-                                        thread_ts,
-                                        limit=8,
-                                    )
+                                recent_completed = await deps.db.get_recent_completed_queue_items(
+                                    channel_id,
+                                    thread_ts,
+                                    limit=8,
                                 )
                             except AttributeError:
                                 recent_completed = []
                             finish_prompt, finish_output = (
-                                _build_auto_finish_context_from_completed(
-                                    recent_completed
-                                )
+                                _build_auto_finish_context_from_completed(recent_completed)
                             )
 
                             async def judge_runner(judge_prompt: str) -> str:
@@ -3102,14 +2921,12 @@ async def _process_queue(
                                 git_tool_events=[],
                                 judge_runner=judge_runner,
                             )
-                            generated_entries, notices = (
-                                _build_auto_generated_queue_entries(
-                                    root_token=_auto_finish_root_token(),
-                                    continue_round=0,
-                                    check_round=0,
-                                    include_math_check=decision.include_math_check,
-                                    should_continue=decision.should_continue,
-                                )
+                            generated_entries, notices = _build_auto_generated_queue_entries(
+                                root_token=_auto_finish_root_token(),
+                                continue_round=0,
+                                check_round=0,
+                                include_math_check=decision.include_math_check,
+                                should_continue=decision.should_continue,
                             )
                             if generated_entries:
                                 queued_auto_items = await deps.db.add_many_to_queue(
@@ -3201,9 +3018,7 @@ async def _process_queue(
             except Exception as loop_error:
                 # Keep processor alive for transient scope-level failures
                 # (DB/network hiccups) instead of exiting permanently.
-                log.error(
-                    f"Queue processor transient error in scope {scope}: {loop_error}"
-                )
+                log.error(f"Queue processor transient error in scope {scope}: {loop_error}")
                 await asyncio.sleep(1.0)
     except asyncio.CancelledError:
         log.info(f"Queue processor cancelled for scope {scope}")

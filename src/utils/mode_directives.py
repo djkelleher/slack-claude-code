@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from src.codex.capabilities import normalize_codex_approval_mode, resolve_codex_compat_mode
+from src.codex.capabilities import (
+    normalize_codex_approval_mode,
+    resolve_codex_compat_mode,
+)
 from src.config import config
 
 CLAUDE_MODE_ALIASES: dict[str, str] = {
@@ -90,9 +93,7 @@ def resolve_runtime_mode_value(mode_value: str, *, backend: str) -> RuntimeModeO
             raise ModeDirectiveError(
                 f"Invalid approval mode: `{approval_mode}`. Valid modes: {valid}."
             )
-        return RuntimeModeOverrides(
-            approval_mode=normalize_codex_approval_mode(approval_mode)
-        )
+        return RuntimeModeOverrides(approval_mode=normalize_codex_approval_mode(approval_mode))
 
     if normalized.startswith("sandbox "):
         if backend != "codex":
@@ -119,7 +120,5 @@ def resolve_runtime_mode_value(mode_value: str, *, backend: str) -> RuntimeModeO
     permission_mode = CLAUDE_MODE_ALIASES.get(normalized)
     if permission_mode is None:
         valid_aliases = ", ".join(f"`{name}`" for name in sorted(CLAUDE_MODE_ALIASES))
-        raise ModeDirectiveError(
-            f"Unknown mode: `{normalized}`. Valid aliases: {valid_aliases}."
-        )
+        raise ModeDirectiveError(f"Unknown mode: `{normalized}`. Valid aliases: {valid_aliases}.")
     return RuntimeModeOverrides(permission_mode=permission_mode)

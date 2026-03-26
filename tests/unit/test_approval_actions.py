@@ -66,9 +66,7 @@ async def test_approve_tool_action_passes_resolver_user_and_updates_blocks() -> 
             logger=MagicMock(),
         )
 
-    mock_resolve.assert_awaited_once_with(
-        "approval-123", approved=True, resolved_by="U123"
-    )
+    mock_resolve.assert_awaited_once_with("approval-123", approved=True, resolved_by="U123")
     client.chat_update.assert_awaited_once()
     assert client.chat_update.await_args.kwargs["text"] == "Tool approval resolved"
     blocks = client.chat_update.await_args.kwargs["blocks"]
@@ -77,14 +75,10 @@ async def test_approve_tool_action_passes_resolver_user_and_updates_blocks() -> 
 
 
 @pytest.mark.asyncio
-async def test_view_detailed_output_falls_back_to_database_when_cache_is_empty() -> (
-    None
-):
+async def test_view_detailed_output_falls_back_to_database_when_cache_is_empty() -> None:
     app = _FakeApp()
     deps = SimpleNamespace(
-        db=SimpleNamespace(
-            get_command_detailed_output=AsyncMock(return_value="persisted details")
-        )
+        db=SimpleNamespace(get_command_detailed_output=AsyncMock(return_value="persisted details"))
     )
     register_actions(app, deps)
     DetailCache.clear()
@@ -155,9 +149,7 @@ async def test_copy_command_output_falls_back_to_command_output() -> None:
     deps = SimpleNamespace(
         db=SimpleNamespace(
             get_command_detailed_output=AsyncMock(return_value=None),
-            get_command_by_id=AsyncMock(
-                return_value=SimpleNamespace(output="short output")
-            ),
+            get_command_by_id=AsyncMock(return_value=SimpleNamespace(output="short output")),
         )
     )
     register_actions(app, deps)
@@ -237,9 +229,7 @@ async def test_model_menu_selection_handler_accepts_missing_value_payload() -> N
         app,
         SimpleNamespace(
             db=SimpleNamespace(
-                get_or_create_session=AsyncMock(
-                    return_value=SimpleNamespace(model="gpt-5.4")
-                ),
+                get_or_create_session=AsyncMock(return_value=SimpleNamespace(model="gpt-5.4")),
             )
         ),
     )
@@ -275,9 +265,7 @@ async def test_effort_menu_selection_handler_updates_model_effort() -> None:
         app,
         SimpleNamespace(
             db=SimpleNamespace(
-                get_or_create_session=AsyncMock(
-                    return_value=SimpleNamespace(model="gpt-5.4")
-                ),
+                get_or_create_session=AsyncMock(return_value=SimpleNamespace(model="gpt-5.4")),
             )
         ),
     )

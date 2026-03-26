@@ -18,7 +18,11 @@ from src.codex.capabilities import is_likely_plan_content
 from src.config import PLANS_DIR, config
 from src.database.models import Session, WorkspaceLease
 from src.git.service import GitService
-from src.git.workspace_manager import PreparedWorkspace, WorkspaceLeaseError, WorkspaceManager
+from src.git.workspace_manager import (
+    PreparedWorkspace,
+    WorkspaceLeaseError,
+    WorkspaceManager,
+)
 from src.question.manager import QuestionManager
 from src.utils.execution_scope import build_session_scope
 

@@ -13,22 +13,16 @@ class Session:
     thread_ts: Optional[str] = None  # Thread timestamp for thread-based sessions
     working_directory: str = "~"
     claude_session_id: Optional[str] = None  # For Claude --resume flag
-    permission_mode: Optional[str] = (
-        None  # Per-session permission mode override (Claude)
-    )
+    permission_mode: Optional[str] = None  # Per-session permission mode override (Claude)
     model: Optional[str] = (
         None  # Model to use (e.g., "sonnet", "claude-opus-4-6[1m]", "gpt-5.3-codex")
     )
-    added_dirs: list[str] = field(
-        default_factory=list
-    )  # Directories added via /add-dir
+    added_dirs: list[str] = field(default_factory=list)  # Directories added via /add-dir
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
     # Codex-specific fields
     codex_session_id: Optional[str] = None  # For Codex resume
-    sandbox_mode: str = (
-        config.CODEX_SANDBOX_MODE
-    )  # read-only, workspace-write, danger-full-access
+    sandbox_mode: str = config.CODEX_SANDBOX_MODE  # read-only, workspace-write, danger-full-access
     approval_mode: str = config.CODEX_APPROVAL_MODE  # untrusted, on-request, never
 
     @classmethod
@@ -97,9 +91,7 @@ class CommandHistory:
             detailed_output=detailed_output,
             status=status,
             error_message=error_message,
-            created_at=(
-                datetime.fromisoformat(created_at) if created_at else datetime.now()
-            ),
+            created_at=(datetime.fromisoformat(created_at) if created_at else datetime.now()),
             completed_at=datetime.fromisoformat(completed_at) if completed_at else None,
         )
 
@@ -198,14 +190,10 @@ class QueueItem:
                 else datetime.now()
             ),
             started_at=(
-                datetime.fromisoformat(row[started_at_index])
-                if row[started_at_index]
-                else None
+                datetime.fromisoformat(row[started_at_index]) if row[started_at_index] else None
             ),
             completed_at=(
-                datetime.fromisoformat(row[completed_at_index])
-                if row[completed_at_index]
-                else None
+                datetime.fromisoformat(row[completed_at_index]) if row[completed_at_index] else None
             ),
         )
 
@@ -231,9 +219,7 @@ class WorkspaceLease:
     worktree_name: Optional[str] = None
     worktree_origin: Optional[str] = None
     merge_status: Optional[str] = None
-    status: str = (
-        "active"  # active, released, abandoned, merged, needs_manual_attention
-    )
+    status: str = "active"  # active, released, abandoned, merged, needs_manual_attention
     created_at: datetime = field(default_factory=datetime.now)
     released_at: Optional[datetime] = None
 

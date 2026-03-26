@@ -200,11 +200,7 @@ class QuestionManager:
             if not queue:
                 return None
 
-            queue[:] = [
-                item
-                for item in queue
-                if now - item.created_at <= _DEFERRED_ANSWER_TTL
-            ]
+            queue[:] = [item for item in queue if now - item.created_at <= _DEFERRED_ANSWER_TTL]
             if not queue:
                 cls._deferred_answers.pop(scope_key, None)
                 return None
