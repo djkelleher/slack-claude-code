@@ -138,6 +138,10 @@ class TestConfig:
         """Queue pause-on-question should be disabled by default."""
         assert config.QUEUE_PAUSE_ON_QUESTIONS is False
 
+    def test_default_live_pty_setting_disabled(self):
+        """Live PTY mode should be opt-in by default."""
+        assert config.CLAUDE_LIVE_PTY_ENABLED is False
+
     def test_codex_approval_modes_include_v2_values(self):
         """Codex approval mode list matches supported app-server v2 values."""
         assert set(config.VALID_APPROVAL_MODES) == {
@@ -192,7 +196,9 @@ class TestAutoApproveToolsParsing:
     def test_whitespace_handling(self, monkeypatch):
         """Whitespace around values is stripped."""
         monkeypatch.delenv("AUTO_APPROVE_TOOLS", raising=False)
-        test_config = Config(AUTO_APPROVE_TOOLS_STR=" Read , Glob , Grep ", _env_file=None)
+        test_config = Config(
+            AUTO_APPROVE_TOOLS_STR=" Read , Glob , Grep ", _env_file=None
+        )
         assert test_config.AUTO_APPROVE_TOOLS == ["Read", "Glob", "Grep"]
 
 

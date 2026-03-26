@@ -109,9 +109,18 @@ class TestEventHelpers:
         seen: dict[str, float] = {}
         event = {"channel": "C123", "ts": "111.222", "user": "U999"}
 
-        assert _is_duplicate_event(event, seen, now_monotonic=100.0, ttl_seconds=30.0) is False
-        assert _is_duplicate_event(event, seen, now_monotonic=105.0, ttl_seconds=30.0) is True
-        assert _is_duplicate_event(event, seen, now_monotonic=131.0, ttl_seconds=30.0) is False
+        assert (
+            _is_duplicate_event(event, seen, now_monotonic=100.0, ttl_seconds=30.0)
+            is False
+        )
+        assert (
+            _is_duplicate_event(event, seen, now_monotonic=105.0, ttl_seconds=30.0)
+            is True
+        )
+        assert (
+            _is_duplicate_event(event, seen, now_monotonic=131.0, ttl_seconds=30.0)
+            is False
+        )
 
     def test_extract_single_prompt_mode_directive_strips_wrapper(self):
         prompt, mode = _extract_single_prompt_mode_directive(
@@ -173,7 +182,9 @@ class TestTypedModelCommand:
 
         client.chat_postMessage.assert_awaited_once()
         kwargs = client.chat_postMessage.await_args.kwargs
-        assert kwargs["text"] == "Use `/model` slash command to open the model selector."
+        assert (
+            kwargs["text"] == "Use `/model` slash command to open the model selector."
+        )
         assert "open the model selector" in kwargs["blocks"][0]["text"]["text"]
 
 
@@ -213,7 +224,9 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(success=True, turn_id="turn-123", error=None)
+                    return_value=SimpleNamespace(
+                        success=True, turn_id="turn-123", error=None
+                    )
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -251,7 +264,9 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(success=False, turn_id=None, error="conflict")
+                    return_value=SimpleNamespace(
+                        success=False, turn_id=None, error="conflict"
+                    )
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -263,7 +278,9 @@ class TestCodexActiveTurnRouting:
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
 
-        with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure_queue:
+        with patch(
+            "src.app.ensure_queue_processor", new=AsyncMock()
+        ) as mock_ensure_queue:
             handled = await _route_codex_message_to_active_turn_or_queue(
                 client=client,
                 deps=deps,
@@ -292,7 +309,9 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(success=False, turn_id=None, error="busy")
+                    return_value=SimpleNamespace(
+                        success=False, turn_id=None, error="busy"
+                    )
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -321,7 +340,9 @@ class TestCodexActiveTurnRouting:
             output="Steer failed and queue fallback failed. steer_error=busy queue_error=db insert failed",
             error_message="db insert failed",
         )
-        deps.codex_executor.record_queue_fallback.assert_awaited_once_with(success=False)
+        deps.codex_executor.record_queue_fallback.assert_awaited_once_with(
+            success=False
+        )
         assert client.chat_postMessage.await_count >= 1
 
     @pytest.mark.asyncio
@@ -332,7 +353,9 @@ class TestCodexActiveTurnRouting:
             codex_executor=SimpleNamespace(
                 has_active_turn=AsyncMock(return_value=True),
                 steer_active_turn=AsyncMock(
-                    return_value=SimpleNamespace(success=False, turn_id=None, error="conflict")
+                    return_value=SimpleNamespace(
+                        success=False, turn_id=None, error="conflict"
+                    )
                 ),
                 record_queue_fallback=AsyncMock(),
             ),
@@ -379,7 +402,11 @@ class TestClaudeActiveExecutionRouting:
         """No active Claude execution should fall through to normal runtime execution."""
         session = SimpleNamespace(id=1)
         deps = SimpleNamespace(
-            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=False)),
+            executor=SimpleNamespace(
+                has_active_execution=AsyncMock(return_value=False),
+                is_live_pty_enabled=MagicMock(return_value=False),
+                has_active_live_pty=AsyncMock(return_value=False),
+            ),
             db=SimpleNamespace(
                 add_command=AsyncMock(),
                 update_command_status=AsyncMock(),
@@ -408,7 +435,11 @@ class TestClaudeActiveExecutionRouting:
         """Active Claude execution should auto-queue follow-up messages."""
         session = SimpleNamespace(id=1)
         deps = SimpleNamespace(
-            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=True)),
+            executor=SimpleNamespace(
+                has_active_execution=AsyncMock(return_value=True),
+                is_live_pty_enabled=MagicMock(return_value=False),
+                has_active_live_pty=AsyncMock(return_value=False),
+            ),
             db=SimpleNamespace(
                 add_command=AsyncMock(return_value=SimpleNamespace(id=21)),
                 update_command_status=AsyncMock(),
@@ -417,7 +448,9 @@ class TestClaudeActiveExecutionRouting:
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
 
-        with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure_queue:
+        with patch(
+            "src.app.ensure_queue_processor", new=AsyncMock()
+        ) as mock_ensure_queue:
             handled = await _route_claude_message_to_active_execution_or_queue(
                 client=client,
                 deps=deps,
@@ -438,11 +471,17 @@ class TestClaudeActiveExecutionRouting:
         )
 
     @pytest.mark.asyncio
-    async def test_reports_queue_start_failure_when_active_claude_execution_exists(self):
+    async def test_reports_queue_start_failure_when_active_claude_execution_exists(
+        self,
+    ):
         """Queued Claude fallback should report queue startup failures instead of going silent."""
         session = SimpleNamespace(id=1)
         deps = SimpleNamespace(
-            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=True)),
+            executor=SimpleNamespace(
+                has_active_execution=AsyncMock(return_value=True),
+                is_live_pty_enabled=MagicMock(return_value=False),
+                has_active_live_pty=AsyncMock(return_value=False),
+            ),
             db=SimpleNamespace(
                 add_command=AsyncMock(return_value=SimpleNamespace(id=22)),
                 update_command_status=AsyncMock(),
@@ -482,7 +521,11 @@ class TestClaudeActiveExecutionRouting:
         """Queue fallback failures should update command status and notify user."""
         session = SimpleNamespace(id=1)
         deps = SimpleNamespace(
-            executor=SimpleNamespace(has_active_execution=AsyncMock(return_value=True)),
+            executor=SimpleNamespace(
+                has_active_execution=AsyncMock(return_value=True),
+                is_live_pty_enabled=MagicMock(return_value=False),
+                has_active_live_pty=AsyncMock(return_value=False),
+            ),
             db=SimpleNamespace(
                 add_command=AsyncMock(return_value=SimpleNamespace(id=22)),
                 update_command_status=AsyncMock(),
@@ -512,6 +555,92 @@ class TestClaudeActiveExecutionRouting:
             error_message="db insert failed",
         )
         assert client.chat_postMessage.await_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_routes_to_active_live_pty_when_steer_succeeds(self):
+        """Active live PTY turn should consume follow-up message via steer."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            executor=SimpleNamespace(
+                has_active_execution=AsyncMock(return_value=True),
+                is_live_pty_enabled=MagicMock(return_value=True),
+                has_active_live_pty=AsyncMock(return_value=True),
+                steer_active_execution=AsyncMock(
+                    return_value=SimpleNamespace(
+                        success=True, turn_id="pty-turn-1", error=None
+                    )
+                ),
+            ),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=31)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        handled = await _route_claude_message_to_active_execution_or_queue(
+            client=client,
+            deps=deps,
+            session=session,
+            channel_id="C123",
+            thread_ts="123.456",
+            prompt="follow up",
+            logger=MagicMock(),
+        )
+
+        assert handled is True
+        deps.db.add_to_queue.assert_not_awaited()
+        deps.db.update_command_status.assert_any_await(
+            31,
+            "completed",
+            output="Routed to active Claude PTY turn via live input. turn_id=pty-turn-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_queues_when_active_live_pty_steer_fails(self):
+        """Live PTY steer failure should fall back to queue processing."""
+        session = SimpleNamespace(id=1)
+        deps = SimpleNamespace(
+            executor=SimpleNamespace(
+                has_active_execution=AsyncMock(return_value=True),
+                is_live_pty_enabled=MagicMock(return_value=True),
+                has_active_live_pty=AsyncMock(return_value=True),
+                steer_active_execution=AsyncMock(
+                    return_value=SimpleNamespace(
+                        success=False, turn_id=None, error="busy"
+                    )
+                ),
+            ),
+            db=SimpleNamespace(
+                add_command=AsyncMock(return_value=SimpleNamespace(id=32)),
+                update_command_status=AsyncMock(),
+                add_to_queue=AsyncMock(return_value=SimpleNamespace(id=90)),
+            ),
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch(
+            "src.app.ensure_queue_processor", new=AsyncMock()
+        ) as mock_ensure_queue:
+            handled = await _route_claude_message_to_active_execution_or_queue(
+                client=client,
+                deps=deps,
+                session=session,
+                channel_id="C123",
+                thread_ts="123.456",
+                prompt="follow up",
+                logger=MagicMock(),
+            )
+
+        assert handled is True
+        deps.db.add_to_queue.assert_awaited_once()
+        mock_ensure_queue.assert_awaited_once()
+        deps.db.update_command_status.assert_any_await(
+            32,
+            "completed",
+            output="Active Claude execution detected (steer failed: busy). Auto-queued item #90.",
+        )
 
 
 class TestStructuredQueuePlanRouting:
@@ -568,8 +697,12 @@ class TestStructuredQueuePlanRouting:
                     ]
                 ),
                 get_running_queue_items=AsyncMock(return_value=[]),
-                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
-                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="running")),
+                get_queue_control=AsyncMock(
+                    return_value=SimpleNamespace(state="running")
+                ),
+                update_queue_control_state=AsyncMock(
+                    return_value=SimpleNamespace(state="running")
+                ),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -594,7 +727,9 @@ class TestStructuredQueuePlanRouting:
                     ]
                 ),
             ):
-                with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+                with patch(
+                    "src.app.ensure_queue_processor", new=AsyncMock()
+                ) as mock_ensure:
                     handled = await _queue_structured_plan_message(
                         client=client,
                         deps=deps,
@@ -629,10 +764,16 @@ class TestStructuredQueuePlanRouting:
         session = SimpleNamespace(id=1, working_directory="/repo")
         deps = SimpleNamespace(
             db=SimpleNamespace(
-                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
+                add_many_to_queue=AsyncMock(
+                    return_value=[SimpleNamespace(id=1, position=1)]
+                ),
                 get_running_queue_items=AsyncMock(return_value=[]),
-                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
-                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="running")),
+                get_queue_control=AsyncMock(
+                    return_value=SimpleNamespace(state="running")
+                ),
+                update_queue_control_state=AsyncMock(
+                    return_value=SimpleNamespace(state="running")
+                ),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -689,9 +830,13 @@ class TestStructuredQueuePlanRouting:
         session = SimpleNamespace(id=1, working_directory="/repo")
         deps = SimpleNamespace(
             db=SimpleNamespace(
-                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=3)]),
+                add_many_to_queue=AsyncMock(
+                    return_value=[SimpleNamespace(id=1, position=3)]
+                ),
                 get_running_queue_items=AsyncMock(return_value=[]),
-                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+                get_queue_control=AsyncMock(
+                    return_value=SimpleNamespace(state="running")
+                ),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -739,7 +884,9 @@ class TestStructuredQueuePlanRouting:
             db=SimpleNamespace(
                 add_many_to_queue=AsyncMock(),
                 get_running_queue_items=AsyncMock(return_value=[]),
-                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+                get_queue_control=AsyncMock(
+                    return_value=SimpleNamespace(state="running")
+                ),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -756,7 +903,10 @@ class TestStructuredQueuePlanRouting:
 
         assert handled is True
         deps.db.add_many_to_queue.assert_not_awaited()
-        assert "handled by `/qc clear`" in client.chat_postMessage.await_args.kwargs["text"]
+        assert (
+            "handled by `/qc clear`"
+            in client.chat_postMessage.await_args.kwargs["text"]
+        )
 
     @pytest.mark.asyncio
     async def test_structured_plan_message_persists_scheduled_controls(self):
@@ -764,11 +914,19 @@ class TestStructuredQueuePlanRouting:
         scheduled_time = datetime.now(timezone.utc) + timedelta(minutes=30)
         deps = SimpleNamespace(
             db=SimpleNamespace(
-                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
-                add_queue_scheduled_events=AsyncMock(return_value=[SimpleNamespace(id=900)]),
+                add_many_to_queue=AsyncMock(
+                    return_value=[SimpleNamespace(id=1, position=1)]
+                ),
+                add_queue_scheduled_events=AsyncMock(
+                    return_value=[SimpleNamespace(id=900)]
+                ),
                 get_running_queue_items=AsyncMock(return_value=[]),
-                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
-                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="paused")),
+                get_queue_control=AsyncMock(
+                    return_value=SimpleNamespace(state="running")
+                ),
+                update_queue_control_state=AsyncMock(
+                    return_value=SimpleNamespace(state="paused")
+                ),
             )
         )
         client = SimpleNamespace(chat_postMessage=AsyncMock())
@@ -816,23 +974,31 @@ class TestStructuredQueuePlanRouting:
                             )
 
         assert handled is True
-        deps.db.update_queue_control_state.assert_awaited_once_with("C123", "123.456", "paused")
+        deps.db.update_queue_control_state.assert_awaited_once_with(
+            "C123", "123.456", "paused"
+        )
         deps.db.add_queue_scheduled_events.assert_awaited_once_with(
             channel_id="C123",
             thread_ts="123.456",
             events=[("pause", scheduled_time)],
         )
         mock_scheduler.assert_awaited_once()
-        assert "Scheduled controls:" in client.chat_postMessage.await_args.kwargs["text"]
+        assert (
+            "Scheduled controls:" in client.chat_postMessage.await_args.kwargs["text"]
+        )
 
     @pytest.mark.asyncio
     async def test_structured_plan_queue_restarts_when_replacing_paused_queue(self):
         session = SimpleNamespace(id=1, working_directory="/repo")
         deps = SimpleNamespace(
             db=SimpleNamespace(
-                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=10, position=10)]),
+                add_many_to_queue=AsyncMock(
+                    return_value=[SimpleNamespace(id=10, position=10)]
+                ),
                 get_running_queue_items=AsyncMock(return_value=[]),
-                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="paused")),
+                get_queue_control=AsyncMock(
+                    return_value=SimpleNamespace(state="paused")
+                ),
                 update_queue_control_state=AsyncMock(),
             )
         )
@@ -852,7 +1018,9 @@ class TestStructuredQueuePlanRouting:
                     ]
                 ),
             ):
-                with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
+                with patch(
+                    "src.app.ensure_queue_processor", new=AsyncMock()
+                ) as mock_ensure:
                     handled = await _queue_structured_plan_message(
                         client=client,
                         deps=deps,
@@ -922,7 +1090,9 @@ class TestStartupQueueRecovery:
         fake_logger = MagicMock()
 
         with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
-            await _restore_pending_queue_processors(client=client, deps=deps, logger=fake_logger)
+            await _restore_pending_queue_processors(
+                client=client, deps=deps, logger=fake_logger
+            )
 
         assert mock_ensure.await_count == 2
         scopes_started = {
@@ -946,7 +1116,9 @@ class TestStartupQueueRecovery:
         fake_logger = MagicMock()
 
         with patch("src.app.ensure_queue_processor", new=AsyncMock()) as mock_ensure:
-            await _restore_pending_queue_processors(client=client, deps=deps, logger=fake_logger)
+            await _restore_pending_queue_processors(
+                client=client, deps=deps, logger=fake_logger
+            )
 
         mock_ensure.assert_not_awaited()
         deps.db.get_queue_control.assert_not_awaited()

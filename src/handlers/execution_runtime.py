@@ -50,8 +50,11 @@ async def execute_prompt_with_runtime(
     client: Any,
     logger: Any,
     user_id: Optional[str] = None,
-    api_with_retry: Optional[Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]] = None,
+    api_with_retry: Optional[
+        Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]
+    ] = None,
     processing_text: Optional[str] = None,
+    allow_live_pty: bool = True,
 ) -> ExecutionDeliveryResult:
     """Execute a prompt through backend router and deliver final Slack output."""
     cmd_history = await deps.db.add_command(session.id, prompt)
@@ -145,11 +148,14 @@ async def execute_prompt_with_runtime(
             logger=logger,
             on_plan_approved=on_plan_approved,
             on_interaction_resumed=on_interaction_resumed,
+            allow_live_pty=allow_live_pty,
         )
         result = route.result
 
         if result.success:
-            await deps.db.update_command_status(cmd_history.id, "completed", result.output)
+            await deps.db.update_command_status(
+                cmd_history.id, "completed", result.output
+            )
         else:
             await deps.db.update_command_status(
                 cmd_history.id, "failed", result.output, result.error
@@ -187,8 +193,12 @@ async def execute_prompt_with_runtime(
 
     except asyncio.CancelledError:
         logger.info("Command execution was cancelled")
-        await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
-        await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
+        await _cleanup_runtime_state(
+            streaming_state=streaming_state, session_id=str(session.id)
+        )
+        await deps.db.update_command_status(
+            cmd_history.id, "cancelled", error_message="Cancelled"
+        )
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
@@ -198,8 +208,12 @@ async def execute_prompt_with_runtime(
         raise
     except SlackApiError as e:
         logger.error(f"Slack API error executing command: {e}")
-        await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
-        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
+        await _cleanup_runtime_state(
+            streaming_state=streaming_state, session_id=str(session.id)
+        )
+        await deps.db.update_command_status(
+            cmd_history.id, "failed", error_message=str(e)
+        )
         try:
             await client.chat_postMessage(
                 channel=channel_id,
@@ -212,8 +226,12 @@ async def execute_prompt_with_runtime(
         raise
     except (OSError, IOError) as e:
         logger.error(f"I/O error executing command: {e}")
-        await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
-        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
+        await _cleanup_runtime_state(
+            streaming_state=streaming_state, session_id=str(session.id)
+        )
+        await deps.db.update_command_status(
+            cmd_history.id, "failed", error_message=str(e)
+        )
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
@@ -223,8 +241,12 @@ async def execute_prompt_with_runtime(
         raise
     except Exception as e:
         logger.error(f"Unexpected error executing command: {type(e).__name__}: {e}")
-        await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
-        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
+        await _cleanup_runtime_state(
+            streaming_state=streaming_state, session_id=str(session.id)
+        )
+        await deps.db.update_command_status(
+            cmd_history.id, "failed", error_message=str(e)
+        )
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,

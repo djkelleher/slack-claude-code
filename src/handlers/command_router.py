@@ -155,7 +155,9 @@ def _extract_codex_plan_content(text: Optional[str]) -> Optional[str]:
     if not all(section in lowered for section in required_sections):
         return None
 
-    step_count = len(re.findall(r"(?im)^\s*(?:\d+\.\s+|\d+\)\s+|[-*]\s+)", plan_content))
+    step_count = len(
+        re.findall(r"(?im)^\s*(?:\d+\.\s+|\d+\)\s+|[-*]\s+)", plan_content)
+    )
     if step_count < 3:
         return None
 
@@ -224,9 +226,13 @@ def _build_auto_worktree_finalize_prompt(lease: WorkspaceLease) -> str:
     )
 
 
-def _build_auto_worktree_conflict_prompt(lease: WorkspaceLease, conflict_files: list[str]) -> str:
+def _build_auto_worktree_conflict_prompt(
+    lease: WorkspaceLease, conflict_files: list[str]
+) -> str:
     """Build a follow-up prompt for resolving merge conflicts in the target worktree."""
-    conflict_summary = "\n".join(f"- {path}" for path in conflict_files[:20]) or "- (unknown)"
+    conflict_summary = (
+        "\n".join(f"- {path}" for path in conflict_files[:20]) or "- (unknown)"
+    )
     return (
         "A raw git merge reported conflicts while reintegrating an auto worktree.\n"
         f"- Source branch: `{lease.worktree_name}`\n"
@@ -285,7 +291,9 @@ async def _post_or_auto_answer_question(
         )
         response = QuestionManager.format_answer(pending_question, backend=backend)
         if backend == "claude" and isinstance(response, str):
-            response = response.strip() or "Use your recommended/default option and continue."
+            response = (
+                response.strip() or "Use your recommended/default option and continue."
+            )
         if logger:
             logger.info(
                 f"Auto-answering {log_prefix} question {pending_question.tool_use_id} "
@@ -443,7 +451,11 @@ async def _reintegrate_auto_worktree(
             notes.append(
                 f"Auto worktree `{lease.leased_root}` was clean, but cleanup failed: {exc}"
             )
-            return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+            return (
+                _append_workspace_notes(result, notes),
+                "needs_manual_attention",
+                notes,
+            )
         if cleanup_note:
             notes.append(cleanup_note)
         return _append_workspace_notes(result, notes), "clean-noop", notes
@@ -478,10 +490,14 @@ async def _reintegrate_auto_worktree(
     )
     if finalize_result.output:
         result.output = "\n\n".join(
-            part for part in [result.output, "Finalize Output", finalize_result.output] if part
+            part
+            for part in [result.output, "Finalize Output", finalize_result.output]
+            if part
         )
     if not finalize_result.success:
-        notes.append(f"Auto worktree `{lease.leased_root}` was kept because finalization failed.")
+        notes.append(
+            f"Auto worktree `{lease.leased_root}` was kept because finalization failed."
+        )
         return _append_workspace_notes(result, notes), "needs_manual_attention", notes
 
     post_finalize_status = await git_service.get_status(lease.leased_root)
@@ -519,7 +535,9 @@ async def _reintegrate_auto_worktree(
         lease.worktree_name,
     )
     if merge_success:
-        notes.append(f"Merged `{lease.worktree_name}` into `{lease.target_branch or 'target'}`.")
+        notes.append(
+            f"Merged `{lease.worktree_name}` into `{lease.target_branch or 'target'}`."
+        )
         if merge_message:
             notes.append(merge_message)
         try:
@@ -528,12 +546,18 @@ async def _reintegrate_auto_worktree(
             notes.append(
                 f"Merge succeeded, but auto worktree cleanup failed for `{lease.leased_root}`: {exc}"
             )
-            return _append_workspace_notes(result, notes), "needs_manual_attention", notes
+            return (
+                _append_workspace_notes(result, notes),
+                "needs_manual_attention",
+                notes,
+            )
         if cleanup_note:
             notes.append(cleanup_note)
         return _append_workspace_notes(result, notes), "merged", notes
 
-    conflict_files = await workspace_manager.get_unmerged_files(lease.target_worktree_path)
+    conflict_files = await workspace_manager.get_unmerged_files(
+        lease.target_worktree_path
+    )
     conflict_result = await _run_workspace_follow_up(
         backend=backend,
         deps=deps,
@@ -558,7 +582,9 @@ async def _reintegrate_auto_worktree(
     )
     if conflict_result.output:
         result.output = "\n\n".join(
-            part for part in [result.output, "Merge Resolve Output", conflict_result.output] if part
+            part
+            for part in [result.output, "Merge Resolve Output", conflict_result.output]
+            if part
         )
     if not conflict_result.success:
         notes.append(
@@ -566,7 +592,9 @@ async def _reintegrate_auto_worktree(
         )
         return _append_workspace_notes(result, notes), "needs_manual_attention", notes
 
-    remaining_conflicts = await workspace_manager.get_unmerged_files(lease.target_worktree_path)
+    remaining_conflicts = await workspace_manager.get_unmerged_files(
+        lease.target_worktree_path
+    )
     if remaining_conflicts:
         notes.append(
             f"Merge conflicts remain in target `{lease.target_worktree_path}`; kept auto worktree `{lease.leased_root}`."
@@ -664,7 +692,9 @@ async def _execute_codex_backend(
             return session.codex_session_id
 
         if persist_session_ids:
-            await deps.db.update_session_codex_id(channel_id, thread_ts, forked_thread_id)
+            await deps.db.update_session_codex_id(
+                channel_id, thread_ts, forked_thread_id
+            )
             session.codex_session_id = forked_thread_id
         if logger:
             logger.info(
@@ -725,14 +755,19 @@ async def _execute_codex_backend(
                     return response
 
             if slack_client is not None:
-                if not state.pending_question or state.pending_question.tool_use_id != tool_use_id:
-                    state.pending_question = await QuestionManager.create_pending_question(
-                        session_id=str(session.id),
-                        channel_id=channel_id,
-                        thread_ts=thread_ts,
-                        tool_use_id=tool_use_id,
-                        tool_input=normalized_tool_input,
-                        defer_for_resume=True,
+                if (
+                    not state.pending_question
+                    or state.pending_question.tool_use_id != tool_use_id
+                ):
+                    state.pending_question = (
+                        await QuestionManager.create_pending_question(
+                            session_id=str(session.id),
+                            channel_id=channel_id,
+                            thread_ts=thread_ts,
+                            tool_use_id=tool_use_id,
+                            tool_input=normalized_tool_input,
+                            defer_for_resume=True,
+                        )
                     )
                 await QuestionManager.post_question_to_slack(
                     state.pending_question,
@@ -761,12 +796,18 @@ async def _execute_codex_backend(
             return response
 
         if slack_client is None:
-            if state.pending_question and state.pending_question.tool_use_id == tool_use_id:
+            if (
+                state.pending_question
+                and state.pending_question.tool_use_id == tool_use_id
+            ):
                 await QuestionManager.cancel(state.pending_question.question_id)
                 state.pending_question = None
             return None
 
-        if not state.pending_question or state.pending_question.tool_use_id != tool_use_id:
+        if (
+            not state.pending_question
+            or state.pending_question.tool_use_id != tool_use_id
+        ):
             state.pending_question = await QuestionManager.create_pending_question(
                 session_id=str(session.id),
                 channel_id=channel_id,
@@ -791,7 +832,9 @@ async def _execute_codex_backend(
             return None
 
         state.pending_question = None
-        on_chunk = await _maybe_swap_on_chunk_after_interaction(on_interaction_resumed, on_chunk)
+        on_chunk = await _maybe_swap_on_chunk_after_interaction(
+            on_interaction_resumed, on_chunk
+        )
         return response_payload
 
     async def on_approval_request(method: str, approval_input: dict) -> dict | None:
@@ -799,14 +842,17 @@ async def _execute_codex_backend(
         if auto_approve_permissions:
             if logger:
                 logger.info(
-                    f"Auto-approving Codex permission request {method} " "for queue-style execution"
+                    f"Auto-approving Codex permission request {method} "
+                    "for queue-style execution"
                 )
             return approval_payload_from_decision(method, True)
 
         if slack_client is None:
             return None
 
-        tool_name, tool_input = format_approval_request_for_slack(method, approval_input)
+        tool_name, tool_input = format_approval_request_for_slack(
+            method, approval_input
+        )
         approved = await PermissionManager.request_approval(
             session_id=str(session.id),
             channel_id=channel_id,
@@ -818,7 +864,9 @@ async def _execute_codex_backend(
             db=deps.db,
             auto_approve_tools=config.AUTO_APPROVE_TOOLS,
         )
-        on_chunk = await _maybe_swap_on_chunk_after_interaction(on_interaction_resumed, on_chunk)
+        on_chunk = await _maybe_swap_on_chunk_after_interaction(
+            on_interaction_resumed, on_chunk
+        )
         return approval_payload_from_decision(method, approved)
 
     async def run_codex_turn(turn_prompt: str, resume_session_id: Optional[str]) -> Any:
@@ -840,7 +888,9 @@ async def _execute_codex_backend(
             thread_ts=thread_ts,
         )
         if result.session_id and persist_session_ids:
-            await deps.db.update_session_codex_id(channel_id, thread_ts, result.session_id)
+            await deps.db.update_session_codex_id(
+                channel_id, thread_ts, result.session_id
+            )
         return result
 
     initial_resume_session_id = await resolve_initial_resume_session_id()
@@ -872,7 +922,11 @@ async def _execute_codex_backend(
     if question_pause_requested:
         return result
 
-    if session.permission_mode == "plan" and result.success and slack_client is not None:
+    if (
+        session.permission_mode == "plan"
+        and result.success
+        and slack_client is not None
+    ):
         plan_content, plan_detection_source = _detect_codex_plan_content(result.output)
 
         if not plan_content and result.session_id:
@@ -894,7 +948,9 @@ async def _execute_codex_backend(
             )
             result = await run_codex_turn(retry_prompt, result.session_id)
             if result.success:
-                plan_content, plan_detection_source = _detect_codex_plan_content(result.output)
+                plan_content, plan_detection_source = _detect_codex_plan_content(
+                    result.output
+                )
 
         if plan_content and result.success:
             approval_log = (
@@ -919,7 +975,9 @@ async def _execute_codex_backend(
             if approved:
                 codex_turn_index += 1
                 tool_id_namespace = f"turn{codex_turn_index}:"
-                await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
+                await deps.db.update_session_mode(
+                    channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
+                )
                 session.permission_mode = config.DEFAULT_BYPASS_MODE
                 if on_plan_approved:
                     on_chunk = await _maybe_swap_on_chunk_after_interaction(
@@ -933,9 +991,7 @@ async def _execute_codex_backend(
                 )
             else:
                 result.success = False
-                result.output = (
-                    "_Plan not approved. Staying in plan mode until you provide feedback._"
-                )
+                result.output = "_Plan not approved. Staying in plan mode until you provide feedback._"
         else:
             skipped_log = (
                 "Codex plan mode response did not produce a detectable plan after retry; "
@@ -967,6 +1023,7 @@ async def _execute_claude_backend(
     pause_on_questions: bool,
     on_plan_approved: Any,
     on_interaction_resumed: Any,
+    allow_live_pty: bool,
 ) -> Any:
     """Execute prompt against Claude backend, including questions and plan approval."""
     state = _ConversationState()
@@ -982,14 +1039,19 @@ async def _execute_claude_backend(
                     continue
                 if tool.result is not None:
                     continue
-                if state.pending_question and state.pending_question.tool_use_id == tool.id:
+                if (
+                    state.pending_question
+                    and state.pending_question.tool_use_id == tool.id
+                ):
                     continue
                 state.pending_question = await QuestionManager.create_pending_question(
                     session_id=str(session.id),
                     channel_id=channel_id,
                     thread_ts=thread_ts,
                     tool_use_id=tool.id,
-                    tool_input=QuestionManager.normalize_question_tool_input(tool.input),
+                    tool_input=QuestionManager.normalize_question_tool_input(
+                        tool.input
+                    ),
                     defer_for_resume=pause_on_questions,
                 )
         if on_chunk:
@@ -1015,9 +1077,12 @@ async def _execute_claude_backend(
             model=session.model,
             channel_id=channel_id,
             thread_ts=thread_ts,
+            allow_live_pty=allow_live_pty,
         )
         if result.session_id and persist_session_ids:
-            await deps.db.update_session_claude_id(channel_id, thread_ts, result.session_id)
+            await deps.db.update_session_claude_id(
+                channel_id, thread_ts, result.session_id
+            )
         return result
 
     first_prompt = prompt
@@ -1092,7 +1157,9 @@ async def _execute_claude_backend(
         )
         if not isinstance(answer_text, str):
             state.pending_question = None
-            result.output = (state.accumulated_context + "\n\n_Question was cancelled._").strip()
+            result.output = (
+                state.accumulated_context + "\n\n_Question was cancelled._"
+            ).strip()
             result.success = False
             break
         if not auto_answer_questions:
@@ -1129,8 +1196,13 @@ async def _execute_claude_backend(
         result.paused_on_question = True
         return result
 
-    if _result_field(result, "has_pending_plan_approval", False) and slack_client is not None:
-        plan_text = _result_field(result, "plan_subagent_result", "") or result.output or ""
+    if (
+        _result_field(result, "has_pending_plan_approval", False)
+        and slack_client is not None
+    ):
+        plan_text = (
+            _result_field(result, "plan_subagent_result", "") or result.output or ""
+        )
         plan_file_path = _extract_plan_file_path(plan_text) or _extract_plan_file_path(
             result.output or ""
         )
@@ -1158,7 +1230,9 @@ async def _execute_claude_backend(
             plan_file_path=plan_file_path,
         )
         if approved:
-            await deps.db.update_session_mode(channel_id, thread_ts, config.DEFAULT_BYPASS_MODE)
+            await deps.db.update_session_mode(
+                channel_id, thread_ts, config.DEFAULT_BYPASS_MODE
+            )
             session.permission_mode = config.DEFAULT_BYPASS_MODE
             if on_plan_approved:
                 on_chunk = await _maybe_swap_on_chunk_after_interaction(
@@ -1173,7 +1247,9 @@ async def _execute_claude_backend(
             )
         else:
             result.success = False
-            result.output = "_Plan not approved. Staying in plan mode until you provide feedback._"
+            result.output = (
+                "_Plan not approved. Staying in plan mode until you provide feedback._"
+            )
 
     return result
 
@@ -1196,6 +1272,7 @@ async def execute_for_session(
     session_scope_override: Optional[str] = None,
     on_plan_approved: Any = None,
     on_interaction_resumed: Any = None,
+    allow_live_pty: bool = False,
 ) -> CommandRouteResult:
     """Execute a prompt with the correct backend and persist resumed session IDs."""
     backend = resolve_backend_for_session(session)
@@ -1233,7 +1310,9 @@ async def execute_for_session(
         raise
 
     effective_session = prepared_workspace.session
-    effective_persist_session_ids = persist_session_ids and prepared_workspace.persist_session_ids
+    effective_persist_session_ids = (
+        persist_session_ids and prepared_workspace.persist_session_ids
+    )
 
     try:
         if backend == "codex":
@@ -1275,6 +1354,7 @@ async def execute_for_session(
                 pause_on_questions=pause_on_questions,
                 on_plan_approved=on_plan_approved,
                 on_interaction_resumed=on_interaction_resumed,
+                allow_live_pty=allow_live_pty,
             )
 
         if prepared_workspace.uses_auto_worktree:
@@ -1309,7 +1389,9 @@ async def execute_for_session(
                 final_status = "released"
             if prepared_workspace.uses_auto_worktree and merge_status is None:
                 final_status = (
-                    "needs_manual_attention" if result is None or not result.success else "released"
+                    "needs_manual_attention"
+                    if result is None or not result.success
+                    else "released"
                 )
             await workspace_manager.release_workspace(
                 execution_id,
