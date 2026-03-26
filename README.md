@@ -184,7 +184,33 @@ Configurable subagents for specialized tasks. Matches terminal Claude Code's age
 - `bash` - Execute shell commands, git, npm, etc.
 - `general` - Full capabilities for implementation
 
-**Custom agents:** Create `.claude/agents/<name>.md` files with YAML frontmatter to define project-specific agents.
+**Custom agents:** Agent definitions are loaded in this precedence order, with higher-priority entries overriding lower ones when names collide:
+- Built-in agents
+- User agents from `~/.claude/agents/*.md`
+- Project agents from `.claude/agents/*.md`
+
+Create `.claude/agents/<name>.md` files with YAML frontmatter to define project-specific agents. Supported frontmatter keys:
+- `name`
+- `description`
+- `tools`
+- `disallowedTools`
+- `model`
+- `permissionMode`
+- `maxTurns`
+
+Example:
+
+```md
+---
+description: Investigate queue and scheduler behavior
+tools: Read, Grep, Bash
+model: haiku
+permissionMode: bypassPermissions
+maxTurns: 20
+---
+
+Trace queue execution paths, summarize relevant files, and do not modify code.
+```
 
 #### Command Queue
 Queue commands for sequential execution while preserving Claude's session context across items.
