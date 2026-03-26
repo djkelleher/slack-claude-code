@@ -492,6 +492,38 @@ def register_claude_cli_commands(app: AsyncApp, deps: HandlerDependencies) -> No
             default_cwd=config.DEFAULT_WORKING_DIR,
         )
 
+        if ctx.text and ctx.text.strip().lower() == "refresh":
+            # Refresh available models via dynamic discovery
+            if deps.backend_registry:
+                await deps.backend_registry.discover_all_models()
+                all_models = deps.backend_registry.get_all_models()
+                model_list = "\n".join(
+                    f"\u2022 *{m.display_name}* (`{m.cli_value or 'default'}`) " f"- {m.backend_id}"
+                    for m in all_models
+                )
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    text=f"Refreshed {len(all_models)} models",
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": (
+                                    f":arrows_counterclockwise: Model discovery complete. "
+                                    f"*{len(all_models)} models* available:\n\n{model_list}"
+                                ),
+                            },
+                        },
+                    ],
+                )
+            else:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    text="Backend registry not available.",
+                )
+            return
+
         if ctx.text:
             # Direct model selection via command argument
             model_text, requested_effort = split_model_input_and_effort(ctx.text)

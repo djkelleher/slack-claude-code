@@ -1162,6 +1162,11 @@ async def main():
         f"{', '.join(registry.backend_ids)}"
     )
 
+    # Discover available models from all backends
+    await registry.discover_all_models()
+    all_models = registry.get_all_models()
+    logger.info(f"Model discovery complete: {len(all_models)} models available")
+
     # Create Slack app
     app = AsyncApp(
         token=config.SLACK_BOT_TOKEN,
