@@ -5,6 +5,7 @@ SQLite database and stub executors, then wires it to the real Slack bot client s
 that every slash command posts its output to the live test channel.
 """
 
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
@@ -174,7 +175,8 @@ async def _announce_test(request, slack_client, slack_test_channel):
     if docstring:
         label += f"\n_{docstring}_"
 
-    resp = await slack_client.chat_postMessage(
+    resp = await _helpers.slack_post_with_retry(
+        slack_client,
         channel=slack_test_channel,
         text=label,
         blocks=[
@@ -184,6 +186,8 @@ async def _announce_test(request, slack_client, slack_test_channel):
             }
         ],
     )
+    # Brief pause to avoid rate-limiting the handler's own API calls.
+    await asyncio.sleep(0.5)
     yield
     await _helpers.delete_message(slack_client, slack_test_channel, resp["ts"])
 

@@ -18,6 +18,32 @@ from slack_sdk.web.async_client import AsyncWebClient
 # Set to True by conftest when --keep-messages is passed.
 KEEP_MESSAGES: bool = False
 
+# Default retry pause for Slack rate limits (429).
+_RATE_LIMIT_PAUSE: float = 3.0
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit-aware Slack API call
+# ---------------------------------------------------------------------------
+
+
+async def slack_post_with_retry(
+    client: AsyncWebClient,
+    *,
+    max_retries: int = 3,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Call ``chat_postMessage`` with automatic retry on 429 rate-limit errors."""
+    for attempt in range(max_retries):
+        try:
+            return await client.chat_postMessage(**kwargs)
+        except SlackApiError as exc:
+            if exc.response.get("error") == "ratelimited" and attempt < max_retries - 1:
+                retry_after = float(exc.response.headers.get("Retry-After", _RATE_LIMIT_PAUSE))
+                await asyncio.sleep(retry_after)
+                continue
+            raise
+
 
 # ---------------------------------------------------------------------------
 # Message posting
@@ -78,6 +104,13 @@ async def wait_for_bot_reply(
                     continue
                 if predicate(message):
                     return message
+        except SlackApiError as exc:
+            if exc.response.get("error") == "ratelimited":
+                await asyncio.sleep(
+                    float(exc.response.headers.get("Retry-After", _RATE_LIMIT_PAUSE))
+                )
+                continue
+            last_error = exc
         except Exception as exc:  # pragma: no cover - live network behavior
             last_error = exc
         await asyncio.sleep(poll_seconds)
@@ -114,6 +147,13 @@ async def wait_for_channel_message(
                     continue
                 if predicate(message):
                     return message
+        except SlackApiError as exc:
+            if exc.response.get("error") == "ratelimited":
+                await asyncio.sleep(
+                    float(exc.response.headers.get("Retry-After", _RATE_LIMIT_PAUSE))
+                )
+                continue
+            last_error = exc
         except Exception as exc:  # pragma: no cover
             last_error = exc
         await asyncio.sleep(poll_seconds)
@@ -253,7 +293,19 @@ async def dispatch_and_expect(
     timeout_seconds: int = 30,
 ) -> dict[str, Any]:
     """Invoke *command* via dispatcher, then poll for the matching bot reply."""
-    anchor_resp = await client.conversations_history(channel=channel, limit=1)
+    for _attempt in range(3):
+        try:
+            anchor_resp = await client.conversations_history(channel=channel, limit=1)
+            break
+        except SlackApiError as exc:
+            if exc.response.get("error") == "ratelimited":
+                await asyncio.sleep(
+                    float(exc.response.headers.get("Retry-After", _RATE_LIMIT_PAUSE))
+                )
+                continue
+            raise
+    else:
+        anchor_resp = {"messages": []}
     anchor_ts = anchor_resp["messages"][0]["ts"] if anchor_resp.get("messages") else "0"
 
     await dispatch.dispatch(command, text=text, thread_ts=thread_ts)
