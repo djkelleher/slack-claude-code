@@ -440,6 +440,52 @@ class TestCodexSubprocessExecutor:
         }
 
     @pytest.mark.asyncio
+    async def test_execute_handles_codex_event_prefixed_notifications(self, monkeypatch):
+        """Prefixed codex/event notifications should be normalized and processed."""
+        monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)
+
+        process = _DummyProcess(
+            [
+                _json_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }
+                ),
+                _json_line({"jsonrpc": "2.0", "id": 3, "result": {}}),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "codex/event/item/agentMessage/delta",
+                        "params": {"itemId": "item_1", "delta": "Prefixed stream works."},
+                    }
+                ),
+                _json_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "codex/event/turn/completed",
+                        "params": {"turn": {"status": "completed"}},
+                    }
+                ),
+            ]
+        )
+
+        executor = SubprocessExecutor()
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            result = await executor.execute(
+                prompt="stream test",
+                working_directory="/tmp/workspace",
+            )
+
+        assert result.success is True
+        assert result.output == "Prefixed stream works."
+
+    @pytest.mark.asyncio
     async def test_error_notification_uses_structured_error_payload(self, monkeypatch):
         """Structured error notifications should surface the nested message and details."""
         monkeypatch.setattr(config, "CODEX_PREPEND_DEFAULT_INSTRUCTIONS", False)

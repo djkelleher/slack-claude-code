@@ -267,20 +267,24 @@ class _AppServerConnection:
             return
 
         method = rpc.get("method")
-        if not method or method.startswith("codex/event/"):
+        if not isinstance(method, str):
             return
+        normalized_method = self._normalize_rpc_method(method)
+        if not normalized_method:
+            return
+        routed_rpc = rpc if normalized_method == method else {**rpc, "method": normalized_method}
 
-        if response_id is not None and "params" in rpc:
+        if response_id is not None and "params" in routed_rpc:
             async with self._state_lock:
                 handler = self._server_request_handler
             if handler is None:
                 await self.send_error(
                     int(response_id),
                     -32601,
-                    f"Unsupported app-server request method: {method}",
+                    f"Unsupported app-server request method: {normalized_method}",
                 )
                 return
-            task = asyncio.create_task(handler(rpc))
+            task = asyncio.create_task(handler(routed_rpc))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
             return
@@ -288,7 +292,7 @@ class _AppServerConnection:
         async with self._state_lock:
             notification_queue = self._notification_queue
         if notification_queue is not None:
-            await notification_queue.put(rpc)
+            await notification_queue.put(routed_rpc)
 
     async def _fail_connection(self, error: BaseException) -> None:
         """Fail all waiters and mark the connection unusable."""
@@ -312,6 +316,16 @@ class _AppServerConnection:
             raise RuntimeError("codex app-server connection is closed")
         if self.process.returncode is not None:
             raise RuntimeError("codex app-server process is not running")
+
+    @staticmethod
+    def _normalize_rpc_method(method: str) -> str:
+        """Normalize app-server method names across prefixed/unprefixed variants."""
+        normalized = method.strip()
+        prefixes = ("codex/event/", "codex/request/", "codex/notification/")
+        for prefix in prefixes:
+            if normalized.startswith(prefix):
+                return normalized[len(prefix) :]
+        return normalized
 
 
 class SubprocessExecutor(ProcessExecutorBase):
