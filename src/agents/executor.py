@@ -192,6 +192,8 @@ class AgentExecutor:
                 working_directory=execution.working_directory,
                 session_id=f"agent-{execution.execution_id}",
                 execution_id=execution.execution_id,
+                channel_id=execution.channel_id,
+                thread_ts=execution.thread_ts,
                 permission_mode=permission_mode,
                 model=model,
             )
@@ -399,6 +401,8 @@ class AgentExecutor:
             session_id=f"agent-{execution_id}",
             resume_session_id=execution.session_id,
             execution_id=f"{execution_id}-resume",
+            channel_id=execution.channel_id,
+            thread_ts=execution.thread_ts,
         )
 
         return AgentRunResult(
