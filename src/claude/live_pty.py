@@ -16,6 +16,7 @@ from src.config import parse_claude_model_effort
 from src.utils.stream_models import StreamMessage
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+PROMPT_MARKER_RE = re.compile(r"(?:^|\n)\s*(?:>|❯)\s?$")
 
 
 @dataclass
@@ -113,6 +114,7 @@ class ClaudeLivePtyManager:
         read_timeout_seconds: float,
         settle_seconds: float,
         cancel_settle_seconds: float,
+        promptless_idle_fallback_seconds: float,
         idle_session_timeout_seconds: int,
         log_prefix: str,
     ) -> PtyTurnResult:
@@ -139,6 +141,9 @@ class ClaudeLivePtyManager:
             got_output = False
             last_output_at = started_at
             was_cancelled = False
+            cancel_seen_at: Optional[float] = None
+            prompt_seen = False
+            tail_window = ""
 
             try:
                 await self._drain_pending_output(session, timeout_seconds=0.15)
@@ -164,14 +169,24 @@ class ClaudeLivePtyManager:
                     now = monotonic()
                     if chunk is None:
                         if session.cancel_requested:
-                            if (
-                                got_output
-                                and (now - last_output_at) >= cancel_settle_seconds
-                            ):
+                            if cancel_seen_at is None:
+                                cancel_seen_at = now
+                            if (now - cancel_seen_at) >= cancel_settle_seconds:
                                 was_cancelled = True
                                 break
                             continue
-                        if got_output and (now - last_output_at) >= settle_seconds:
+                        if (
+                            prompt_seen
+                            and got_output
+                            and (now - last_output_at) >= settle_seconds
+                        ):
+                            break
+                        if (
+                            got_output
+                            and not prompt_seen
+                            and (now - last_output_at)
+                            >= promptless_idle_fallback_seconds
+                        ):
                             break
                         continue
                     if chunk == "":
@@ -192,6 +207,9 @@ class ClaudeLivePtyManager:
                     normalized = self._normalize_terminal_chunk(chunk)
                     if not normalized:
                         continue
+                    tail_window = (tail_window + normalized)[-512:]
+                    if self._tail_has_prompt_marker(tail_window):
+                        prompt_seen = True
 
                     if not echo_suppressed:
                         normalized = self._strip_first_prompt_echo(normalized, prompt)
@@ -493,6 +511,11 @@ class ClaudeLivePtyManager:
             if trimmed.endswith(marker):
                 trimmed = trimmed[: -len(marker)].rstrip()
         return trimmed
+
+    @staticmethod
+    def _tail_has_prompt_marker(text: str) -> bool:
+        """Return True when terminal tail looks like Claude's input prompt."""
+        return bool(PROMPT_MARKER_RE.search(text.rstrip()))
 
     @staticmethod
     def _is_uuid(value: Optional[str]) -> bool:

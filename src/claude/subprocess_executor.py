@@ -165,6 +165,21 @@ class SubprocessExecutor(ProcessExecutorBase):
         resolved_mode = permission_mode or config.CLAUDE_PERMISSION_MODE
         return resolved_mode not in {"plan", "delegate"}
 
+    @staticmethod
+    def _is_live_pty_missing_session_error(
+        error: Optional[str],
+        output: str,
+    ) -> bool:
+        """Return True when PTY output suggests a stale/missing Claude session."""
+        text = f"{error or ''}\n{output or ''}".lower()
+        markers = (
+            "no conversation found with session id",
+            "session not found",
+            "no such session",
+            "could not resume",
+        )
+        return any(marker in text for marker in markers)
+
     async def _execute_live_pty_turn(
         self,
         *,
@@ -202,6 +217,9 @@ class SubprocessExecutor(ProcessExecutorBase):
                 read_timeout_seconds=config.CLAUDE_LIVE_PTY_READ_TIMEOUT_SECONDS,
                 settle_seconds=config.CLAUDE_LIVE_PTY_SETTLE_SECONDS,
                 cancel_settle_seconds=config.CLAUDE_LIVE_PTY_CANCEL_SETTLE_SECONDS,
+                promptless_idle_fallback_seconds=(
+                    config.CLAUDE_LIVE_PTY_PROMPTLESS_IDLE_FALLBACK_SECONDS
+                ),
                 idle_session_timeout_seconds=config.CLAUDE_LIVE_PTY_IDLE_TIMEOUT_SECONDS,
                 log_prefix=log_prefix,
             )
@@ -359,7 +377,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 channel_id=channel_id,
                 thread_ts=thread_ts,
             ).session_scope
-            return await self._execute_live_pty_turn(
+            pty_result = await self._execute_live_pty_turn(
                 prompt=prompt,
                 working_directory=working_directory,
                 session_scope=session_scope,
@@ -370,6 +388,35 @@ class SubprocessExecutor(ProcessExecutorBase):
                 db_session_id=db_session_id,
                 model=model,
             )
+            if (
+                not pty_result.success
+                and resume_session_id
+                and self._is_live_pty_missing_session_error(
+                    pty_result.error, pty_result.output
+                )
+            ):
+                logger.info(
+                    f"{log_prefix}Live PTY session {resume_session_id} not found, retrying without resume "
+                    f"(depth={_recursion_depth + 1})"
+                )
+                return await self.execute(
+                    prompt=prompt,
+                    working_directory=working_directory,
+                    session_id=session_id,
+                    resume_session_id=None,
+                    execution_id=execution_id,
+                    on_chunk=on_chunk,
+                    permission_mode=permission_mode,
+                    db_session_id=db_session_id,
+                    model=model,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    worktree_name=worktree_name,
+                    allow_live_pty=allow_live_pty,
+                    _recursion_depth=_recursion_depth + 1,
+                    _is_retry_after_exit_plan_error=_is_retry_after_exit_plan_error,
+                )
+            return pty_result
 
         # Create per-execution state to avoid race conditions between concurrent executions
         # Each execution gets its own state object keyed by execution_id

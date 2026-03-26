@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.claude.subprocess_executor import SubprocessExecutor
+from src.claude.subprocess_executor import ExecutionResult, SubprocessExecutor
 
 
 class _DummyStdout:
@@ -94,7 +94,11 @@ class TestClaudeSubprocessExecutor:
                         "type": "assistant",
                         "message": {
                             "content": [
-                                {"type": "tool_use", "id": "toolu_01", "name": "ExitPlanMode"}
+                                {
+                                    "type": "tool_use",
+                                    "id": "toolu_01",
+                                    "name": "ExitPlanMode",
+                                }
                             ]
                         },
                     }
@@ -104,7 +108,9 @@ class TestClaudeSubprocessExecutor:
         )
 
         executor = SubprocessExecutor()
-        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)):
+        with patch(
+            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
+        ):
             result = await executor.execute(
                 prompt="analyze this project",
                 working_directory="/tmp",
@@ -128,7 +134,11 @@ class TestClaudeSubprocessExecutor:
                         "type": "assistant",
                         "message": {
                             "content": [
-                                {"type": "tool_use", "id": "toolu_01", "name": "ExitPlanMode"}
+                                {
+                                    "type": "tool_use",
+                                    "id": "toolu_01",
+                                    "name": "ExitPlanMode",
+                                }
                             ]
                         },
                     }
@@ -137,7 +147,9 @@ class TestClaudeSubprocessExecutor:
         )
 
         executor = SubprocessExecutor()
-        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)):
+        with patch(
+            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
+        ):
             result = await executor.execute(
                 prompt="create a plan",
                 working_directory="/tmp",
@@ -178,3 +190,44 @@ class TestClaudeSubprocessExecutor:
         assert "build it" not in cmd
         assert bytes(process.stdin.buffer) == b"build it"
         assert process.stdin.closed is True
+
+    @pytest.mark.asyncio
+    async def test_live_pty_retries_without_resume_on_missing_session_error(self):
+        """Live PTY path should retry with a fresh session when resume ID is stale."""
+        executor = SubprocessExecutor()
+        failed = ExecutionResult(
+            success=False,
+            output="No conversation found with session ID deadbeef",
+            error="session not found",
+        )
+        recovered = ExecutionResult(
+            success=True,
+            output="done",
+            session_id="0f0e0d0c-0b0a-0908-0706-050403020100",
+        )
+
+        with patch.object(
+            executor,
+            "_is_live_pty_turn_eligible",
+            return_value=True,
+        ):
+            with patch.object(
+                executor,
+                "_execute_live_pty_turn",
+                new=AsyncMock(side_effect=[failed, recovered]),
+            ) as mock_live_turn:
+                result = await executor.execute(
+                    prompt="continue",
+                    working_directory="/tmp",
+                    session_id="scope-1",
+                    resume_session_id="11111111-1111-1111-1111-111111111111",
+                    execution_id="exec-1",
+                    allow_live_pty=True,
+                )
+
+        assert result.success is True
+        assert mock_live_turn.await_count == 2
+        assert mock_live_turn.await_args_list[0].kwargs["resume_session_id"] == (
+            "11111111-1111-1111-1111-111111111111"
+        )
+        assert mock_live_turn.await_args_list[1].kwargs["resume_session_id"] is None
