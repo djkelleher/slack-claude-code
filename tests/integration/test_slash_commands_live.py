@@ -14,6 +14,7 @@ Run with: pytest tests/integration/test_slash_commands_live.py --live -v
 """
 
 import os
+import uuid
 
 import pytest
 from slack_sdk.web.async_client import AsyncWebClient
@@ -371,10 +372,10 @@ async def test_add_dir(
         slack_test_channel,
         "/add-dir",
         "/tmp",
-        text_contains("Directory Added"),
+        text_contains("Added directory"),
     )
     try:
-        assert "Directory Added" in msg["text"] or "/tmp" in msg["text"]
+        assert "Added directory" in msg["text"] or "/tmp" in msg["text"]
     finally:
         await delete_message(slack_client, slack_test_channel, msg["ts"])
 
@@ -437,10 +438,10 @@ async def test_remove_dir_not_in_list(
         slack_test_channel,
         "/remove-dir",
         "/not_in_context_dir",
-        text_contains("not in the context"),
+        text_contains("not found"),
     )
     try:
-        assert "not in the context" in msg["text"]
+        assert "not found" in msg["text"].lower()
     finally:
         await delete_message(slack_client, slack_test_channel, msg["ts"])
 
@@ -461,7 +462,7 @@ async def test_add_then_remove_dir(
             slack_test_channel,
             "/add-dir",
             "/tmp",
-            text_contains("Directory Added"),
+            text_contains("Added directory"),
         )
         messages_to_delete.append(msg1["ts"])
 
@@ -473,10 +474,10 @@ async def test_add_then_remove_dir(
             slack_test_channel,
             "/remove-dir",
             resolved_tmp,
-            text_contains("Directory Removed"),
+            text_contains("Removed directory"),
         )
         messages_to_delete.append(msg2["ts"])
-        assert "Directory Removed" in msg2["text"]
+        assert "Removed directory" in msg2["text"]
     finally:
         for ts in messages_to_delete:
             await delete_message(slack_client, slack_test_channel, ts)
