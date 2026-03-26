@@ -51,9 +51,7 @@ async def execute_prompt_with_runtime(
     client: Any,
     logger: Any,
     user_id: Optional[str] = None,
-    api_with_retry: Optional[
-        Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]
-    ] = None,
+    api_with_retry: Optional[Callable[[Callable[[], Awaitable[Any]]], Awaitable[Any]]] = None,
     processing_text: Optional[str] = None,
     allow_live_pty: bool = True,
     plan_mode_directive: Optional[PlanModeDirective] = None,
@@ -156,12 +154,19 @@ async def execute_prompt_with_runtime(
         result = route.result
 
         if result.success:
-            await deps.db.update_command_status(
-                cmd_history.id, "completed", result.output
-            )
+            await deps.db.update_command_status(cmd_history.id, "completed", result.output)
         else:
             await deps.db.update_command_status(
                 cmd_history.id, "failed", result.output, result.error
+            )
+
+        git_diff_summary = getattr(result, "git_diff_summary", None)
+        git_diff_output = getattr(result, "git_diff_output", None)
+        if git_diff_summary or git_diff_output:
+            await deps.db.store_command_git_diff(
+                cmd_history.id,
+                summary=git_diff_summary,
+                content=git_diff_output,
             )
 
         await streaming_state.stop_heartbeat()
@@ -185,10 +190,6 @@ async def execute_prompt_with_runtime(
             notify_on_snippet_failure=True,
             api_with_retry=api_with_retry,
             terminal_style=route.backend == "codex",
-            working_directory=session.working_directory,
-            upload_git_diff=True,
-            git_tool_events=result.git_tool_events,
-            upload_git_activity=True,
         )
         return ExecutionDeliveryResult(
             route=route, command_id=cmd_history.id, message_ts=message_ts
@@ -196,12 +197,8 @@ async def execute_prompt_with_runtime(
 
     except asyncio.CancelledError:
         logger.info("Command execution was cancelled")
-        await _cleanup_runtime_state(
-            streaming_state=streaming_state, session_id=str(session.id)
-        )
-        await deps.db.update_command_status(
-            cmd_history.id, "cancelled", error_message="Cancelled"
-        )
+        await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
+        await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
@@ -211,12 +208,8 @@ async def execute_prompt_with_runtime(
         raise
     except SlackApiError as e:
         logger.error(f"Slack API error executing command: {e}")
-        await _cleanup_runtime_state(
-            streaming_state=streaming_state, session_id=str(session.id)
-        )
-        await deps.db.update_command_status(
-            cmd_history.id, "failed", error_message=str(e)
-        )
+        await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
+        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         try:
             await client.chat_postMessage(
                 channel=channel_id,
@@ -229,12 +222,8 @@ async def execute_prompt_with_runtime(
         raise
     except (OSError, IOError) as e:
         logger.error(f"I/O error executing command: {e}")
-        await _cleanup_runtime_state(
-            streaming_state=streaming_state, session_id=str(session.id)
-        )
-        await deps.db.update_command_status(
-            cmd_history.id, "failed", error_message=str(e)
-        )
+        await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
+        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,
@@ -244,12 +233,8 @@ async def execute_prompt_with_runtime(
         raise
     except Exception as e:
         logger.error(f"Unexpected error executing command: {type(e).__name__}: {e}")
-        await _cleanup_runtime_state(
-            streaming_state=streaming_state, session_id=str(session.id)
-        )
-        await deps.db.update_command_status(
-            cmd_history.id, "failed", error_message=str(e)
-        )
+        await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
+        await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         await client.chat_update(
             channel=channel_id,
             ts=message_ts,

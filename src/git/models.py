@@ -75,3 +75,15 @@ class Worktree:
     lock_reason: Optional[str] = None
     is_prunable: bool = False
     prunable_reason: Optional[str] = None
+
+
+@dataclass
+class CommitDiff:
+    """Metadata and patch content for one git commit."""
+
+    commit_hash: str
+    short_hash: str
+    subject: str
+    author_name: str
+    authored_at: str
+    diff: str

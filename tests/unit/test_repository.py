@@ -237,6 +237,23 @@ class TestSessionOperations:
 
         assert await db_repo.get_command_detailed_output(command.id) == "full detailed output"
 
+    @pytest.mark.asyncio
+    async def test_store_and_get_command_git_diff(self, db_repo):
+        """Prompt-scoped git diff snapshots should persist in command history."""
+        session = await db_repo.get_or_create_session("C123ABC", None)
+        command = await db_repo.add_command(session.id, "commit changes")
+
+        await db_repo.store_command_git_diff(
+            command.id,
+            summary="1 commit(s): abc123 Fix bug",
+            content="## Commit 1\nhash: abc123\n\ndiff --git a/app.py b/app.py",
+        )
+
+        assert await db_repo.get_command_git_diff(command.id) == (
+            "1 commit(s): abc123 Fix bug",
+            "## Commit 1\nhash: abc123\n\ndiff --git a/app.py b/app.py",
+        )
+
 
 class TestWorkspaceLeaseOperations:
     """Tests for workspace lease persistence."""

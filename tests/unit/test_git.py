@@ -284,6 +284,46 @@ class TestGitServiceAsync:
                 assert "truncated" in result
 
     @pytest.mark.asyncio
+    async def test_get_head_commit_hash_returns_none_when_repo_has_no_commits(self, tmp_path):
+        """HEAD lookup should return None when a repository has no commits yet."""
+        service = GitService()
+
+        with patch.object(service, "validate_git_repo", return_value=True):
+            with patch.object(service, "_run_git_command") as mock_cmd:
+                mock_cmd.return_value = ("", "fatal: Needed a single revision", 128)
+                assert await service.get_head_commit_hash(str(tmp_path)) is None
+
+    @pytest.mark.asyncio
+    async def test_get_commit_diffs_since_returns_metadata_and_patches(self, tmp_path):
+        """Commit snapshot retrieval should include metadata and patch text."""
+        service = GitService()
+
+        with patch.object(service, "validate_git_repo", return_value=True):
+            with patch.object(service, "get_head_commit_hash", return_value="head-commit"):
+                with patch.object(service, "_run_git_command") as mock_cmd:
+                    mock_cmd.side_effect = [
+                        ("abc123\ndef456", "", 0),
+                        ("abc123full\nabc123\nFirst commit\nDan\n2026-03-25T16:00:00+00:00", "", 0),
+                        ("diff --git a/a.py b/a.py", "", 0),
+                        (
+                            "def456full\ndef456\nSecond commit\nDan\n2026-03-25T16:05:00+00:00",
+                            "",
+                            0,
+                        ),
+                        ("diff --git a/b.py b/b.py", "", 0),
+                    ]
+                    commits = await service.get_commit_diffs_since(
+                        str(tmp_path),
+                        "base-commit",
+                    )
+
+        assert [commit.short_hash for commit in commits] == ["abc123", "def456"]
+        assert commits[0].subject == "First commit"
+        assert "diff --git a/a.py b/a.py" in commits[0].diff
+        assert commits[1].subject == "Second commit"
+        assert "diff --git a/b.py b/b.py" in commits[1].diff
+
+    @pytest.mark.asyncio
     async def test_get_status_parses_output(self, tmp_path):
         """get_status parses git status --short output."""
         service = GitService()

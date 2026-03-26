@@ -37,9 +37,6 @@ from .base import CommandContext, HandlerDependencies
 from .claude.worktree import _handle_merge, _handle_remove, _handle_switch
 from .execution_runtime import execute_prompt_with_runtime
 
-_COPY_MODAL_CHUNK_SIZE = 2900
-_COPY_MODAL_MAX_CHUNKS = 10
-
 
 async def _get_git_commit_hash(working_directory: str) -> str | None:
     """Get the current git commit hash asynchronously.
@@ -69,110 +66,6 @@ async def _get_git_commit_hash(working_directory: str) -> str | None:
         return stdout.decode().strip()
     except (asyncio.TimeoutError, Exception):
         return None
-
-
-def _split_copy_modal_chunks(content: str) -> tuple[list[str], int]:
-    """Split copyable content into modal-sized chunks."""
-    remaining = content or ""
-    chunks: list[str] = []
-
-    while remaining and len(chunks) < _COPY_MODAL_MAX_CHUNKS:
-        if len(remaining) <= _COPY_MODAL_CHUNK_SIZE:
-            chunks.append(remaining)
-            remaining = ""
-            break
-
-        break_point = remaining.rfind("\n", 0, _COPY_MODAL_CHUNK_SIZE)
-        if break_point == -1 or break_point < _COPY_MODAL_CHUNK_SIZE // 2:
-            break_point = _COPY_MODAL_CHUNK_SIZE
-        else:
-            break_point += 1
-
-        chunks.append(remaining[:break_point])
-        remaining = remaining[break_point:]
-
-    return chunks or [""], len(remaining)
-
-
-def _build_copy_output_modal_view(command_id: int, content: str) -> dict[str, Any]:
-    """Build a copy-ready modal with prefilled multiline text inputs."""
-    chunks, truncated_chars = _split_copy_modal_chunks(content)
-    blocks: list[dict[str, Any]] = [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": (
-                    f"*Command #{command_id}*\n"
-                    "Select the text below and copy it with your normal keyboard shortcut."
-                ),
-            },
-        }
-    ]
-
-    if truncated_chars > 0:
-        blocks.append(
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": (
-                            f"_Showing the first {len(content) - truncated_chars:,} characters. "
-                            f"{truncated_chars:,} more chars were omitted from the modal._"
-                        ),
-                    }
-                ],
-            }
-        )
-
-    for index, chunk in enumerate(chunks, start=1):
-        blocks.append(
-            {
-                "type": "input",
-                "block_id": f"copy_output_block_{index}",
-                "optional": True,
-                "label": {
-                    "type": "plain_text",
-                    "text": "Output" if len(chunks) == 1 else f"Output part {index}",
-                },
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "copy_output_text",
-                    "multiline": True,
-                    "focus_on_load": index == 1,
-                    "initial_value": chunk,
-                },
-            }
-        )
-
-    return {
-        "type": "modal",
-        "callback_id": "copy_output_modal",
-        "title": {"type": "plain_text", "text": "Copy Output"},
-        "submit": {"type": "plain_text", "text": "Done"},
-        "close": {"type": "plain_text", "text": "Close"},
-        "blocks": blocks,
-    }
-
-
-async def _get_copyable_command_output(command_id: int, deps: HandlerDependencies) -> str | None:
-    """Resolve the best available command output for copy-focused display."""
-    content = DetailCache.get(command_id)
-    if content:
-        return content
-
-    if deps.db:
-        content = await deps.db.get_command_detailed_output(command_id)
-        if content:
-            DetailCache.store(command_id, content)
-            return content
-
-        command = await deps.db.get_command_by_id(command_id)
-        if command:
-            return command.output or command.error_message
-
-    return None
 
 
 async def _get_github_file_url(tool: ToolActivity, working_directory: str) -> str | None:
@@ -1149,36 +1042,6 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
     # -------------------------------------------------------------------------
     # Detailed output viewer
     # -------------------------------------------------------------------------
-
-    @app.action("copy_command_output")
-    async def handle_copy_command_output(ack, action, body, client, logger):
-        """Handle Copy Output button clicks with a copy-ready modal."""
-        await ack()
-
-        try:
-            command_id = int(action["value"])
-        except (KeyError, ValueError) as e:
-            logger.error(f"Invalid copy output action value: {e}")
-            return
-
-        content = await _get_copyable_command_output(command_id, deps)
-        if not content:
-            await client.chat_postEphemeral(
-                channel=body["channel"]["id"],
-                user=body["user"]["id"],
-                text="Command output is no longer available.",
-            )
-            return
-
-        await client.views_open(
-            trigger_id=body["trigger_id"],
-            view=_build_copy_output_modal_view(command_id, content),
-        )
-
-    @app.view("copy_output_modal")
-    async def handle_copy_output_modal_submission(ack, body, client, view, logger):
-        """Acknowledge copy-output modal submissions without extra side effects."""
-        await ack()
 
     @app.action("view_detailed_output")
     async def handle_view_detailed_output(ack, action, body, client, logger):

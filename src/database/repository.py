@@ -558,6 +558,37 @@ class DatabaseRepository:
             row = await cursor.fetchone()
             return row[0] if row and row[0] is not None else None
 
+    async def store_command_git_diff(
+        self,
+        command_id: int,
+        *,
+        summary: Optional[str],
+        content: Optional[str],
+    ) -> None:
+        """Persist prompt-scoped git diff snapshot content for later retrieval."""
+        async with self._get_connection() as db:
+            await db.execute(
+                """UPDATE command_history
+                   SET git_diff_summary = ?, git_diff_output = ?
+                   WHERE id = ?""",
+                (summary, content, command_id),
+            )
+            await db.commit()
+
+    async def get_command_git_diff(self, command_id: int) -> tuple[Optional[str], Optional[str]]:
+        """Return persisted git diff summary/content for a command."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """SELECT git_diff_summary, git_diff_output
+                   FROM command_history
+                   WHERE id = ?""",
+                (command_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None, None
+            return row[0], row[1]
+
     async def get_command_history(
         self, session_id: int, limit: int = 10, offset: int = 0
     ) -> tuple[list[CommandHistory], int]:

@@ -71,6 +71,8 @@ class CommandHistory:
     command: str = ""
     output: Optional[str] = None
     detailed_output: Optional[str] = None
+    git_diff_summary: Optional[str] = None
+    git_diff_output: Optional[str] = None
     status: str = "pending"  # pending, running, completed, failed, cancelled
     error_message: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
@@ -78,17 +80,38 @@ class CommandHistory:
 
     @classmethod
     def from_row(cls, row: tuple) -> "CommandHistory":
-        detailed_output = row[4] if len(row) > 8 else None
-        status = row[5] if len(row) > 8 else row[4]
-        error_message = row[6] if len(row) > 8 else row[5]
-        created_at = row[7] if len(row) > 8 else row[6]
-        completed_at = row[8] if len(row) > 8 else row[7]
+        detailed_output = None
+        git_diff_summary = None
+        git_diff_output = None
+
+        if len(row) >= 11:
+            detailed_output = row[4]
+            git_diff_summary = row[5]
+            git_diff_output = row[6]
+            status = row[7]
+            error_message = row[8]
+            created_at = row[9]
+            completed_at = row[10]
+        elif len(row) == 9:
+            detailed_output = row[4]
+            status = row[5]
+            error_message = row[6]
+            created_at = row[7]
+            completed_at = row[8]
+        else:
+            status = row[4]
+            error_message = row[5]
+            created_at = row[6]
+            completed_at = row[7]
+
         return cls(
             id=row[0],
             session_id=row[1],
             command=row[2],
             output=row[3],
             detailed_output=detailed_output,
+            git_diff_summary=git_diff_summary,
+            git_diff_output=git_diff_output,
             status=status,
             error_message=error_message,
             created_at=(datetime.fromisoformat(created_at) if created_at else datetime.now()),

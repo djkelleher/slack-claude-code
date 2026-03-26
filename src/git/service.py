@@ -6,7 +6,7 @@ from typing import Optional
 
 from loguru import logger
 
-from .models import Checkpoint, GitStatus, Worktree
+from .models import Checkpoint, CommitDiff, GitStatus, Worktree
 
 
 class GitError(Exception):
@@ -203,6 +203,100 @@ class GitService:
             return stdout[:max_size] + f"\n\n... (diff truncated, {len(stdout)} bytes total)"
 
         return stdout
+
+    async def get_head_commit_hash(self, working_directory: str) -> Optional[str]:
+        """Return the current HEAD commit hash, or None when no commits exist."""
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "rev-parse", "HEAD"
+        )
+        if returncode == 0 and stdout:
+            return stdout
+        if "unknown revision" in stderr.lower() or "needed a single revision" in stderr.lower():
+            return None
+        if returncode != 0:
+            raise GitError(f"Failed to resolve HEAD: {stderr or stdout}")
+        return None
+
+    async def get_commit_diffs_since(
+        self,
+        working_directory: str,
+        since_commit: Optional[str],
+        *,
+        max_diff_size: int = 500_000,
+    ) -> list[CommitDiff]:
+        """Return commit metadata and patches introduced after `since_commit`."""
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        head_commit = await self.get_head_commit_hash(working_directory)
+        if not head_commit:
+            return []
+
+        rev_spec = "HEAD" if not since_commit else f"{since_commit}..HEAD"
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "rev-list", "--reverse", rev_spec
+        )
+        if returncode != 0:
+            raise GitError(f"Failed to list commits: {stderr or stdout}")
+
+        commit_hashes = [line.strip() for line in stdout.splitlines() if line.strip()]
+        commits: list[CommitDiff] = []
+
+        for commit_hash in commit_hashes:
+            metadata_out, metadata_err, metadata_code = await self._run_git_command(
+                working_directory,
+                "show",
+                "--stat=0",
+                "--format=%H%n%h%n%s%n%an%n%aI",
+                "--no-patch",
+                commit_hash,
+            )
+            if metadata_code != 0:
+                raise GitError(
+                    f"Failed to load commit metadata for {commit_hash}: "
+                    f"{metadata_err or metadata_out}"
+                )
+
+            metadata_lines = metadata_out.splitlines()
+            if len(metadata_lines) < 5:
+                raise GitError(f"Unexpected commit metadata format for {commit_hash}")
+
+            diff_out, diff_err, diff_code = await self._run_git_command(
+                working_directory,
+                "show",
+                "--format=",
+                "--patch",
+                "--stat=0",
+                "--no-ext-diff",
+                commit_hash,
+            )
+            if diff_code != 0:
+                raise GitError(
+                    f"Failed to load commit diff for {commit_hash}: {diff_err or diff_out}"
+                )
+
+            diff_text = diff_out or "(no diff)"
+            if len(diff_text) > max_diff_size:
+                diff_text = (
+                    diff_text[:max_diff_size]
+                    + f"\n\n... (diff truncated, {len(diff_out)} bytes total)"
+                )
+
+            commits.append(
+                CommitDiff(
+                    commit_hash=metadata_lines[0],
+                    short_hash=metadata_lines[1],
+                    subject=metadata_lines[2],
+                    author_name=metadata_lines[3],
+                    authored_at=metadata_lines[4],
+                    diff=diff_text,
+                )
+            )
+
+        return commits
 
     async def create_checkpoint(
         self, working_directory: str, name: str, description: Optional[str] = None

@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS command_history (
     command TEXT NOT NULL,
     output TEXT,
     detailed_output TEXT,
+    git_diff_summary TEXT,
+    git_diff_output TEXT,
     status TEXT DEFAULT 'pending',
     error_message TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -325,6 +327,18 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         history_column_names,
         "detailed_output",
         "ALTER TABLE command_history ADD COLUMN detailed_output TEXT",
+    )
+    await _add_column_if_missing(
+        db,
+        history_column_names,
+        "git_diff_summary",
+        "ALTER TABLE command_history ADD COLUMN git_diff_summary TEXT",
+    )
+    await _add_column_if_missing(
+        db,
+        history_column_names,
+        "git_diff_output",
+        "ALTER TABLE command_history ADD COLUMN git_diff_output TEXT",
     )
 
     # Add queue_items.thread_ts for thread-scoped queueing

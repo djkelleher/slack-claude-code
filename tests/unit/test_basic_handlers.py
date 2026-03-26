@@ -60,6 +60,7 @@ async def test_registers_history_aliases():
 
     assert "/hist" in app.handlers
     assert "/h" in app.handlers
+    assert "/diff" in app.handlers
 
 
 @pytest.mark.asyncio
@@ -296,3 +297,115 @@ async def test_history_uses_prompt_only_query():
 
     deps.db.get_prompt_history.assert_awaited_once_with(11, limit=10, offset=0)
     deps.db.get_command_history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_diff_single_index_uploads_prompt_scoped_snapshot():
+    """`/diff 1` should fetch the latest stored prompt diff snapshot."""
+    app = _FakeApp()
+    session = Session(id=12, working_directory="/repo")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=session),
+            get_prompt_history=AsyncMock(
+                return_value=(
+                    [
+                        CommandHistory(
+                            id=50,
+                            session_id=12,
+                            command="ship it",
+                            status="completed",
+                            git_diff_summary="1 commit(s): abc123 Fix bug",
+                            git_diff_output=(
+                                "## Commit 1\n"
+                                "hash: abc123def456\n"
+                                "short_hash: abc123\n"
+                                "message: Fix bug\n\n"
+                                "diff --git a/app.py b/app.py"
+                            ),
+                            created_at=datetime(2026, 3, 25, 16, 0, tzinfo=timezone.utc),
+                        )
+                    ],
+                    3,
+                )
+            ),
+        ),
+        executor=SimpleNamespace(),
+    )
+    register_basic_commands(app, deps)
+
+    handler = app.handlers["/diff"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), files_upload_v2=AsyncMock())
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "1",
+            "command": "/diff",
+            "thread_ts": "123.456",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    deps.db.get_prompt_history.assert_awaited_once_with(12, limit=1, offset=0)
+    message_kwargs = client.chat_postMessage.await_args.kwargs
+    assert message_kwargs["text"] == "Prompt diff history"
+    assert "Showing prompt #1 of 3" in message_kwargs["blocks"][0]["text"]["text"]
+    upload_kwargs = client.files_upload_v2.await_args.kwargs
+    assert upload_kwargs["thread_ts"] == "123.456"
+    assert upload_kwargs["filename"] == "git-diff-prompt-1.diff"
+    assert "hash: abc123def456" in upload_kwargs["content"]
+    assert "diff --git a/app.py b/app.py" in upload_kwargs["content"]
+
+
+@pytest.mark.asyncio
+async def test_diff_reports_when_selected_prompts_have_no_commits():
+    """`/diff` should summarize prompts even when no commit snapshots were stored."""
+    app = _FakeApp()
+    session = Session(id=13, working_directory="/repo")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=session),
+            get_prompt_history=AsyncMock(
+                return_value=(
+                    [
+                        CommandHistory(
+                            id=51,
+                            session_id=13,
+                            command="analyze repo",
+                            status="completed",
+                            git_diff_summary=None,
+                            git_diff_output=None,
+                            created_at=datetime(2026, 3, 25, 16, 5, tzinfo=timezone.utc),
+                        )
+                    ],
+                    1,
+                )
+            ),
+        ),
+        executor=SimpleNamespace(),
+    )
+    register_basic_commands(app, deps)
+
+    handler = app.handlers["/diff"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), files_upload_v2=AsyncMock())
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "1",
+            "command": "/diff",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    client.chat_postMessage.assert_awaited_once()
+    client.files_upload_v2.assert_not_awaited()
+    assert (
+        "No new commits recorded for this prompt."
+        in client.chat_postMessage.await_args.kwargs["blocks"][2]["text"]["text"]
+    )

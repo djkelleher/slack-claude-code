@@ -1,4 +1,4 @@
-"""Basic command handlers: /!, /cd, /h, /hist, /ls, /pwd."""
+"""Basic command handlers: /!, /cd, /diff, /h, /hist, /ls, /pwd."""
 
 import asyncio
 from datetime import datetime, timezone
@@ -160,6 +160,116 @@ def _prompt_history_blocks(
     return blocks
 
 
+def _diff_entry_summary(entry: CommandHistory) -> str:
+    """Return human-readable diff summary for one prompt history entry."""
+    return entry.git_diff_summary or "No new commits recorded for this prompt."
+
+
+def _prompt_diff_blocks(
+    entries: list[CommandHistory],
+    *,
+    start_index: int,
+    requested_end_index: int,
+    total: int,
+) -> list[dict]:
+    """Format prompt-scoped git diff snapshot summaries for Slack."""
+    actual_end_index = start_index + len(entries) - 1
+    label = "prompt" if actual_end_index == start_index else "prompts"
+    header_text = (
+        f"*Prompt Diff History*\nShowing {label} #{start_index}"
+        if actual_end_index == start_index
+        else f"*Prompt Diff History*\nShowing prompts #{start_index}-#{actual_end_index}"
+    )
+    header_text += f" of {total} (most recent is #1)"
+
+    blocks: list[dict] = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": header_text},
+        },
+        {"type": "divider"},
+    ]
+
+    if actual_end_index < requested_end_index:
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"_Requested through #{requested_end_index}, "
+                            f"but only {total} prompt(s) exist in this session._"
+                        ),
+                    }
+                ],
+            }
+        )
+        blocks.append({"type": "divider"})
+
+    for offset, entry in enumerate(entries):
+        history_index = start_index + offset
+        prompt_text = _truncate_history_prompt(entry.command, _RANGE_HISTORY_PROMPT_LIMIT)
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*#{history_index}* | {entry.status} | "
+                        f"{_format_history_timestamp(entry.created_at)}\n"
+                        f"{_diff_entry_summary(entry)}"
+                    ),
+                },
+            }
+        )
+        blocks.append(
+            {
+                "type": "rich_text",
+                "elements": [
+                    {
+                        "type": "rich_text_preformatted",
+                        "elements": [{"type": "text", "text": prompt_text}],
+                    }
+                ],
+            }
+        )
+        if offset != len(entries) - 1:
+            blocks.append({"type": "divider"})
+
+    return blocks
+
+
+def _build_prompt_diff_file_content(
+    entries: list[CommandHistory],
+    *,
+    start_index: int,
+) -> str:
+    """Build combined prompt-scoped diff snapshot text for file upload."""
+    sections: list[str] = []
+
+    for offset, entry in enumerate(entries):
+        history_index = start_index + offset
+        body = entry.git_diff_output or "No new commits recorded for this prompt."
+        sections.append(
+            "\n".join(
+                [
+                    f"# Prompt #{history_index}",
+                    f"status: {entry.status}",
+                    f"created_at: {_format_history_timestamp(entry.created_at)}",
+                    "prompt:",
+                    entry.command or "(empty prompt)",
+                    "",
+                    f"summary: {_diff_entry_summary(entry)}",
+                    "",
+                    body,
+                ]
+            )
+        )
+
+    return "\n\n".join(sections)
+
+
 def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register basic command handlers.
 
@@ -302,6 +412,97 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 start_index=start_index,
                 requested_end_index=end_index,
                 total=total,
+            ),
+        )
+
+    @app.command("/diff")
+    @slack_command()
+    async def handle_diff(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle `/diff [N|N:M]` by showing prompt-scoped git diff snapshots."""
+        try:
+            start_index, end_index = _parse_history_selection(ctx.text)
+        except ValueError as exc:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text=str(exc),
+                blocks=error_message(str(exc)),
+            )
+            return
+
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            default_cwd=config.DEFAULT_WORKING_DIR,
+        )
+        limit = end_index - start_index + 1
+        history, total = await deps.db.get_prompt_history(
+            session.id,
+            limit=limit,
+            offset=start_index - 1,
+        )
+
+        if total == 0:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="No prompt history yet for this session.",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "_No prompt history yet for this session._",
+                        },
+                    }
+                ],
+            )
+            return
+
+        if not history:
+            message = f"History index out of range. This session has {total} prompt(s)."
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text=message,
+                blocks=error_message(message),
+            )
+            return
+
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text="Prompt diff history",
+            blocks=_prompt_diff_blocks(
+                history,
+                start_index=start_index,
+                requested_end_index=end_index,
+                total=total,
+            ),
+        )
+
+        if not any(entry.git_diff_output for entry in history):
+            return
+
+        file_label = (
+            f"prompt-{start_index}"
+            if len(history) == 1
+            else f"prompts-{start_index}-{start_index + len(history) - 1}"
+        )
+        await ctx.client.files_upload_v2(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            content=_build_prompt_diff_file_content(history, start_index=start_index),
+            filename=f"git-diff-{file_label}.diff",
+            title=(
+                f"Git diff for prompt #{start_index}"
+                if len(history) == 1
+                else (f"Git diffs for prompts #{start_index}-" f"{start_index + len(history) - 1}")
+            ),
+            initial_comment=(
+                "Prompt-scoped git commit diff snapshot"
+                if len(history) == 1
+                else "Prompt-scoped git commit diff snapshots"
             ),
         )
 
