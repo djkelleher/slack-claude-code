@@ -34,13 +34,13 @@ This is a Slack bot that wraps Claude Code CLI, providing a Slack interface for 
 **Core Flow:**
 1. Slack events/commands arrive via Socket Mode (`app.py`)
 2. Commands are routed to handlers in `src/handlers/`
-3. Claude CLI is invoked via `SubprocessExecutor` which streams JSON output
+3. Claude is invoked via `SDKExecutor` using the Claude Agent SDK (`ClaudeSDKClient`)
 4. Responses are formatted and posted back to Slack with `SlackFormatter`
 
 **Key Components:**
 
-- `SubprocessExecutor` (`src/claude/subprocess_executor.py`): Executes Claude CLI with `--output-format stream-json`, handles streaming responses, manages process lifecycle, and detects special events (AskUserQuestion, ExitPlanMode)
-- `StreamParser` (`src/claude/streaming.py`): Parses Claude CLI's stream-json output into typed `StreamMessage` objects
+- `SDKExecutor` (`src/claude/sdk_executor.py`): Manages a pool of persistent `ClaudeSDKClient` connections (one per Slack scope), supports streaming, steer (injecting messages into active turns), interrupt, and session resume
+- `SDKStreamAdapter` (`src/claude/sdk_stream_adapter.py`): Translates Claude Agent SDK message types (`AssistantMessage`, `UserMessage`, `ResultMessage`, etc.) into shared `StreamMessage` objects consumed by handlers
 - `DatabaseRepository` (`src/database/repository.py`): SQLite persistence for sessions, queue items, jobs, notification settings. Uses WAL mode and UPSERT for concurrent access
 - `SlackFormatter` (`src/utils/formatting.py`): Converts Claude output to Slack Block Kit format with syntax highlighting, tables, and collapsible sections
 

@@ -218,7 +218,6 @@ class SDKExecutor:
         channel_id: Optional[str] = None,
         thread_ts: Optional[str] = None,
         worktree_name: Optional[str] = None,
-        allow_live_pty: bool = False,  # ignored, kept for interface compatibility
         _recursion_depth: int = 0,
         _is_retry_after_exit_plan_error: bool = False,
     ) -> ExecutionResult:
@@ -250,8 +249,6 @@ class SDKExecutor:
             Slack thread timestamp.
         worktree_name : str, optional
             Not used with SDK (Claude handles worktrees internally).
-        allow_live_pty : bool
-            Ignored. Kept for interface compatibility.
         _recursion_depth : int
             Internal retry depth counter.
         _is_retry_after_exit_plan_error : bool
