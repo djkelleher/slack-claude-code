@@ -229,14 +229,13 @@ def _build_auto_finish_context_from_completed(items: list[Any]) -> tuple[str, st
     summary_lines: list[str] = ["Queue finished. Recent completed items summary:"]
     prompt_lines: list[str] = []
     for entry in ordered[:6]:
-        prompt_text = str(getattr(entry, "prompt", "") or "").strip()
-        output_text = str(getattr(entry, "output", "") or "").strip()
+        prompt_text = str(entry.prompt or "").strip()
+        output_text = str(entry.output or "").strip()
         prompt_lines.append(prompt_text)
         if len(output_text) > 1500:
             output_text = output_text[:1500] + "..."
         summary_lines.append(
-            f"- Item #{getattr(entry, 'id', '?')}: prompt={prompt_text[:200]} "
-            f"output={output_text[:300]}"
+            f"- Item #{entry.id}: prompt={prompt_text[:200]} " f"output={output_text[:300]}"
         )
     prompt_context = "\n".join(line for line in prompt_lines if line)
     output_context = "\n".join(summary_lines)
@@ -743,7 +742,7 @@ async def _resolve_queue_runtime_prompt(
     saved_outputs_by_name = {
         name: queued.output or ""
         for queued in completed_items
-        if (name := _extract_saved_output_name(getattr(queued, "prompt", "")))
+        if (name := _extract_saved_output_name(queued.prompt or ""))
     }
 
     def replace_position_output_reference(match: re.Match[str]) -> str:
@@ -1360,7 +1359,7 @@ async def _execute_queue_item(
             await deps.db.update_queue_item_status(item.id, "completed", output=result.output)
             final_status = "completed"
 
-            automation_meta = _normalize_automation_meta(getattr(item, "automation_meta", None))
+            automation_meta = _normalize_automation_meta(item.automation_meta)
             if automation_meta.get("auto_each"):
                 root_token = _auto_root_token(item, automation_meta)
                 continue_round = _coerce_int(automation_meta.get("continue_round"), 0)
@@ -1398,7 +1397,7 @@ async def _execute_queue_item(
                 )
                 automation_notices.extend(cap_notices)
                 if generated_entries:
-                    insert_session_id = getattr(item, "session_id", None) or effective_session.id
+                    insert_session_id = item.session_id or effective_session.id
                     queued_auto_items = await deps.db.add_many_to_queue(
                         session_id=insert_session_id,
                         channel_id=channel_id,
@@ -1861,19 +1860,13 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             is_structured_submission = True
             try:
                 submission_options, plan_text = parse_queue_plan_submission(ctx.text)
-                replace_pending = bool(getattr(submission_options, "replace_pending", False))
-                insertion_mode = str(getattr(submission_options, "insertion_mode", "append"))
-                insert_at = getattr(submission_options, "insert_at", None)
-                has_explicit_submission_directive = bool(
-                    getattr(submission_options, "directive_explicit", False)
-                )
-                scheduled_controls = list(getattr(submission_options, "scheduled_controls", []))
-                auto_after_each_prompt = bool(
-                    getattr(submission_options, "auto_after_each_prompt", False)
-                )
-                auto_after_queue_finish = bool(
-                    getattr(submission_options, "auto_after_queue_finish", False)
-                )
+                replace_pending = bool(submission_options.replace_pending)
+                insertion_mode = str(submission_options.insertion_mode)
+                insert_at = submission_options.insert_at
+                has_explicit_submission_directive = bool(submission_options.directive_explicit)
+                scheduled_controls = list(submission_options.scheduled_controls)
+                auto_after_each_prompt = bool(submission_options.auto_after_each_prompt)
+                auto_after_queue_finish = bool(submission_options.auto_after_queue_finish)
                 materialized_prompts = await materialize_queue_plan_text(
                     text=plan_text,
                     working_directory=session.working_directory,

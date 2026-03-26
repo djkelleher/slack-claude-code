@@ -45,6 +45,8 @@ def _queue_item(item_id: int, prompt: str, working_directory_override: str | Non
         working_directory_override=working_directory_override,
         parallel_group_id=None,
         parallel_limit=None,
+        automation_meta=None,
+        session_id=None,
     )
 
 
@@ -2156,6 +2158,8 @@ async def test_q_add_structured_plan_persists_scheduled_controls():
                     scheduled_controls=[
                         SimpleNamespace(action="pause", execute_at=scheduled_time),
                     ],
+                    auto_after_each_prompt=False,
+                    auto_after_queue_finish=False,
                 ),
                 "next",
             ),

@@ -15,14 +15,21 @@ def test_queue_status_renders_running_scheduled_and_pending_sections() -> None:
             prompt="run <lint> & deploy",
             parallel_group_id="grp-1",
             parallel_limit=2,
+            automation_meta=None,
         )
     ]
     pending = [
-        SimpleNamespace(id=2, prompt="follow up", parallel_group_id=None, parallel_limit=None)
+        SimpleNamespace(
+            id=2,
+            prompt="follow up",
+            parallel_group_id=None,
+            parallel_limit=None,
+            automation_meta=None,
+        )
     ]
     scheduled = [
         SimpleNamespace(id=501, action="resume", execute_at=datetime(2026, 3, 21, 15, 30)),
-        SimpleNamespace(action="pause", execute_at=datetime(2026, 3, 21, 16, 0)),
+        SimpleNamespace(id=None, action="pause", execute_at=datetime(2026, 3, 21, 16, 0)),
     ]
 
     blocks = queue_fmt.queue_status(pending=pending, running=running, scheduled_events=scheduled)
@@ -43,11 +50,12 @@ def test_queue_status_shows_empty_pending_and_overflow_notices() -> None:
             prompt=f"task {index}",
             parallel_group_id=None,
             parallel_limit=None,
+            automation_meta=None,
         )
         for index in range(12)
     ]
     scheduled = [
-        SimpleNamespace(action=f"action-{index}", execute_at=datetime(2026, 3, 21, 12, 0))
+        SimpleNamespace(id=None, action=f"action-{index}", execute_at=datetime(2026, 3, 21, 12, 0))
         for index in range(7)
     ]
 
@@ -72,6 +80,7 @@ def test_queue_status_formats_pending_parallel_suffix() -> None:
             prompt="parallel task",
             parallel_group_id="grp-2",
             parallel_limit=None,
+            automation_meta=None,
         )
     ]
 
@@ -82,7 +91,7 @@ def test_queue_status_formats_pending_parallel_suffix() -> None:
 
 def test_queue_item_running_and_complete_render_status_and_truncation() -> None:
     """Queue item formatters should keep running previews Slack-safe and truncate long output."""
-    item = SimpleNamespace(id=9, prompt="process " + ("x" * 4000))
+    item = SimpleNamespace(id=9, prompt="process " + ("x" * 4000), automation_meta=None)
     success = SimpleNamespace(success=True, output="done", error=None)
     failure = SimpleNamespace(success=False, output="", error="E" * 2600)
 

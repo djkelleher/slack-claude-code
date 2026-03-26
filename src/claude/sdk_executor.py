@@ -943,7 +943,7 @@ class SDKExecutor:
 
     async def _idle_janitor_loop(self) -> None:
         """Periodically disconnect idle clients."""
-        idle_timeout = getattr(config, "CLAUDE_SDK_IDLE_TIMEOUT_SECONDS", 900)
+        idle_timeout = config.CLAUDE_SDK_IDLE_TIMEOUT_SECONDS
         interval = 30.0
         try:
             while True:

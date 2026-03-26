@@ -871,14 +871,12 @@ async def _queue_structured_plan_message(
     auto_after_queue_finish = False
     try:
         submission_options, plan_text = parse_queue_plan_submission(prompt)
-        replace_pending = bool(getattr(submission_options, "replace_pending", False))
-        insertion_mode = str(getattr(submission_options, "insertion_mode", "append"))
-        insert_at = getattr(submission_options, "insert_at", None)
-        scheduled_controls = list(getattr(submission_options, "scheduled_controls", []))
-        auto_after_each_prompt = bool(getattr(submission_options, "auto_after_each_prompt", False))
-        auto_after_queue_finish = bool(
-            getattr(submission_options, "auto_after_queue_finish", False)
-        )
+        replace_pending = bool(submission_options.replace_pending)
+        insertion_mode = str(submission_options.insertion_mode)
+        insert_at = submission_options.insert_at
+        scheduled_controls = list(submission_options.scheduled_controls)
+        auto_after_each_prompt = bool(submission_options.auto_after_each_prompt)
+        auto_after_queue_finish = bool(submission_options.auto_after_queue_finish)
         materialized_prompts = await materialize_queue_plan_text(
             text=plan_text,
             working_directory=session.working_directory,

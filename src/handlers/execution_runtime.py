@@ -158,8 +158,8 @@ async def execute_prompt_with_runtime(
                 cmd_history.id, "failed", result.output, result.error
             )
 
-        git_diff_summary = getattr(result, "git_diff_summary", None)
-        git_diff_output = getattr(result, "git_diff_output", None)
+        git_diff_summary = result.git_diff_summary
+        git_diff_output = result.git_diff_output
         if git_diff_summary or git_diff_output:
             await deps.db.store_command_git_diff(
                 cmd_history.id,

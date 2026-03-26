@@ -34,7 +34,7 @@ def _running_item_label(item: Any) -> str:
 
 def _automation_prefix(item: Any) -> str:
     """Return a short queue label prefix for auto-generated items."""
-    raw_meta = getattr(item, "automation_meta", None)
+    raw_meta = item.automation_meta
     if not isinstance(raw_meta, dict):
         return ""
     origin = str(raw_meta.get("origin") or "").strip().lower()
@@ -62,7 +62,7 @@ def _scheduled_event_text(event: Any) -> str:
     if execute_at.tzinfo is None or execute_at.tzinfo.utcoffset(execute_at) is None:
         execute_at = execute_at.replace(tzinfo=timezone.utc)
     execute_at_utc = execute_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    event_id = getattr(event, "id", None)
+    event_id = event.id
     id_prefix = f"`#{event_id}` " if event_id is not None else ""
     return f":alarm_clock: {id_prefix}*{event.action}* at `{execute_at_utc}`"
 

@@ -904,6 +904,8 @@ class TestStructuredQueuePlanRouting:
                         scheduled_controls=[
                             SimpleNamespace(action="pause", execute_at=scheduled_time),
                         ],
+                        auto_after_each_prompt=False,
+                        auto_after_queue_finish=False,
                     ),
                     "first",
                 ),
