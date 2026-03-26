@@ -15,6 +15,7 @@ import asyncio
 import uuid
 
 import pytest
+from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from tests.integration.helpers import (
@@ -322,14 +323,19 @@ async def test_file_upload_queue_plan(
     cleanup = MessageCleanup(slack_client, slack_user_client, slack_test_channel)
 
     try:
-        # Upload file with queue plan content
-        upload_response = await slack_user_client.files_upload_v2(
+        # Upload file with queue plan content — skip if user token lacks files:write
+        try:
+            upload_response = await slack_user_client.files_upload_v2(
             channel=slack_test_channel,
             content=plan_content,
             filename="test_plan.txt",
             title=f"[CMD {marker}] Queue Plan Upload",
             initial_comment="",
         )
+        except SlackApiError as exc:
+            if exc.response.get("error") == "missing_scope":
+                pytest.skip(f"SLACK_USER_TOKEN missing scope: {exc.response.get('needed')}")
+            raise
         assert upload_response["ok"] is True
 
         # The file share message creates a thread — find it
