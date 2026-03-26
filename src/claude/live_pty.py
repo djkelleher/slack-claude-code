@@ -99,9 +99,7 @@ class ClaudeLivePtyManager:
             return PtySteerResult(success=True, turn_id=session.active_turn_id)
         except Exception as e:
             logger.warning(f"Failed steering active PTY turn for {session_scope}: {e}")
-            return PtySteerResult(
-                success=False, error=str(e), turn_id=session.active_turn_id
-            )
+            return PtySteerResult(success=False, error=str(e), turn_id=session.active_turn_id)
 
     async def execute_turn(
         self,
@@ -170,9 +168,7 @@ class ClaudeLivePtyManager:
                             duration_ms=int((now - started_at) * 1000),
                         )
 
-                    chunk = await self._read_chunk(
-                        session, timeout_seconds=read_timeout_seconds
-                    )
+                    chunk = await self._read_chunk(session, timeout_seconds=read_timeout_seconds)
                     now = monotonic()
                     if chunk is None:
                         if session.cancel_requested:
@@ -182,17 +178,12 @@ class ClaudeLivePtyManager:
                                 was_cancelled = True
                                 break
                             continue
-                        if (
-                            prompt_seen
-                            and got_output
-                            and (now - last_output_at) >= settle_seconds
-                        ):
+                        if prompt_seen and got_output and (now - last_output_at) >= settle_seconds:
                             break
                         if (
                             got_output
                             and not prompt_seen
-                            and (now - last_output_at)
-                            >= promptless_idle_fallback_seconds
+                            and (now - last_output_at) >= promptless_idle_fallback_seconds
                         ):
                             break
                         continue
@@ -229,19 +220,13 @@ class ClaudeLivePtyManager:
                         output_buffer = output_buffer[-max_output_chars:]
                         output_truncated = True
                     if on_chunk:
-                        await on_chunk(
-                            StreamMessage(type="assistant", content=normalized)
-                        )
+                        await on_chunk(StreamMessage(type="assistant", content=normalized))
 
                 finished_at = monotonic()
                 raw_output = output_buffer
                 output = self._finalize_output_text(raw_output)
                 if output_truncated:
-                    output = (
-                        f"{TRUNCATION_NOTICE}\n\n{output}"
-                        if output
-                        else TRUNCATION_NOTICE
-                    )
+                    output = f"{TRUNCATION_NOTICE}\n\n{output}" if output else TRUNCATION_NOTICE
                 session.turn_count += 1
 
                 if was_cancelled:
@@ -295,9 +280,7 @@ class ClaudeLivePtyManager:
     async def cancel_all(self) -> int:
         """Interrupt all active PTY turns."""
         async with self._sessions_lock:
-            sessions = [
-                s for s in self._sessions.values() if s.is_running() and s.is_active()
-            ]
+            sessions = [s for s in self._sessions.values() if s.is_running() and s.is_active()]
             for session in sessions:
                 session.cancel_requested = True
         for session in sessions:
@@ -377,9 +360,7 @@ class ClaudeLivePtyManager:
     ) -> _LivePtySession:
         """Return existing compatible session or create a new process."""
         normalized_dirs = tuple(d for d in added_dirs if d)
-        requested_resume = (
-            resume_session_id if self._is_uuid(resume_session_id) else None
-        )
+        requested_resume = resume_session_id if self._is_uuid(resume_session_id) else None
         scope_lock = await self._get_scope_lock(session_scope)
         sessions_to_close: list[_LivePtySession] = []
 
@@ -394,9 +375,7 @@ class ClaudeLivePtyManager:
                         existing = None
 
                     if existing:
-                        reset_requested = (
-                            requested_resume is None and existing.turn_count > 0
-                        )
+                        reset_requested = requested_resume is None and existing.turn_count > 0
                         compatibility_mismatch = (
                             existing.working_directory != working_directory
                             or existing.model != model
@@ -523,9 +502,7 @@ class ClaudeLivePtyManager:
             try:
                 os.write(session.master_fd, b"\x03")
             except OSError as e:
-                logger.debug(
-                    f"Failed to send Ctrl-C to PTY session {session.scope}: {e}"
-                )
+                logger.debug(f"Failed to send Ctrl-C to PTY session {session.scope}: {e}")
 
     async def _write_text(self, session: _LivePtySession, text: str) -> None:
         """Write text to PTY stdin."""
@@ -533,9 +510,7 @@ class ClaudeLivePtyManager:
             os.write(session.master_fd, text.encode("utf-8"))
             session.last_activity = monotonic()
 
-    async def _read_chunk(
-        self, session: _LivePtySession, timeout_seconds: float
-    ) -> Optional[str]:
+    async def _read_chunk(self, session: _LivePtySession, timeout_seconds: float) -> Optional[str]:
         """Read a chunk from PTY; None indicates timeout, empty string indicates EOF."""
         if not session.is_running():
             return ""
@@ -557,9 +532,7 @@ class ClaudeLivePtyManager:
                 return ""
             return data.decode("utf-8", errors="replace")
 
-    async def _drain_pending_output(
-        self, session: _LivePtySession, timeout_seconds: float
-    ) -> None:
+    async def _drain_pending_output(self, session: _LivePtySession, timeout_seconds: float) -> None:
         """Drain any immediately available PTY output to reduce cross-turn bleed."""
         deadline = monotonic() + timeout_seconds
         while monotonic() < deadline:
@@ -575,9 +548,7 @@ class ClaudeLivePtyManager:
         normalized = text.replace("\r\n", "\n").replace("\r", "\n")
         normalized = ANSI_ESCAPE_RE.sub("", normalized)
         normalized = normalized.replace("\x00", "")
-        normalized = "".join(
-            ch for ch in normalized if ch == "\n" or ch == "\t" or ord(ch) >= 32
-        )
+        normalized = "".join(ch for ch in normalized if ch == "\n" or ch == "\t" or ord(ch) >= 32)
         return normalized
 
     @staticmethod

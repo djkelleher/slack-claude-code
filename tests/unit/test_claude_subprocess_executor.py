@@ -108,9 +108,7 @@ class TestClaudeSubprocessExecutor:
         )
 
         executor = SubprocessExecutor()
-        with patch(
-            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
-        ):
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)):
             result = await executor.execute(
                 prompt="analyze this project",
                 working_directory="/tmp",
@@ -147,9 +145,7 @@ class TestClaudeSubprocessExecutor:
         )
 
         executor = SubprocessExecutor()
-        with patch(
-            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)
-        ):
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)):
             result = await executor.execute(
                 prompt="create a plan",
                 working_directory="/tmp",

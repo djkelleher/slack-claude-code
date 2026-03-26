@@ -104,9 +104,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             return False
         return await self._live_pty_manager.has_active_run(session_scope)
 
-    async def steer_active_execution(
-        self, session_scope: str, text: str
-    ) -> PtySteerResult:
+    async def steer_active_execution(self, session_scope: str, text: str) -> PtySteerResult:
         """Inject text into an active live PTY turn."""
         if not self.is_live_pty_enabled():
             return PtySteerResult(success=False, error="Live PTY mode is disabled")
@@ -396,9 +394,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             if (
                 not pty_result.success
                 and resume_session_id
-                and self._is_live_pty_missing_session_error(
-                    pty_result.error, pty_result.output
-                )
+                and self._is_live_pty_missing_session_error(pty_result.error, pty_result.output)
             ):
                 logger.info(
                     f"{log_prefix}Live PTY session {resume_session_id} not found, retrying without resume "
@@ -476,9 +472,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         for added_dir in added_dirs:
             cmd.extend(["--add-dir", added_dir])
         if added_dirs:
-            logger.info(
-                f"{log_prefix}Using {len(added_dirs)} added directory override(s)"
-            )
+            logger.info(f"{log_prefix}Using {len(added_dirs)} added directory override(s)")
 
         if worktree_name:
             cmd.extend(["--worktree", worktree_name])
@@ -489,9 +483,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             cmd.extend(["--resume", resume_session_id])
             logger.info(f"{log_prefix}Resuming session {resume_session_id}")
         elif resume_session_id:
-            logger.warning(
-                f"{log_prefix}Invalid session ID format (not UUID): {resume_session_id}"
-            )
+            logger.warning(f"{log_prefix}Invalid session ID format (not UUID): {resume_session_id}")
 
         # Log full command with all flags and note prompt transport separately.
         cmd_without_prompt = " ".join(cmd)
@@ -604,9 +596,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                     # Log text content
                     if msg.content:
                         preview = (
-                            msg.content[:100] + "..."
-                            if len(msg.content) > 100
-                            else msg.content
+                            msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
                         )
                         logger.debug(f"{log_prefix}Claude: {preview}")
                     # Log tool use and track file context
@@ -632,38 +622,26 @@ class SubprocessExecutor(ProcessExecutorBase):
                                 # Log tool use summary and track file operations
                                 if tool_name in ("Read", "Edit", "Write"):
                                     file_path = tool_input.get("file_path", "")
-                                    logger.info(
-                                        f"{log_prefix}Tool: {tool_name} {file_path}"
-                                    )
+                                    logger.info(f"{log_prefix}Tool: {tool_name} {file_path}")
                                     if tool_name in ("Write", "Edit") and file_path:
                                         # Track .md writes when we know plan mode is active
                                         # (either from ExitPlanMode detection or DB mode)
                                         in_plan_mode = state.exit_plan_mode_detected
                                         if not in_plan_mode:
-                                            current_mode = (
-                                                await self._get_current_permission_mode(
-                                                    db_session_id, permission_mode
-                                                )
+                                            current_mode = await self._get_current_permission_mode(
+                                                db_session_id, permission_mode
                                             )
                                             in_plan_mode = current_mode == "plan"
                                         if in_plan_mode and file_path.endswith(".md"):
                                             tool_id = block.get("id")
-                                            if (
-                                                tool_id
-                                                and tool_id
-                                                not in state.pending_write_tools
-                                            ):
-                                                state.pending_write_tools[tool_id] = (
-                                                    file_path
-                                                )
+                                            if tool_id and tool_id not in state.pending_write_tools:
+                                                state.pending_write_tools[tool_id] = file_path
                                                 logger.info(
                                                     f"{log_prefix}Tracking pending plan write: {file_path}"
                                                 )
                                 elif tool_name == "Bash":
                                     command = tool_input.get("command", "")[:50]
-                                    logger.info(
-                                        f"{log_prefix}Tool: Bash '{command}...'"
-                                    )
+                                    logger.info(f"{log_prefix}Tool: Bash '{command}...'")
                                 elif tool_name == "AskUserQuestion":
                                     questions = tool_input.get("questions", [])
                                     if questions:
@@ -672,9 +650,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                                             f"{log_prefix}Tool: AskUserQuestion - '{first_q}...' ({len(questions)} question(s))"
                                         )
                                     else:
-                                        logger.info(
-                                            f"{log_prefix}Tool: AskUserQuestion"
-                                        )
+                                        logger.info(f"{log_prefix}Tool: AskUserQuestion")
                                     # Mark for early termination to handle question in Slack
                                     state.ask_user_question_detected = True
                                     logger.info(
@@ -685,9 +661,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                                         state.exit_plan_mode_tool_id = block.get("id")
                                         state.exit_plan_mode_detected = True
                                         if state.exit_plan_mode_detected_at is None:
-                                            state.exit_plan_mode_detected_at = (
-                                                time.monotonic()
-                                            )
+                                            state.exit_plan_mode_detected_at = time.monotonic()
                                         logger.info(
                                             f"{log_prefix}Tool: ExitPlanMode - will terminate for Slack approval"
                                         )
@@ -704,17 +678,13 @@ class SubprocessExecutor(ProcessExecutorBase):
                                     # avoid false positives from non-plan exploration tasks.
                                     should_track = subagent_type == "Plan"
                                     if not should_track:
-                                        current_mode = (
-                                            await self._get_current_permission_mode(
-                                                db_session_id, permission_mode
-                                            )
+                                        current_mode = await self._get_current_permission_mode(
+                                            db_session_id, permission_mode
                                         )
                                         should_track = current_mode == "plan"
                                     if should_track:
                                         state.plan_subagent_tool_id = block.get("id")
-                                        state.plan_subagent_is_plan_type = (
-                                            subagent_type == "Plan"
-                                        )
+                                        state.plan_subagent_is_plan_type = subagent_type == "Plan"
                                         state.plan_subagent_completed = False
                                         state.plan_subagent_completed_at = None
                                         logger.info(
@@ -722,18 +692,14 @@ class SubprocessExecutor(ProcessExecutorBase):
                                             f"'{desc}...' - tracking for plan approval"
                                         )
                                     else:
-                                        logger.info(
-                                            f"{log_prefix}Tool: Task '{desc}...'"
-                                        )
+                                        logger.info(f"{log_prefix}Tool: Task '{desc}...'")
                                 else:
                                     logger.info(f"{log_prefix}Tool: {tool_name}")
                 elif msg.type == "user" and msg.raw:
                     # Log tool results summary
                     message = msg.raw.get("message", {})
                     if not isinstance(message, dict):
-                        logger.debug(
-                            f"{log_prefix}Unexpected user message type: {type(message)}"
-                        )
+                        logger.debug(f"{log_prefix}Unexpected user message type: {type(message)}")
                         message = {}
                     content_blocks = message.get("content", [])
                     if not isinstance(content_blocks, list):
@@ -749,9 +715,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                             tool_use_id_short = tool_use_id[:8]
                             is_error = block.get("is_error", False)
                             status = "ERROR" if is_error else "OK"
-                            logger.info(
-                                f"{log_prefix}Tool result [{tool_use_id_short}]: {status}"
-                            )
+                            logger.info(f"{log_prefix}Tool result [{tool_use_id_short}]: {status}")
 
                             # Detect ExitPlanMode ERROR for immediate retry
                             if (
@@ -787,8 +751,8 @@ class SubprocessExecutor(ProcessExecutorBase):
                                             if not isinstance(content_block, dict):
                                                 continue
                                             if content_block.get("type") == "text":
-                                                state.plan_subagent_result = (
-                                                    content_block.get("text", "")
+                                                state.plan_subagent_result = content_block.get(
+                                                    "text", ""
                                                 )
                                                 logger.debug(
                                                     f"{log_prefix}Captured Plan subagent result: "
@@ -837,9 +801,7 @@ class SubprocessExecutor(ProcessExecutorBase):
 
                 # If ExitPlanMode error detected, terminate early and retry
                 if state.exit_plan_mode_error_detected:
-                    logger.info(
-                        f"{log_prefix}Terminating execution to retry without plan mode"
-                    )
+                    logger.info(f"{log_prefix}Terminating execution to retry without plan mode")
                     await terminate_process_safely(process)
                     break  # Exit the message processing loop
 
@@ -859,17 +821,14 @@ class SubprocessExecutor(ProcessExecutorBase):
                 if state.exit_plan_mode_detected:
                     # Check if Plan subagent is still running (started but not completed)
                     plan_subagent_pending = (
-                        state.plan_subagent_tool_id
-                        and not state.plan_subagent_completed
+                        state.plan_subagent_tool_id and not state.plan_subagent_completed
                     )
                     write_pending = bool(state.pending_write_tools)
                     if plan_subagent_pending or write_pending:
                         if write_pending:
                             elapsed = 0.0
                             if state.exit_plan_mode_detected_at is not None:
-                                elapsed = (
-                                    time.monotonic() - state.exit_plan_mode_detected_at
-                                )
+                                elapsed = time.monotonic() - state.exit_plan_mode_detected_at
                             if elapsed > PLAN_WRITE_GRACE_SECONDS:
                                 logger.warning(
                                     f"{log_prefix}ExitPlanMode detected but Write tools still pending "
@@ -903,9 +862,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                     if state.pending_write_tools:
                         elapsed = 0.0
                         if state.plan_subagent_completed_at is not None:
-                            elapsed = (
-                                time.monotonic() - state.plan_subagent_completed_at
-                            )
+                            elapsed = time.monotonic() - state.plan_subagent_completed_at
                         if elapsed > PLAN_WRITE_GRACE_SECONDS:
                             logger.warning(
                                 f"{log_prefix}Plan subagent completed but Write tools still pending "
@@ -927,9 +884,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                             break  # Exit the message processing loop
                         elapsed = 0.0
                         if state.plan_subagent_completed_at is not None:
-                            elapsed = (
-                                time.monotonic() - state.plan_subagent_completed_at
-                            )
+                            elapsed = time.monotonic() - state.plan_subagent_completed_at
                         if elapsed > PLAN_WRITE_GRACE_SECONDS:
                             logger.warning(
                                 f"{log_prefix}Plan subagent completed but no plan write detected "
@@ -966,8 +921,7 @@ class SubprocessExecutor(ProcessExecutorBase):
             if (
                 not success
                 and resume_session_id
-                and "No conversation found with session ID"
-                in (accumulator.error_message or "")
+                and "No conversation found with session ID" in (accumulator.error_message or "")
             ):
                 logger.info(
                     f"{log_prefix}Session {resume_session_id} not found, retrying without resume (depth={_recursion_depth + 1})"
@@ -990,10 +944,7 @@ class SubprocessExecutor(ProcessExecutorBase):
                 )
 
             # Check if ExitPlanMode error detected - retry without plan mode
-            if (
-                state.exit_plan_mode_error_detected
-                and not _is_retry_after_exit_plan_error
-            ):
+            if state.exit_plan_mode_error_detected and not _is_retry_after_exit_plan_error:
                 logger.info(
                     f"{log_prefix}Retrying execution with bypass mode after ExitPlanMode error (depth={_recursion_depth + 1})"
                 )
@@ -1044,9 +995,7 @@ class SubprocessExecutor(ProcessExecutorBase):
         except Exception as e:
             logger.error(f"{log_prefix}Error during execution: {e}")
             await terminate_process_safely(process)
-            return ExecutionResult(
-                **accumulator.result_fields(success=False, error=str(e))
-            )
+            return ExecutionResult(**accumulator.result_fields(success=False, error=str(e)))
         finally:
             await self.unregister_process(
                 context=tracking,

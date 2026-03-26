@@ -63,9 +63,7 @@ class TestClaudeLivePtyManager:
                 await asyncio.sleep(0.03)
             return item
 
-        with patch.object(
-            manager, "_ensure_session", new=AsyncMock(return_value=session)
-        ):
+        with patch.object(manager, "_ensure_session", new=AsyncMock(return_value=session)):
             with patch.object(manager, "_drain_pending_output", new=AsyncMock()):
                 with patch.object(manager, "_write_text", new=AsyncMock()):
                     with patch.object(
@@ -110,13 +108,9 @@ class TestClaudeLivePtyManager:
             await asyncio.sleep(0.02)
             return None
 
-        with patch.object(
-            manager, "_ensure_session", new=AsyncMock(return_value=session)
-        ):
+        with patch.object(manager, "_ensure_session", new=AsyncMock(return_value=session)):
             with patch.object(manager, "_drain_pending_output", new=AsyncMock()):
-                with patch.object(
-                    manager, "_write_text", new=AsyncMock(side_effect=_fake_write)
-                ):
+                with patch.object(manager, "_write_text", new=AsyncMock(side_effect=_fake_write)):
                     with patch.object(
                         manager, "_read_chunk", new=AsyncMock(side_effect=_fake_read)
                     ):
@@ -165,9 +159,7 @@ class TestClaudeLivePtyManager:
             _ = timeout_seconds
             return next(reads)
 
-        with patch.object(
-            manager, "_ensure_session", new=AsyncMock(return_value=session)
-        ):
+        with patch.object(manager, "_ensure_session", new=AsyncMock(return_value=session)):
             with patch.object(manager, "_drain_pending_output", new=AsyncMock()):
                 with patch.object(manager, "_write_text", new=AsyncMock()):
                     with patch.object(
@@ -222,9 +214,7 @@ class TestClaudeLivePtyManager:
         manager._sessions[session.scope] = session
 
         with patch.object(manager, "_terminate_session", new=AsyncMock()) as mock_term:
-            await manager.ensure_idle_janitor(
-                idle_timeout_seconds=1, interval_seconds=0.2
-            )
+            await manager.ensure_idle_janitor(idle_timeout_seconds=1, interval_seconds=0.2)
             await asyncio.sleep(0.25)
             await manager.stop_idle_janitor()
 
@@ -235,9 +225,7 @@ class TestClaudeLivePtyManager:
     async def test_scope_lock_allows_other_scopes_while_replacing(self):
         """Slow replacement in one scope should not block session creation in another scope."""
         manager = ClaudeLivePtyManager()
-        stale_a = _build_session(
-            scope="scope-a", session_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        )
+        stale_a = _build_session(scope="scope-a", session_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         stale_a.turn_count = 1
         manager._sessions[stale_a.scope] = stale_a
 
@@ -281,9 +269,7 @@ class TestClaudeLivePtyManager:
             log_prefix="",
         )
 
-        with patch.object(
-            manager, "_spawn_session", new=AsyncMock(side_effect=_fake_spawn)
-        ):
+        with patch.object(manager, "_spawn_session", new=AsyncMock(side_effect=_fake_spawn)):
             with patch.object(
                 manager,
                 "_terminate_session",

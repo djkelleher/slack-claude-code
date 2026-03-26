@@ -198,9 +198,7 @@ class TestAutoApproveToolsParsing:
     def test_whitespace_handling(self, monkeypatch):
         """Whitespace around values is stripped."""
         monkeypatch.delenv("AUTO_APPROVE_TOOLS", raising=False)
-        test_config = Config(
-            AUTO_APPROVE_TOOLS_STR=" Read , Glob , Grep ", _env_file=None
-        )
+        test_config = Config(AUTO_APPROVE_TOOLS_STR=" Read , Glob , Grep ", _env_file=None)
         assert test_config.AUTO_APPROVE_TOOLS == ["Read", "Glob", "Grep"]
 
 
