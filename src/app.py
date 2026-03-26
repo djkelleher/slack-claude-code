@@ -25,9 +25,11 @@ from slack_bolt.async_app import AsyncApp
 from slack_sdk.errors import SlackApiError
 
 from src.approval.plan_manager import PlanApprovalManager
+from src.claude.provider import ClaudeBackendProvider
 from src.claude.sdk_executor import SDKExecutor as ClaudeExecutor
+from src.codex.provider import CodexBackendProvider
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
-from src.config import config, get_backend_for_model
+from src.config import config, get_backend_for_model, registry
 from src.database.migrations import init_database
 from src.database.repository import DatabaseRepository
 from src.handlers import register_commands
@@ -1152,6 +1154,14 @@ async def main():
     # Initialize Codex executor (optional)
     codex_executor = CodexExecutor(db=db)
 
+    # Populate backend registry with providers
+    registry.register_backend(ClaudeBackendProvider(claude_executor))
+    registry.register_backend(CodexBackendProvider(codex_executor))
+    logger.info(
+        f"Backend registry initialized with {len(registry.backend_ids)} backends: "
+        f"{', '.join(registry.backend_ids)}"
+    )
+
     # Create Slack app
     app = AsyncApp(
         token=config.SLACK_BOT_TOKEN,
@@ -1164,6 +1174,7 @@ async def main():
         db,
         claude_executor,
         codex_executor=codex_executor,
+        backend_registry=registry,
     )
     register_actions(app, deps)
     recent_message_events: dict[str, float] = {}

@@ -7,6 +7,7 @@ from typing import Any, Callable
 from loguru import logger as LoguruLogger
 from slack_sdk.web.async_client import AsyncWebClient
 
+from src.backends.registry import BackendRegistry
 from src.config import config
 from src.utils.formatters.command import error_message
 
@@ -73,6 +74,7 @@ class HandlerDependencies:
     db: Any  # DatabaseRepository
     executor: Any  # Claude SubprocessExecutor
     codex_executor: Any = None  # Codex SubprocessExecutor
+    backend_registry: Any = None  # BackendRegistry
     slash_command_router: Any = None  # SlashCommandRouter
 
 

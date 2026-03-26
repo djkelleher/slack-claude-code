@@ -6,6 +6,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.backends.registry import BackendRegistry
 from src.config_storage import get_storage
 
 # Global constant for application plan directory
@@ -557,3 +558,6 @@ class Config(BaseSettings):
 
 
 config = Config()
+
+# Global backend registry — populated by app.py at startup
+registry = BackendRegistry()

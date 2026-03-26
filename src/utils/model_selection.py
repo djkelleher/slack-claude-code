@@ -3,6 +3,7 @@
 import functools
 from typing import Optional
 
+from src.backends.models import ModelDefinition
 from src.config import (
     CLAUDE_DEFAULT_ALIASES,
     CLAUDE_EFFORT_LEVELS,
@@ -19,6 +20,7 @@ from src.config import (
     looks_like_codex_model,
     parse_claude_model_effort,
     parse_model_effort,
+    registry,
 )
 
 _EFFORT_ALIAS_MAP: dict[str, Optional[str]] = {
@@ -238,18 +240,40 @@ def apply_effort_to_model(
     return f"{base_model}-{normalized_effort}", None
 
 
+def _model_def_to_option_dict(model_def: ModelDefinition) -> dict[str, str | None]:
+    """Convert a ModelDefinition to the legacy option dict format."""
+    return {
+        "name": model_def.id.replace(".", "-"),
+        "value": model_def.cli_value,
+        "display": model_def.display_name,
+        "desc": f"{model_def.display_name} \u00b7 {model_def.description}",
+    }
+
+
 def get_claude_model_options() -> list[dict[str, str | None]]:
     """Return Claude model picker options."""
+    if registry.backend_ids:
+        models = registry.get_models_for_backend("claude")
+        if models:
+            return [_model_def_to_option_dict(m) for m in models]
     return [option.__dict__.copy() for option in CLAUDE_MODEL_OPTIONS]
 
 
 def get_codex_model_options() -> list[dict[str, str | None]]:
     """Return Codex model picker options."""
+    if registry.backend_ids:
+        models = registry.get_models_for_backend("codex")
+        if models:
+            return [_model_def_to_option_dict(m) for m in models]
     return [option.__dict__.copy() for option in CODEX_BASE_MODEL_OPTIONS]
 
 
 def get_all_model_options() -> list[dict[str, str | None]]:
-    """Return combined Claude and Codex model picker options."""
+    """Return combined model picker options from all backends."""
+    if registry.backend_ids:
+        models = registry.get_all_models()
+        if models:
+            return [_model_def_to_option_dict(m) for m in models]
     return get_claude_model_options() + get_codex_model_options()
 
 
@@ -303,6 +327,30 @@ def normalize_current_model(model: Optional[str]) -> Optional[str]:
 
 def model_display_name(model: Optional[str]) -> str:
     """Return human-readable display name for a model identifier."""
+    # Try registry first
+    if registry.backend_ids:
+        normalized = normalize_current_model(model)
+        if normalized is None:
+            default_model = registry.get_default_model()
+            if default_model:
+                return default_model.display_name
+            return "Opus 4.6"
+
+        resolved = registry.resolve_model(normalized)
+        if resolved:
+            return resolved.display_name
+
+        # Handle effort suffixes via registry backends
+        for backend in registry.backend_ids:
+            provider = registry.get_backend(backend)
+            if provider:
+                base, effort = provider.parse_effort(normalized)
+                if effort:
+                    base_resolved = registry.resolve_model(base)
+                    if base_resolved:
+                        return f"{base_resolved.display_name} ({effort_display_name(effort)})"
+
+    # Fall back to legacy display map
     normalized = normalize_current_model(model)
     display_map = _display_name_map()
     if normalized in display_map:
@@ -333,7 +381,7 @@ def codex_model_validation_error(model: Optional[str]) -> Optional[str]:
     if is_supported_codex_model(model):
         return None
 
-    supported = "\n".join(f"• `{entry}`" for entry in sorted(CODEX_MODELS))
+    supported = "\n".join(f"\u2022 `{entry}`" for entry in sorted(CODEX_MODELS))
     effort_levels = ", ".join(f"`{level}`" for level in EFFORT_LEVELS)
     return (
         f"Unsupported Codex model: `{model}`\n\n"
@@ -345,5 +393,10 @@ def codex_model_validation_error(model: Optional[str]) -> Optional[str]:
 
 def backend_label_for_model(model: Optional[str]) -> str:
     """Return user-facing backend label for the selected model."""
+    if registry.backend_ids:
+        backend_id = registry.get_backend_for_model(model)
+        provider = registry.get_backend(backend_id)
+        if provider:
+            return provider.display_name
     backend = get_backend_for_model(model)
     return "Claude Code" if backend == "claude" else "OpenAI Codex"
