@@ -9,7 +9,7 @@ import pytest
 from slack_sdk.errors import SlackApiError
 
 from tests import conftest as test_conftest
-from tests.integration import test_slack_app_live
+from tests.integration import helpers as live_helpers
 
 
 def test_load_dotenv_populates_missing_values(tmp_path, monkeypatch) -> None:
@@ -54,7 +54,7 @@ async def test_post_user_message_or_skip_returns_post_response() -> None:
     """Successful post should pass the Slack response through unchanged."""
     client = SimpleNamespace(chat_postMessage=AsyncMock(return_value={"ok": True, "ts": "123.456"}))
 
-    response = await test_slack_app_live._post_user_message_or_skip(
+    response = await live_helpers.post_user_message_or_skip(
         client,
         channel="C123",
         text="hello",
@@ -85,7 +85,7 @@ async def test_post_user_message_or_skip_skips_for_missing_scope() -> None:
     )
 
     with pytest.raises(pytest.skip.Exception, match="needed=chat:write:bot"):
-        await test_slack_app_live._post_user_message_or_skip(
+        await live_helpers.post_user_message_or_skip(
             client,
             channel="C123",
             text="hello",

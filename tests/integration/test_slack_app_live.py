@@ -10,114 +10,16 @@ Required environment variables:
 Run with: pytest tests/integration/test_slack_app_live.py --live
 """
 
-import asyncio
 import uuid
-from collections.abc import Callable
-from typing import Any
 
 import pytest
-from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
-
-async def _post_user_message_or_skip(
-    client: AsyncWebClient,
-    *,
-    channel: str,
-    text: str,
-    thread_ts: str | None = None,
-) -> dict[str, Any]:
-    """Post a user-scoped message or skip with a clear scope error."""
-    kwargs: dict[str, Any] = {"channel": channel, "text": text}
-    if thread_ts:
-        kwargs["thread_ts"] = thread_ts
-
-    try:
-        return await client.chat_postMessage(**kwargs)
-    except SlackApiError as exc:
-        if exc.response.get("error") != "missing_scope":
-            raise
-
-        needed = exc.response.get("needed", "unknown")
-        provided = exc.response.get("provided", "unknown")
-        pytest.skip(
-            f"SLACK_USER_TOKEN missing required Slack scope: needed={needed}, provided={provided}"
-        )
-
-
-async def _wait_for_channel_message(
-    client: AsyncWebClient,
-    channel: str,
-    after_ts: str,
-    predicate: Callable[[dict[str, Any]], bool],
-    timeout_seconds: int = 45,
-    poll_seconds: float = 2.0,
-) -> dict[str, Any]:
-    """Poll channel history until a message satisfying predicate appears."""
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    after = float(after_ts)
-    last_error = None
-
-    while asyncio.get_running_loop().time() < deadline:
-        try:
-            response = await client.conversations_history(channel=channel, limit=50)
-            for message in response.get("messages", []):
-                try:
-                    if float(message.get("ts", "0")) <= after:
-                        continue
-                except ValueError:
-                    continue
-                if predicate(message):
-                    return message
-        except Exception as exc:  # pragma: no cover - live network behavior
-            last_error = exc
-        await asyncio.sleep(poll_seconds)
-
-    if last_error:
-        raise AssertionError(
-            f"Timed out waiting for bot response after {timeout_seconds}s. Last error: {last_error}"
-        )
-    raise AssertionError(f"Timed out waiting for bot response after {timeout_seconds}s")
-
-
-async def _wait_for_thread_message(
-    client: AsyncWebClient,
-    channel: str,
-    thread_ts: str,
-    after_ts: str,
-    predicate: Callable[[dict[str, Any]], bool],
-    timeout_seconds: int = 90,
-    poll_seconds: float = 2.0,
-) -> dict[str, Any]:
-    """Poll a thread until a message satisfying predicate appears."""
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    after = float(after_ts)
-    last_error = None
-
-    while asyncio.get_running_loop().time() < deadline:
-        try:
-            response = await client.conversations_replies(
-                channel=channel,
-                ts=thread_ts,
-                limit=100,
-            )
-            for message in response.get("messages", []):
-                try:
-                    if float(message.get("ts", "0")) <= after:
-                        continue
-                except ValueError:
-                    continue
-                if predicate(message):
-                    return message
-        except Exception as exc:  # pragma: no cover - live network behavior
-            last_error = exc
-        await asyncio.sleep(poll_seconds)
-
-    if last_error:
-        raise AssertionError(
-            f"Timed out waiting for thread bot response after {timeout_seconds}s. Last error: {last_error}"
-        )
-    raise AssertionError(f"Timed out waiting for thread bot response after {timeout_seconds}s")
+from tests.integration.helpers import (
+    post_user_message_or_skip,
+    wait_for_bot_reply,
+    wait_for_channel_message,
+)
 
 
 @pytest.mark.live
@@ -135,7 +37,7 @@ async def test_app_mention_roundtrip(
     bot_response_ts = None
 
     try:
-        post = await _post_user_message_or_skip(
+        post = await post_user_message_or_skip(
             slack_user_client,
             channel=slack_test_channel,
             text=mention_text,
@@ -143,7 +45,7 @@ async def test_app_mention_roundtrip(
         assert post["ok"] is True
         user_message_ts = post["ts"]
 
-        bot_message = await _wait_for_channel_message(
+        bot_message = await wait_for_channel_message(
             client=slack_client,
             channel=slack_test_channel,
             after_ts=user_message_ts,
@@ -176,7 +78,7 @@ async def test_thread_message_roundtrip(
     bot_response_ts = None
 
     try:
-        parent = await _post_user_message_or_skip(
+        parent = await post_user_message_or_skip(
             slack_user_client,
             channel=slack_test_channel,
             text=f"[Live App Test] thread-parent-{marker}",
@@ -184,7 +86,7 @@ async def test_thread_message_roundtrip(
         assert parent["ok"] is True
         parent_ts = parent["ts"]
 
-        thread_reply = await _post_user_message_or_skip(
+        thread_reply = await post_user_message_or_skip(
             slack_user_client,
             channel=slack_test_channel,
             thread_ts=parent_ts,
@@ -193,7 +95,7 @@ async def test_thread_message_roundtrip(
         assert thread_reply["ok"] is True
         thread_user_ts = thread_reply["ts"]
 
-        bot_message = await _wait_for_thread_message(
+        bot_message = await wait_for_bot_reply(
             client=slack_client,
             channel=slack_test_channel,
             thread_ts=parent_ts,
@@ -201,6 +103,7 @@ async def test_thread_message_roundtrip(
             predicate=lambda msg: (
                 msg.get("user") == slack_bot_user_id and msg.get("thread_ts") == parent_ts
             ),
+            timeout_seconds=90,
         )
         bot_response_ts = bot_message["ts"]
     finally:

@@ -12,165 +12,17 @@ Required environment variables:
 Run with: pytest tests/integration/test_dsl_live.py --live -v
 """
 
-import asyncio
 import uuid
-from collections.abc import Callable
-from typing import Any
 
 import pytest
-from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-async def _post_user_message_or_skip(
-    client: AsyncWebClient,
-    *,
-    channel: str,
-    text: str,
-    thread_ts: str | None = None,
-) -> dict[str, Any]:
-    """Post a user-scoped message or skip with a clear scope error."""
-    kwargs: dict[str, Any] = {"channel": channel, "text": text}
-    if thread_ts:
-        kwargs["thread_ts"] = thread_ts
-
-    try:
-        return await client.chat_postMessage(**kwargs)
-    except SlackApiError as exc:
-        if exc.response.get("error") != "missing_scope":
-            raise
-        needed = exc.response.get("needed", "unknown")
-        provided = exc.response.get("provided", "unknown")
-        pytest.skip(
-            f"SLACK_USER_TOKEN missing required Slack scope: needed={needed}, provided={provided}"
-        )
-
-
-async def _wait_for_bot_reply(
-    client: AsyncWebClient,
-    channel: str,
-    thread_ts: str,
-    after_ts: str,
-    predicate: Callable[[dict[str, Any]], bool],
-    timeout_seconds: int = 60,
-    poll_seconds: float = 2.0,
-) -> dict[str, Any]:
-    """Poll a thread until a bot message satisfying *predicate* appears."""
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    after = float(after_ts)
-    last_error = None
-
-    while asyncio.get_running_loop().time() < deadline:
-        try:
-            response = await client.conversations_replies(channel=channel, ts=thread_ts, limit=100)
-            for message in response.get("messages", []):
-                try:
-                    if float(message.get("ts", "0")) <= after:
-                        continue
-                except ValueError:
-                    continue
-                if predicate(message):
-                    return message
-        except Exception as exc:  # pragma: no cover - live network behavior
-            last_error = exc
-        await asyncio.sleep(poll_seconds)
-
-    if last_error:
-        raise AssertionError(
-            f"Timed out waiting for bot response after {timeout_seconds}s. "
-            f"Last error: {last_error}"
-        )
-    raise AssertionError(f"Timed out waiting for bot response after {timeout_seconds}s")
-
-
-def _text_contains(text: str) -> Callable[[dict[str, Any]], bool]:
-    """Return a predicate matching any message whose text contains *text*."""
-
-    def _predicate(msg: dict[str, Any]) -> bool:
-        return text in (msg.get("text") or "")
-
-    return _predicate
-
-
-def _text_contains_any(*fragments: str) -> Callable[[dict[str, Any]], bool]:
-    """Return a predicate matching when any of *fragments* appears in message text."""
-
-    def _predicate(msg: dict[str, Any]) -> bool:
-        body = msg.get("text") or ""
-        return any(fragment in body for fragment in fragments)
-
-    return _predicate
-
-
-class _ThreadCleanup:
-    """Collect timestamps for deferred deletion at the end of a test."""
-
-    def __init__(
-        self,
-        bot_client: AsyncWebClient,
-        user_client: AsyncWebClient,
-        channel: str,
-    ) -> None:
-        self._bot = bot_client
-        self._user = user_client
-        self._channel = channel
-        self._bot_timestamps: list[str] = []
-        self._user_timestamps: list[str] = []
-
-    def track_bot(self, ts: str) -> None:
-        self._bot_timestamps.append(ts)
-
-    def track_user(self, ts: str) -> None:
-        self._user_timestamps.append(ts)
-
-    async def cleanup(self) -> None:
-        for ts in self._bot_timestamps:
-            try:
-                await self._bot.chat_delete(channel=self._channel, ts=ts)
-            except Exception:
-                pass
-        for ts in self._user_timestamps:
-            try:
-                await self._user.chat_delete(channel=self._channel, ts=ts)
-            except Exception:
-                pass
-
-
-async def _send_and_expect(
-    bot_client: AsyncWebClient,
-    user_client: AsyncWebClient,
-    channel: str,
-    text: str,
-    predicate: Callable[[dict[str, Any]], bool],
-    thread_ts: str | None = None,
-    timeout_seconds: int = 60,
-) -> tuple[dict[str, Any], _ThreadCleanup]:
-    """Post *text* as user, wait for a bot reply matching *predicate*, return both."""
-    cleanup = _ThreadCleanup(bot_client, user_client, channel)
-
-    post = await _post_user_message_or_skip(
-        user_client, channel=channel, text=text, thread_ts=thread_ts
-    )
-    assert post["ok"] is True
-    user_ts = post["ts"]
-    cleanup.track_user(user_ts)
-
-    effective_thread = thread_ts or user_ts
-    bot_msg = await _wait_for_bot_reply(
-        client=bot_client,
-        channel=channel,
-        thread_ts=effective_thread,
-        after_ts=user_ts,
-        predicate=predicate,
-        timeout_seconds=timeout_seconds,
-    )
-    cleanup.track_bot(bot_msg["ts"])
-    return bot_msg, cleanup
+from tests.integration.helpers import (
+    MessageCleanup,
+    send_and_expect,
+    text_contains,
+    text_contains_any,
+)
 
 
 # ============================================================================
@@ -188,12 +40,12 @@ async def test_queue_plan_prompt_separator(
     """``***`` prompt separator produces multiple queued items."""
     marker = uuid.uuid4().hex[:8]
     text = f"[DSL {marker}] first prompt\n***\nsecond prompt"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("2"),
+        text_contains("2"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -212,12 +64,12 @@ async def test_queue_plan_prompt_parenthesized(
     """``(prompt)`` marker separates prompts in a queue plan."""
     marker = uuid.uuid4().hex[:8]
     text = f"[DSL {marker}] first prompt\n(prompt)\nsecond prompt"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains_any("item(s) from structured plan", "Unknown queue-plan marker"),
+        text_contains_any("item(s) from structured plan", "Unknown queue-plan marker"),
     )
     try:
         # Either it queues 2 items or rejects (prompt) as unknown — both confirm DSL routing
@@ -239,12 +91,12 @@ async def test_queue_plan_branch_directive(
     text = (
         f"(branch test-branch-{marker})\n" f"[DSL {marker}] do something on test branch\n" f"(end)"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains_any("item(s) from structured plan", "not a git repository", "worktree"),
+        text_contains_any("item(s) from structured plan", "not a git repository", "worktree"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -264,12 +116,12 @@ async def test_queue_plan_loop_directive(
     """``(loop N)`` repeats enclosed prompts N times."""
     marker = uuid.uuid4().hex[:8]
     text = f"(loop 3)\n" f"[DSL {marker}] repeated prompt\n" f"(end)"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("3"),
+        text_contains("3"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -295,12 +147,12 @@ async def test_queue_plan_parallel_directive(
         f"[DSL {marker}] parallel task B\n"
         f"(end)"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("2"),
+        text_contains("2"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -328,12 +180,12 @@ async def test_queue_plan_parallel_with_limit(
         f"[DSL {marker}] task C\n"
         f"(end)"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("3"),
+        text_contains("3"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -353,12 +205,12 @@ async def test_queue_plan_mode_scoped_block(
     """``(mode: bypass)`` scopes mode to enclosed prompts."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: bypass)\n" f"[DSL {marker}] scoped bypass prompt\n" f"(end)"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("1"),
+        text_contains("1"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -377,12 +229,12 @@ async def test_queue_plan_end_marker(
     """``(end)`` closes the nearest open block; ``((end))`` is equivalent."""
     marker = uuid.uuid4().hex[:8]
     text = f"(loop 2)\n" f"[DSL {marker}] inside loop\n" f"((end))\n" f"[DSL {marker}] outside loop"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("3"),
+        text_contains("3"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -405,12 +257,12 @@ async def test_queue_plan_for_loop(
     text = (
         f"FOR color IN (red, green, blue)\n" f"[DSL {marker}] paint the wall ((color))\n" f"(end)"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("3"),
+        text_contains("3"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -438,12 +290,12 @@ async def test_queue_plan_nested_blocks(
         f"(end)\n"
         f"(end)"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("4"),
+        text_contains("4"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -474,12 +326,12 @@ async def test_submission_append(
         f"***\n"
         f"[DSL {marker}] appended prompt B"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("item(s) from structured plan"),
+        text_contains("item(s) from structured plan"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -503,12 +355,12 @@ async def test_submission_prepend(
         f"***\n"
         f"[DSL {marker}] prepended prompt 2"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("item(s) from structured plan"),
+        text_contains("item(s) from structured plan"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -527,12 +379,12 @@ async def test_submission_insert_at_index(
     """``(insert1)`` inserts items at queue position 1."""
     marker = uuid.uuid4().hex[:8]
     text = f"(insert1)\n" f"[DSL {marker}] inserted prompt"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("item(s) from structured plan"),
+        text_contains("item(s) from structured plan"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -556,12 +408,12 @@ async def test_submission_auto(
         f"***\n"
         f"[DSL {marker}] auto-follow prompt B"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("item(s) from structured plan"),
+        text_contains("item(s) from structured plan"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -585,12 +437,12 @@ async def test_submission_auto_finish(
         f"***\n"
         f"[DSL {marker}] auto-finish prompt B"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("item(s) from structured plan"),
+        text_contains("item(s) from structured plan"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -609,12 +461,12 @@ async def test_submission_combined_prepend_auto(
     """``(prepend, auto)`` combines submission and automation directives."""
     marker = uuid.uuid4().hex[:8]
     text = f"(prepend, auto)\n" f"[DSL {marker}] combined directive prompt"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("item(s) from structured plan"),
+        text_contains("item(s) from structured plan"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -639,7 +491,7 @@ async def test_mode_directive_bypass(
     """``(mode: bypass)`` on a single prompt applies bypass mode for that execution."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: bypass)\n[DSL {marker}] say hello"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
@@ -665,7 +517,7 @@ async def test_mode_directive_accept(
     """``(mode: accept)`` applies acceptEdits permission mode."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: accept)\n[DSL {marker}] say hello"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
@@ -690,7 +542,7 @@ async def test_mode_directive_plan(
     """``(mode: plan)`` puts execution into plan mode."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: plan)\n[DSL {marker}] say hello"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
@@ -715,7 +567,7 @@ async def test_mode_directive_ask(
     """``(mode: ask)`` is an alias for default mode."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: ask)\n[DSL {marker}] say hello"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
@@ -740,7 +592,7 @@ async def test_mode_directive_default(
     """``(mode: default)`` explicitly uses default mode."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: default)\n[DSL {marker}] say hello"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
@@ -765,7 +617,7 @@ async def test_mode_directive_delegate(
     """``(mode: delegate)`` uses delegated permission mode."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: delegate)\n[DSL {marker}] say hello"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
@@ -790,7 +642,7 @@ async def test_mode_directive_with_end_marker(
     """``(mode: bypass)`` with explicit ``(end)`` on a single prompt."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: bypass)\n[DSL {marker}] say hello\n(end)"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
@@ -815,7 +667,7 @@ async def test_mode_directive_double_paren_syntax(
     """``((mode: bypass))`` double-paren syntax is equivalent to single."""
     marker = uuid.uuid4().hex[:8]
     text = f"((mode: bypass))\n[DSL {marker}] say hello"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
@@ -851,12 +703,12 @@ async def test_queue_plan_mode_with_semicolons(
         f"[DSL {marker}] second prompt\n"
         f"(end)"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("2"),
+        text_contains("2"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -880,12 +732,12 @@ async def test_queue_plan_mode_plan_in_scope(
         f"(end)\n"
         f"[DSL {marker}] default mode prompt"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("2"),
+        text_contains("2"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -910,12 +762,12 @@ async def test_error_invalid_mode_value(
     """Invalid mode value produces a clear error message."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: notamode)\n[DSL {marker}] should fail"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains_any("Invalid mode", "Unknown mode"),
+        text_contains_any("Invalid mode", "Unknown mode"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -935,12 +787,12 @@ async def test_error_empty_mode_value(
     """Empty mode directive value is rejected."""
     marker = uuid.uuid4().hex[:8]
     text = f"(mode: )\n[DSL {marker}] should fail"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains_any("Invalid mode", "must include"),
+        text_contains_any("Invalid mode", "must include"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -959,12 +811,12 @@ async def test_error_unknown_queue_marker(
     """Unknown parenthesized queue marker produces a parse error."""
     marker = uuid.uuid4().hex[:8]
     text = f"(nonsense_marker)\n[DSL {marker}] should fail"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains_any("Unknown queue-plan marker", "Invalid structured queue plan"),
+        text_contains_any("Unknown queue-plan marker", "Invalid structured queue plan"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -983,12 +835,12 @@ async def test_error_unmatched_end_marker(
     """Standalone ``(end)`` without a matching open block produces an error."""
     marker = uuid.uuid4().hex[:8]
     text = f"[DSL {marker}] prompt text\n(end)\n***\nsecond prompt"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains_any("end marker", "Invalid structured queue plan", "without a matching"),
+        text_contains_any("end marker", "Invalid structured queue plan", "without a matching"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1007,12 +859,12 @@ async def test_error_insert_directive_zero_index(
     """``(insert0)`` is rejected because indices are 1-based."""
     marker = uuid.uuid4().hex[:8]
     text = f"(insert0)\n[DSL {marker}] should fail"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains_any("Insert directives", "insert", "Invalid"),
+        text_contains_any("Insert directives", "insert", "Invalid"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1031,12 +883,12 @@ async def test_error_conflicting_submission_directives(
     """Conflicting ``(append)`` and ``(prepend)`` produces an error."""
     marker = uuid.uuid4().hex[:8]
     text = f"(append)\n" f"(prepend)\n" f"[DSL {marker}] should fail\n" f"***\n" f"second prompt"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains_any("conflict", "Invalid structured queue plan"),
+        text_contains_any("conflict", "Invalid structured queue plan"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1055,12 +907,12 @@ async def test_error_for_loop_empty_values(
     """``FOR x IN ()`` with empty values is rejected."""
     marker = uuid.uuid4().hex[:8]
     text = f"FOR x IN ()\n[DSL {marker}] should fail"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains_any("Invalid", "substitution loop", "at least one value"),
+        text_contains_any("Invalid", "substitution loop", "at least one value"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1090,12 +942,12 @@ async def test_combined_loop_for_parallel(
         f"(end)\n"
         f"(end)"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("2"),
+        text_contains("2"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1115,12 +967,12 @@ async def test_combined_submission_and_block_directives(
     """Submission directive + block directives work together."""
     marker = uuid.uuid4().hex[:8]
     text = f"(prepend)\n" f"(loop 2)\n" f"[DSL {marker}] looped prepended prompt\n" f"(end)"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("item(s) from structured plan"),
+        text_contains("item(s) from structured plan"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1147,12 +999,12 @@ async def test_combined_mode_scope_with_submission(
         f"[DSL {marker}] bypass scoped B\n"
         f"(end)"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("2"),
+        text_contains("2"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1171,12 +1023,12 @@ async def test_inline_prompt_after_block_marker(
     """Inline prompt text after a block marker is captured as the first prompt."""
     marker = uuid.uuid4().hex[:8]
     text = f"(loop 2) [DSL {marker}] inline prompt\n" f"(end)"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("2"),
+        text_contains("2"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1196,12 +1048,12 @@ async def test_for_loop_with_variable_in_prompt(
     """FOR loop variable substitution with single-paren ``(var)`` syntax."""
     marker = uuid.uuid4().hex[:8]
     text = f"FOR svc IN (api, web, worker)\n" f"[DSL {marker}] restart the (svc) service\n" f"(end)"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("3"),
+        text_contains("3"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1221,12 +1073,12 @@ async def test_end_with_count(
     """``(end2)`` closes two nested blocks at once."""
     marker = uuid.uuid4().hex[:8]
     text = f"(loop 2)\n" f"(parallel)\n" f"[DSL {marker}] deep nested prompt\n" f"(end2)"
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("2"),
+        text_contains("2"),
     )
     try:
         body = bot_msg.get("text", "")
@@ -1251,12 +1103,12 @@ async def test_combined_block_directive_line(
         f"[DSL {marker}] combined directive prompt B\n"
         f"(end2)"
     )
-    bot_msg, cleanup = await _send_and_expect(
+    bot_msg, cleanup = await send_and_expect(
         slack_client,
         slack_user_client,
         slack_test_channel,
         text,
-        _text_contains("4"),
+        text_contains("4"),
     )
     try:
         body = bot_msg.get("text", "")
