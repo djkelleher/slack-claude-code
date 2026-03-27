@@ -174,13 +174,61 @@ class TestSessionOperations:
         assert thread_session.approval_mode == "never"
 
     @pytest.mark.asyncio
-    async def test_update_session_cwd(self, db_repo):
+    async def test_update_session_cwd(self, db_repo, tmp_path):
         """update_session_cwd updates working directory."""
         await db_repo.get_or_create_session("C123ABC", None, "~")
-        await db_repo.update_session_cwd("C123ABC", None, "/new/path")
+        new_cwd = tmp_path / "new-path"
+        new_cwd.mkdir()
+        await db_repo.update_session_cwd("C123ABC", None, str(new_cwd))
 
         updated = await db_repo.get_or_create_session("C123ABC", None)
-        assert updated.working_directory == "/new/path"
+        assert updated.working_directory == str(new_cwd)
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_heals_invalid_thread_cwd_from_channel(
+        self, db_repo, tmp_path
+    ):
+        """Thread sessions with missing cwd should recover from the channel session cwd."""
+        channel_cwd = tmp_path / "channel-repo"
+        channel_cwd.mkdir()
+        recovered_cwd = tmp_path / "current-repo"
+        recovered_cwd.mkdir()
+        stale_thread_cwd = tmp_path / "missing-thread-repo"
+
+        await db_repo.get_or_create_session("C123ABC", None, str(channel_cwd))
+        await db_repo.get_or_create_session("C123ABC", "1234567890.123456")
+        await db_repo.update_session_cwd("C123ABC", "1234567890.123456", str(stale_thread_cwd))
+        await db_repo.update_session_claude_id("C123ABC", "1234567890.123456", "claude-session-xyz")
+        await db_repo.update_session_codex_id("C123ABC", "1234567890.123456", "codex-thread-123")
+        await db_repo.update_session_cwd("C123ABC", None, str(recovered_cwd))
+
+        updated = await db_repo.get_or_create_session("C123ABC", "1234567890.123456")
+
+        assert updated.working_directory == str(recovered_cwd.resolve())
+        assert updated.claude_session_id is None
+        assert updated.codex_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_heals_invalid_channel_cwd_from_default(
+        self, db_repo, tmp_path
+    ):
+        """Channel sessions with missing cwd should recover from a valid default cwd."""
+        initial_cwd = tmp_path / "initial-repo"
+        initial_cwd.mkdir()
+        default_cwd = tmp_path / "default-repo"
+        default_cwd.mkdir()
+        stale_channel_cwd = tmp_path / "missing-channel-repo"
+
+        await db_repo.get_or_create_session("C123ABC", None, str(initial_cwd))
+        await db_repo.update_session_cwd("C123ABC", None, str(stale_channel_cwd))
+        await db_repo.update_session_claude_id("C123ABC", None, "claude-session-xyz")
+        await db_repo.update_session_codex_id("C123ABC", None, "codex-thread-123")
+
+        updated = await db_repo.get_or_create_session("C123ABC", None, str(default_cwd))
+
+        assert updated.working_directory == str(default_cwd.resolve())
+        assert updated.claude_session_id is None
+        assert updated.codex_session_id is None
 
     @pytest.mark.asyncio
     async def test_update_session_claude_id(self, db_repo):

@@ -1,6 +1,8 @@
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import aiosqlite
@@ -142,6 +144,59 @@ class DatabaseRepository:
         )
         return await cursor.fetchone()
 
+    @staticmethod
+    def _is_valid_working_directory(path: str) -> bool:
+        """Return True when a stored cwd points at an existing directory."""
+        if not path:
+            return False
+        return os.path.isdir(Path(path).expanduser())
+
+    async def _heal_session_working_directory(
+        self,
+        db: aiosqlite.Connection,
+        row: tuple,
+        channel_id: str,
+        thread_ts: Optional[str],
+        default_cwd: str,
+    ) -> tuple:
+        """Repair invalid persisted cwd values using safe fallbacks."""
+        current_cwd = row[3]
+        if self._is_valid_working_directory(current_cwd):
+            return row
+
+        replacement_cwd: Optional[str] = None
+        normalized_thread_ts = self._normalize_thread_ts(thread_ts)
+
+        if normalized_thread_ts is not None:
+            channel_row = await self._select_best_session_row(db, channel_id, None)
+            if channel_row is not None and channel_row[0] != row[0]:
+                channel_cwd = channel_row[3]
+                if self._is_valid_working_directory(channel_cwd):
+                    replacement_cwd = str(Path(channel_cwd).expanduser().resolve())
+
+        if replacement_cwd is None and self._is_valid_working_directory(default_cwd):
+            replacement_cwd = str(Path(default_cwd).expanduser().resolve())
+
+        if replacement_cwd is None:
+            return row
+
+        await db.execute(
+            """UPDATE sessions
+               SET working_directory = ?, claude_session_id = NULL, codex_session_id = NULL
+               WHERE id = ?""",
+            (replacement_cwd, row[0]),
+        )
+        cursor = await db.execute(
+            f"""SELECT {self._SESSION_SELECT}
+               FROM sessions
+               WHERE id = ?""",
+            (row[0],),
+        )
+        updated_row = await cursor.fetchone()
+        if updated_row is None:
+            raise RuntimeError(f"Failed to load healed session {row[0]} for channel {channel_id}")
+        return updated_row
+
     @asynccontextmanager
     async def _transact(self):
         """Provide a connection with automatic commit on success.
@@ -181,6 +236,13 @@ class DatabaseRepository:
 
             # Update existing session activity and return it.
             if row is not None:
+                row = await self._heal_session_working_directory(
+                    db,
+                    row,
+                    channel_id,
+                    normalized_thread_ts,
+                    default_cwd,
+                )
                 await db.execute(
                     "UPDATE sessions SET last_active = ? WHERE id = ?",
                     (now_iso, row[0]),
