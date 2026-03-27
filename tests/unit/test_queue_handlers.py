@@ -574,6 +574,51 @@ async def test_execute_queue_item_traces_known_slash_command_when_trace_enabled(
 
 
 @pytest.mark.asyncio
+async def test_execute_queue_item_pauses_for_git_init_when_auto_commit_needs_repo():
+    """Queue auto-commit should pause and prompt when the working directory lacks `.git`."""
+    item = _queue_item(174, "ship fix")
+    session = Session(id=1, channel_id="C123", model="opus", working_directory="/workspace")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, True]),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+        ),
+        codex_executor=None,
+        trace_service=SimpleNamespace(
+            get_config=AsyncMock(return_value=SimpleNamespace(enabled=True, auto_commit=True)),
+            git_service=SimpleNamespace(
+                validate_git_repo=AsyncMock(return_value=False),
+                has_git_metadata_directory=MagicMock(return_value=False),
+            ),
+        ),
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock(), chat_update=AsyncMock())
+
+    with patch("src.handlers.claude.queue.execute_for_session", new=AsyncMock()) as mock_execute:
+        result = await _execute_queue_item(
+            item,
+            channel_id="C123",
+            thread_ts="123.456",
+            scope="C123:123.456",
+            deps=deps,
+            client=client,
+            log=MagicMock(),
+            base_session=session,
+            sequence_label="1",
+            override_resume_ids={},
+        )
+
+    assert result is None
+    mock_execute.assert_not_awaited()
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
+    assert statuses == ["running", "pending"]
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", "123.456", "paused")
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert "auto-commit is enabled" in kwargs["text"]
+    assert kwargs["blocks"][4]["elements"][0]["action_id"] == "git_init_repo"
+
+
+@pytest.mark.asyncio
 async def test_execute_queue_item_applies_mode_directive_from_metadata():
     """Queue item metadata mode directives should override runtime session modes."""
     item = _queue_item(74, "Run static analysis")

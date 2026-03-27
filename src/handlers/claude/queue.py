@@ -32,7 +32,7 @@ from src.tasks.queue_plan import (
 from src.trace.service import TraceService
 from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.base import escape_markdown
-from src.utils.formatters.command import error_message
+from src.utils.formatters.command import error_message, git_init_prompt
 from src.utils.formatters.queue import (
     queue_item_running,
     queue_scope_overview,
@@ -636,6 +636,67 @@ async def _pause_queue_for_question(
     )
 
 
+async def _pause_queue_for_git_init(
+    *,
+    item,
+    channel_id: str,
+    thread_ts: Optional[str],
+    deps: HandlerDependencies,
+    client,
+    working_directory: str,
+) -> None:
+    """Pause queue processing when queue auto-commit requires a git repository."""
+    await deps.db.update_queue_item_status(item.id, "pending")
+    await deps.db.update_queue_control_state(channel_id, thread_ts, "paused")
+
+    scope_label = _queue_scope_label(thread_ts)
+    intro_text = (
+        f"{scope_label}: paused queue because auto-commit is enabled and "
+        f"`{escape_markdown(working_directory)}` does not contain a `.git` directory. "
+        "Initialize a repository, then run `/qc resume` to continue."
+    )
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=intro_text,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": intro_text}},
+            {"type": "divider"},
+            *git_init_prompt(working_directory),
+        ],
+    )
+
+
+async def _queue_requires_git_init(
+    *,
+    channel_id: str,
+    thread_ts: Optional[str],
+    trace_service: Optional[TraceService],
+    working_directory: str,
+) -> bool:
+    """Return True when queue auto-commit is enabled for a non-git directory."""
+    if trace_service is None:
+        return False
+    if not working_directory:
+        return False
+
+    try:
+        trace_config = await trace_service.get_config(channel_id, thread_ts)
+    except Exception:
+        return False
+
+    if not trace_config.enabled or not trace_config.auto_commit:
+        return False
+
+    try:
+        git_service = trace_service.git_service
+    except AttributeError:
+        return False
+    if await git_service.validate_git_repo(working_directory):
+        return False
+    return not git_service.has_git_metadata_directory(working_directory)
+
+
 def _scheduled_controls_summary(controls: list[QueueScheduledControl]) -> str:
     """Build a short queue scheduled controls summary."""
     if not controls:
@@ -1176,6 +1237,27 @@ async def _execute_queue_item(
             ],
         )
         return "completed"
+
+    try:
+        session_working_directory = base_session.working_directory
+    except AttributeError:
+        session_working_directory = None
+    queue_working_directory = item.working_directory_override or session_working_directory
+    if await _queue_requires_git_init(
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        trace_service=trace_service,
+        working_directory=queue_working_directory,
+    ):
+        await _pause_queue_for_git_init(
+            item=item,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            deps=deps,
+            client=client,
+            working_directory=queue_working_directory,
+        )
+        return None
 
     slash_command = parse_slash_command_text(item.prompt)
     slash_command_router = None
