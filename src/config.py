@@ -287,6 +287,8 @@ def get_backend_for_model(model: Optional[str]) -> str:
         return "codex"
     if model_lower.startswith("gemini"):
         return "gemini"
+    if model_lower.startswith("aider"):
+        return "aider"
     # Default to Claude for unknown models
     return "claude"
 

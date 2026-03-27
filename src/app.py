@@ -25,6 +25,8 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.errors import SlackApiError
 
+from src.aider.provider import AiderBackendProvider
+from src.aider.subprocess_executor import SubprocessExecutor as AiderExecutor
 from src.approval.plan_manager import PlanApprovalManager
 from src.claude.provider import ClaudeBackendProvider
 from src.claude.sdk_executor import SDKExecutor as ClaudeExecutor
@@ -1161,11 +1163,16 @@ async def main():
     registry.register_backend(ClaudeBackendProvider(claude_executor))
     registry.register_backend(CodexBackendProvider(codex_executor))
 
-    # Register Gemini backend if CLI is available
+    # Register optional backends if their CLIs are available
     if shutil.which("gemini"):
         gemini_executor = GeminiExecutor()
         registry.register_backend(GeminiBackendProvider(gemini_executor))
         logger.info("Gemini CLI detected, registered Gemini backend")
+
+    if shutil.which("aider"):
+        aider_executor = AiderExecutor()
+        registry.register_backend(AiderBackendProvider(aider_executor))
+        logger.info("Aider CLI detected, registered Aider backend")
 
     logger.info(
         f"Backend registry initialized with {len(registry.backend_ids)} backends: "
