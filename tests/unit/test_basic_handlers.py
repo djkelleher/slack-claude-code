@@ -453,3 +453,56 @@ async def test_rollback_offers_git_init_when_git_directory_is_missing():
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Initialize a git repository"
     assert kwargs["blocks"][2]["elements"][0]["action_id"] == "git_init_repo"
+
+
+@pytest.mark.asyncio
+async def test_trace_on_offers_git_init_when_auto_commit_enabled_without_git_dir():
+    """`/trace on` should show git setup guidance when auto-commit is enabled without `.git`."""
+    app = _FakeApp()
+    session = Session(id=15, working_directory="/workspace")
+    trace_config = SimpleNamespace(
+        enabled=True,
+        auto_commit=True,
+        report_tool=False,
+        report_step=True,
+        report_milestone=True,
+        report_queue_end=True,
+        milestone_mode="inferred",
+        milestone_batch_size=None,
+        openlineage_enabled=False,
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(get_or_create_session=AsyncMock(return_value=session)),
+        executor=SimpleNamespace(),
+        trace_service=SimpleNamespace(
+            enable_scope=AsyncMock(return_value=trace_config),
+            get_config=AsyncMock(),
+        ),
+    )
+    register_basic_commands(app, deps)
+
+    git_service = SimpleNamespace(
+        validate_git_repo=AsyncMock(return_value=False),
+        has_git_metadata_directory=MagicMock(return_value=False),
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+    handler = app.handlers["/trace"]
+    with patch("src.handlers.basic.GitService", return_value=git_service):
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "on",
+                "command": "/trace",
+                "thread_ts": "123.456",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Traceability enabled. Initialize a git repository"
+    assert kwargs["blocks"][2]["text"]["text"].startswith("*Git repository required*")
+    assert kwargs["blocks"][4]["elements"][0]["action_id"] == "git_init_repo"

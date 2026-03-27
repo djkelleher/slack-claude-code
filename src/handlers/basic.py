@@ -28,6 +28,15 @@ _SINGLE_HISTORY_PROMPT_LIMIT = 2400
 _RANGE_HISTORY_PROMPT_LIMIT = 320
 
 
+def _trace_git_setup_blocks(trace_config, working_directory: str) -> list[dict]:
+    """Render trace configuration plus git-setup guidance when auto-commit needs a repo."""
+    return [
+        *trace_config_blocks(trace_config),
+        {"type": "divider"},
+        *git_init_prompt(working_directory),
+    ]
+
+
 def _parse_history_selection(raw_text: str) -> tuple[int, int]:
     """Parse optional `/hist` text into 1-based inclusive history indexes."""
     text = (raw_text or "").strip()
@@ -562,6 +571,18 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 ctx.thread_ts,
                 openlineage_enabled=openlineage_enabled,
             )
+            git_service = GitService()
+            if trace_config.auto_commit and not await git_service.validate_git_repo(
+                session.working_directory
+            ):
+                if not git_service.has_git_metadata_directory(session.working_directory):
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text="Traceability enabled. Initialize a git repository",
+                        blocks=_trace_git_setup_blocks(trace_config, session.working_directory),
+                    )
+                    return
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
