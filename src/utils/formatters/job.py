@@ -176,3 +176,13 @@ def job_status_list(jobs: list[ParallelJob]) -> list[dict]:
         )
 
     return blocks
+
+
+def job_status_summary_text(jobs: list[ParallelJob]) -> str:
+    """Build plain-text fallback text for job status messages."""
+    if not jobs:
+        return "No active jobs."
+
+    job_labels = ", ".join(f"#{job.id}" for job in jobs)
+    suffix = "" if len(jobs) == 1 else "s"
+    return f"Active job{suffix}: {job_labels}"

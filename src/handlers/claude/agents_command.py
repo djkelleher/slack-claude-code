@@ -169,6 +169,23 @@ def register_agents_command(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
 
 
+async def _post_blocks_message(
+    client,
+    *,
+    channel: str,
+    blocks: list[dict],
+    text: str,
+    thread_ts: str | None = None,
+) -> None:
+    """Post a Block Kit message with accessible fallback text."""
+    await client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=text,
+        blocks=blocks,
+    )
+
+
 async def _handle_list(ctx: CommandContext, registry) -> None:
     """List all available agents.
 
@@ -243,7 +260,9 @@ async def _handle_list(ctx: CommandContext, registry) -> None:
         }
     )
 
-    await ctx.client.chat_postMessage(channel=ctx.channel_id, blocks=blocks)
+    agent_names = ", ".join(agent.name for agent in agents)
+    summary = f"Available agents: {agent_names}" if agent_names else "No agents available."
+    await _post_blocks_message(ctx.client, channel=ctx.channel_id, text=summary, blocks=blocks)
 
 
 async def _handle_run(ctx, deps, registry, session, agent_name: str, task: str) -> None:
@@ -442,57 +461,60 @@ async def _handle_create(ctx: CommandContext) -> None:
     ctx : CommandContext
         Command context.
     """
-    await ctx.client.chat_postMessage(
+    blocks = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "Create a New Agent"},
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "Create a custom agent by adding a markdown file:\n\n"
+                "*Project-level:* `.claude/agents/<name>.md`\n"
+                "*User-level:* `~/.claude/agents/<name>.md`\n\n"
+                "Project agents override user agents with the same name.",
+            },
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "*Example format:*\n```\n---\n"
+                "name: my-agent\n"
+                "description: What this agent does (used for auto-selection)\n"
+                "model: sonnet  # or haiku, opus-4.5, sonnet-4.5, claude-opus-4-6[1m], inherit\n"
+                "tools:\n"
+                "  - Read\n"
+                "  - Grep\n"
+                "  - Glob\n"
+                "disallowedTools:\n"
+                "  - Write\n"
+                "  - Edit\n"
+                "permissionMode: bypassPermissions\n"
+                "maxTurns: 30\n"
+                "---\n\n"
+                "You are a custom agent. Your role is to...\n\n"
+                "(This becomes the system prompt)\n"
+                "```",
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "After creating the file, use `/agents` to see it listed",
+                }
+            ],
+        },
+    ]
+    await _post_blocks_message(
+        ctx.client,
         channel=ctx.channel_id,
-        blocks=[
-            {
-                "type": "header",
-                "text": {"type": "plain_text", "text": "Create a New Agent"},
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "Create a custom agent by adding a markdown file:\n\n"
-                    "*Project-level:* `.claude/agents/<name>.md`\n"
-                    "*User-level:* `~/.claude/agents/<name>.md`\n\n"
-                    "Project agents override user agents with the same name.",
-                },
-            },
-            {"type": "divider"},
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Example format:*\n```\n---\n"
-                    "name: my-agent\n"
-                    "description: What this agent does (used for auto-selection)\n"
-                    "model: sonnet  # or haiku, opus-4.5, sonnet-4.5, claude-opus-4-6[1m], inherit\n"
-                    "tools:\n"
-                    "  - Read\n"
-                    "  - Grep\n"
-                    "  - Glob\n"
-                    "disallowedTools:\n"
-                    "  - Write\n"
-                    "  - Edit\n"
-                    "permissionMode: bypassPermissions\n"
-                    "maxTurns: 30\n"
-                    "---\n\n"
-                    "You are a custom agent. Your role is to...\n\n"
-                    "(This becomes the system prompt)\n"
-                    "```",
-                },
-            },
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "After creating the file, use `/agents` to see it listed",
-                    }
-                ],
-            },
-        ],
+        text="Create a new agent.",
+        blocks=blocks,
     )
 
 
@@ -565,4 +587,9 @@ async def _handle_info(ctx: CommandContext, registry, agent_name: str) -> None:
             }
         )
 
-    await ctx.client.chat_postMessage(channel=ctx.channel_id, blocks=blocks)
+    await _post_blocks_message(
+        ctx.client,
+        channel=ctx.channel_id,
+        text=f"Agent details for {agent_name}",
+        blocks=blocks,
+    )

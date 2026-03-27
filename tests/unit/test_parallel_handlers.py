@@ -1,5 +1,6 @@
 """Unit tests for `/st` and `/cc` parallel command handlers."""
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,6 +22,39 @@ class _FakeApp:
             return func
 
         return decorator
+
+
+@pytest.mark.asyncio
+async def test_st_posts_accessible_summary_text() -> None:
+    app = _FakeApp()
+    job = SimpleNamespace(
+        id=17,
+        job_type="parallel_analysis",
+        status="running",
+        created_at=datetime.now(timezone.utc),
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(get_active_jobs=AsyncMock(return_value=[job])),
+        executor=SimpleNamespace(),
+    )
+    register_parallel_commands(app, deps)
+
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    handler = app.handlers["/st"]
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "",
+            "command": "/st",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Active job: #17"
 
 
 @pytest.mark.asyncio

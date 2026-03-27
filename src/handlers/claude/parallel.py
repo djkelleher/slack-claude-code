@@ -4,7 +4,7 @@ from slack_bolt.async_app import AsyncApp
 
 from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.command import error_message
-from src.utils.formatters.job import job_status_list
+from src.utils.formatters.job import job_status_list, job_status_summary_text
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
@@ -28,6 +28,7 @@ def register_parallel_commands(app: AsyncApp, deps: HandlerDependencies) -> None
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
+            text=job_status_summary_text(jobs),
             blocks=job_status_list(jobs),
         )
 

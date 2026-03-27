@@ -13,7 +13,12 @@ from src.agents.models import (
 )
 from src.backends.execution_result import BackendExecutionResult
 from src.database.models import Session
-from src.handlers.claude.agents_command import _run_agent_with_streaming
+from src.handlers.claude.agents_command import (
+    _handle_create,
+    _handle_info,
+    _handle_list,
+    _run_agent_with_streaming,
+)
 
 
 class _FakeStreamingState:
@@ -129,3 +134,38 @@ async def test_run_agent_with_streaming_updates_failed_status():
     assert kwargs["text"] == "Agent helper failed"
     assert kwargs["blocks"][0]["text"]["text"].startswith(":x: Agent `helper` failed")
     assert kwargs["blocks"][2]["text"]["text"] == "boom"
+
+
+@pytest.mark.asyncio
+async def test_handle_list_posts_summary_text():
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    ctx = SimpleNamespace(client=client, channel_id="C123")
+    registry = SimpleNamespace(list_all=lambda: [_agent()])
+
+    await _handle_list(ctx, registry)
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Available agents: helper"
+
+
+@pytest.mark.asyncio
+async def test_handle_create_posts_summary_text():
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    ctx = SimpleNamespace(client=client, channel_id="C123")
+
+    await _handle_create(ctx)
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Create a new agent."
+
+
+@pytest.mark.asyncio
+async def test_handle_info_posts_summary_text():
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    ctx = SimpleNamespace(client=client, channel_id="C123")
+    registry = SimpleNamespace(get=lambda _name: _agent())
+
+    await _handle_info(ctx, registry, "helper")
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Agent details for helper"
