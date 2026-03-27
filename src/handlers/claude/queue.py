@@ -122,6 +122,7 @@ _USAGE_LIMIT_ACTION_PAUSE = "pause"
 _USAGE_LIMIT_ACTION_QUEUE_ONLY = "queue-only"
 _USAGE_LIMIT_WINDOW_WEEKLY = "weekly"
 _USAGE_LIMIT_WINDOW_5H = "5h"
+_USAGE_LIMIT_BACKENDS = {"codex", "claude"}
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,10 @@ class _UsageLimitEvaluation:
 
     state: dict[str, object]
     newly_exhausted: list[dict[str, object]]
+
+
+class _UsageLimitBackendMismatchError(ValueError):
+    """Raised when a queue item's usage-limit backend does not match the active session."""
 
 
 def _queue_task_id(channel_id: str, thread_ts: Optional[str]) -> str:
@@ -378,11 +383,14 @@ def _normalize_usage_limit_specs(raw_specs: Any) -> list[dict[str, object]]:
         limit_id = str(raw_spec.get("id") or "").strip()
         window = str(raw_spec.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY).strip().lower()
         action = str(raw_spec.get("action") or "").strip().lower()
+        backend = str(raw_spec.get("backend") or "codex").strip().lower()
         try:
             percent = float(raw_spec.get("percent"))
         except (TypeError, ValueError):
             continue
         if not limit_id or percent <= 0 or percent > 100:
+            continue
+        if backend not in _USAGE_LIMIT_BACKENDS:
             continue
         if window not in {_USAGE_LIMIT_WINDOW_WEEKLY, _USAGE_LIMIT_WINDOW_5H}:
             continue
@@ -394,6 +402,7 @@ def _normalize_usage_limit_specs(raw_specs: Any) -> list[dict[str, object]]:
                 "percent": percent,
                 "window": window,
                 "action": action,
+                "backend": backend,
             }
         )
     return normalized_specs
@@ -407,14 +416,23 @@ def _usage_limit_specs_from_meta(raw_meta: Any) -> list[dict[str, object]]:
 
 def _usage_limit_specs_to_meta(
     usage_limits: tuple[QueueUsageLimitSpec, ...],
+    *,
+    backend: str,
+    submission_token: Optional[str] = None,
 ) -> list[dict[str, object]]:
     """Serialize queue-plan usage-limit specs into queue item metadata."""
+    normalized_backend = backend.strip().lower() if backend else "codex"
     return [
         {
-            "id": spec.limit_id,
+            "id": (
+                f"{submission_token}:{spec.limit_id}"
+                if submission_token and not spec.limit_id.startswith(f"{submission_token}:")
+                else spec.limit_id
+            ),
             "percent": spec.percent,
             "window": spec.window,
             "action": spec.action,
+            "backend": normalized_backend,
         }
         for spec in usage_limits
     ]
@@ -432,11 +450,14 @@ def _normalize_usage_limit_state(raw_state: Any) -> dict[str, object]:
                 limit_id = str(raw_limit.get("id") or raw_limit_id).strip()
                 window = str(raw_limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY).strip().lower()
                 action = str(raw_limit.get("action") or "").strip().lower()
+                backend = str(raw_limit.get("backend") or "codex").strip().lower()
                 try:
                     percent = float(raw_limit.get("percent"))
                 except (TypeError, ValueError):
                     continue
                 if not limit_id or percent <= 0 or percent > 100:
+                    continue
+                if backend not in _USAGE_LIMIT_BACKENDS:
                     continue
                 if window not in {_USAGE_LIMIT_WINDOW_WEEKLY, _USAGE_LIMIT_WINDOW_5H}:
                     continue
@@ -450,6 +471,7 @@ def _normalize_usage_limit_state(raw_state: Any) -> dict[str, object]:
                     "percent": percent,
                     "window": window,
                     "action": action,
+                    "backend": backend,
                     "baseline_used_percent": (
                         float(baseline_used) if isinstance(baseline_used, (int, float)) else None
                     ),
@@ -514,7 +536,8 @@ def _usage_limit_description(limit: dict[str, object]) -> str:
     percent = float(limit.get("percent") or 0.0)
     window = str(limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY)
     action = str(limit.get("action") or "")
-    return f"{percent:g}% {window} ({action})"
+    backend = str(limit.get("backend") or "codex")
+    return f"{percent:g}% {window} {backend} ({action})"
 
 
 def _pick_codex_rate_limit_snapshot(rate_limits: dict[str, Any]) -> Optional[Any]:
@@ -526,6 +549,31 @@ def _pick_codex_rate_limit_snapshot(rate_limits: dict[str, Any]) -> Optional[Any
     for snapshot in rate_limits.values():
         return snapshot
     return None
+
+
+def _usage_limit_required_backend(specs: list[dict[str, object]]) -> Optional[str]:
+    """Return the single required backend for a list of usage-limit specs."""
+    backends = {
+        str(spec.get("backend") or "").strip().lower()
+        for spec in specs
+        if isinstance(spec, dict) and str(spec.get("backend") or "").strip()
+    }
+    if not backends:
+        return None
+    if len(backends) == 1:
+        return next(iter(backends))
+    raise ValueError("Queue item contains conflicting usage-limit backends.")
+
+
+def _usage_limit_window_changed(
+    *,
+    baseline_resets_at: Optional[int],
+    snapshot_resets_at: Optional[int],
+) -> bool:
+    """Return True when a usage window has rolled to a new reset boundary."""
+    if baseline_resets_at is None or snapshot_resets_at is None:
+        return False
+    return baseline_resets_at != snapshot_resets_at
 
 
 def _snapshot_window_for_limit(snapshot: Any, window: str) -> Optional[_UsageWindowSnapshot]:
@@ -551,7 +599,8 @@ def _snapshot_window_for_limit(snapshot: Any, window: str) -> Optional[_UsageWin
 async def _fetch_usage_window_snapshots(
     *,
     deps: HandlerDependencies,
-    session: Session,
+    session_backend: str,
+    required_backend: Optional[str],
     working_directory: str,
     windows: set[str],
 ) -> dict[str, _UsageWindowSnapshot]:
@@ -564,8 +613,22 @@ async def _fetch_usage_window_snapshots(
     if not normalized_windows:
         return {}
 
-    backend = session.get_backend()
-    if backend != "codex":
+    normalized_session_backend = session_backend.strip().lower()
+    normalized_required_backend = (
+        required_backend.strip().lower() if required_backend else normalized_session_backend
+    )
+    if normalized_required_backend not in _USAGE_LIMIT_BACKENDS:
+        raise ValueError(
+            f"Unsupported usage-limit backend `{normalized_required_backend}` on queue item."
+        )
+    if normalized_required_backend != normalized_session_backend:
+        raise _UsageLimitBackendMismatchError(
+            "Queue item usage limits require the "
+            f"`{normalized_required_backend}` backend, but the active session backend is "
+            f"`{normalized_session_backend}`."
+        )
+
+    if normalized_required_backend != "codex":
         raise ValueError(
             "Percentage-based queue usage limits currently require structured rate-limit data. "
             "Claude support is not implemented in this repository yet."
@@ -603,12 +666,14 @@ def _merge_usage_limit_specs_into_state(
             existing["percent"] = float(spec["percent"])
             existing["window"] = str(spec["window"])
             existing["action"] = str(spec["action"])
+            existing["backend"] = str(spec.get("backend") or "codex")
             continue
         limits[limit_id] = {
             "id": limit_id,
             "percent": float(spec["percent"]),
             "window": str(spec["window"]),
             "action": str(spec["action"]),
+            "backend": str(spec.get("backend") or "codex"),
             "baseline_used_percent": None,
             "baseline_resets_at": None,
             "current_used_percent": None,
@@ -634,36 +699,37 @@ async def _prepare_usage_limits_for_item(
     if not specs:
         return {}
 
+    required_backend = _usage_limit_required_backend(specs)
     usage_lock = await _get_queue_usage_limit_lock(scope)
     async with usage_lock:
         control = await deps.db.get_queue_control(channel_id, thread_ts)
         usage_limit_state = _merge_usage_limit_specs_into_state(control.usage_limit_state, specs)
         limits = usage_limit_state[_USAGE_LIMIT_STATE_LIMITS_KEY]
-        windows_to_fetch = {
-            str(limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY)
-            for limit in limits.values()
-            if isinstance(limit, dict) and limit.get("baseline_used_percent") is None
-        }
-        if windows_to_fetch:
-            snapshots = await _fetch_usage_window_snapshots(
-                deps=deps,
-                session=session,
-                working_directory=working_directory,
-                windows=windows_to_fetch,
-            )
-            for limit in limits.values():
-                if not isinstance(limit, dict):
-                    continue
-                if limit.get("baseline_used_percent") is not None:
-                    continue
-                snapshot = snapshots.get(str(limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY))
-                if snapshot is None:
-                    continue
+        snapshots = await _fetch_usage_window_snapshots(
+            deps=deps,
+            session_backend=session.get_backend(),
+            required_backend=required_backend,
+            working_directory=working_directory,
+            windows={str(spec["window"]) for spec in specs},
+        )
+        for spec in specs:
+            limit = limits.get(str(spec["id"]))
+            if not isinstance(limit, dict):
+                continue
+            snapshot = snapshots.get(str(limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY))
+            if snapshot is None:
+                continue
+            baseline_reset = _to_int_like(limit.get("baseline_resets_at"))
+            if limit.get("baseline_used_percent") is None or _usage_limit_window_changed(
+                baseline_resets_at=baseline_reset,
+                snapshot_resets_at=snapshot.resets_at,
+            ):
                 limit["baseline_used_percent"] = snapshot.used_percent
                 limit["baseline_resets_at"] = snapshot.resets_at
-                limit["current_used_percent"] = snapshot.used_percent
-                limit["current_resets_at"] = snapshot.resets_at
                 limit["spent_percent"] = 0.0
+                limit["exhausted"] = False
+            limit["current_used_percent"] = snapshot.used_percent
+            limit["current_resets_at"] = snapshot.resets_at
         await deps.db.set_queue_usage_limit_state(channel_id, thread_ts, usage_limit_state)
         return usage_limit_state
 
@@ -683,6 +749,7 @@ async def _evaluate_usage_limits_for_item(
     if not specs:
         return _UsageLimitEvaluation(state={}, newly_exhausted=[])
 
+    required_backend = _usage_limit_required_backend(specs)
     usage_lock = await _get_queue_usage_limit_lock(scope)
     async with usage_lock:
         control = await deps.db.get_queue_control(channel_id, thread_ts)
@@ -691,7 +758,8 @@ async def _evaluate_usage_limits_for_item(
         windows = {str(spec["window"]) for spec in specs}
         snapshots = await _fetch_usage_window_snapshots(
             deps=deps,
-            session=session,
+            session_backend=session.get_backend(),
+            required_backend=required_backend,
             working_directory=working_directory,
             windows=windows,
         )
@@ -707,21 +775,25 @@ async def _evaluate_usage_limits_for_item(
                 continue
             baseline_used = limit.get("baseline_used_percent")
             baseline_reset = _to_int_like(limit.get("baseline_resets_at"))
-            if baseline_used is None or (
-                baseline_reset is not None
-                and snapshot.resets_at is not None
-                and baseline_reset != snapshot.resets_at
-                and snapshot.used_percent < float(baseline_used)
-            ):
+            if baseline_used is None:
                 baseline_used = snapshot.used_percent
                 baseline_reset = snapshot.resets_at
                 limit["baseline_used_percent"] = baseline_used
                 limit["baseline_resets_at"] = baseline_reset
-                limit["spent_percent"] = 0.0
 
             limit["current_used_percent"] = snapshot.used_percent
             limit["current_resets_at"] = snapshot.resets_at
-            spent_percent = max(0.0, snapshot.used_percent - float(limit["baseline_used_percent"]))
+            if _usage_limit_window_changed(
+                baseline_resets_at=baseline_reset,
+                snapshot_resets_at=snapshot.resets_at,
+            ):
+                limit["baseline_used_percent"] = 0.0
+                limit["baseline_resets_at"] = snapshot.resets_at
+                spent_percent = max(0.0, snapshot.used_percent)
+            else:
+                spent_percent = max(
+                    0.0, snapshot.used_percent - float(limit["baseline_used_percent"])
+                )
             limit["spent_percent"] = spent_percent
             was_exhausted = bool(limit.get("exhausted"))
             is_exhausted = spent_percent >= float(limit.get("percent") or 0.0)
@@ -998,6 +1070,37 @@ async def _pause_queue_for_usage_limit(
         thread_ts=thread_ts,
         text=text,
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
+    )
+
+
+async def _pause_queue_for_usage_limit_backend_mismatch(
+    *,
+    item,
+    channel_id: str,
+    thread_ts: Optional[str],
+    deps: HandlerDependencies,
+    client,
+    error: _UsageLimitBackendMismatchError,
+) -> None:
+    """Pause queue processing when a limited item no longer matches the active backend."""
+    await deps.db.update_queue_item_status(item.id, "pending")
+    await deps.db.update_queue_control_state(channel_id, thread_ts, "paused")
+
+    scope_label = _queue_scope_label(thread_ts)
+    text = (
+        f"{scope_label}: paused queue because queue item #{item.id} requires a different "
+        "backend for usage-limit checks. Switch models or rewrite that item, then run "
+        "`/qc resume`."
+    )
+    detail = f"{error} Queue item #{item.id} was returned to pending."
+    await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=text,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": detail}]},
+        ],
     )
 
 
@@ -1963,15 +2066,30 @@ async def _execute_queue_item(
         effective_working_directory = getattr(
             effective_session, "working_directory", config.DEFAULT_WORKING_DIR
         )
-        await _prepare_usage_limits_for_item(
-            scope=scope,
-            item=item,
-            deps=deps,
-            session=effective_session,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            working_directory=effective_working_directory,
-        )
+        try:
+            await _prepare_usage_limits_for_item(
+                scope=scope,
+                item=item,
+                deps=deps,
+                session=effective_session,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                working_directory=effective_working_directory,
+            )
+        except _UsageLimitBackendMismatchError as backend_error:
+            await _pause_queue_for_usage_limit_backend_mismatch(
+                item=item,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                deps=deps,
+                client=client,
+                error=backend_error,
+            )
+            if streaming_state and not streaming_state.accumulated_output.strip():
+                streaming_state.accumulated_output = str(backend_error)
+            if streaming_state:
+                await streaming_state.finalize(is_error=True)
+            return None
         started_trace_run = None
         if trace_service is not None:
             lineage_entry = trace_lineage_state.get(root_token)
@@ -2734,6 +2852,8 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 scheduled_controls = list(submission_options.scheduled_controls)
                 auto_after_each_prompt = bool(submission_options.auto_after_each_prompt)
                 auto_after_queue_finish = bool(submission_options.auto_after_queue_finish)
+                submission_backend = session.get_backend()
+                submission_token = f"qsub-{uuid4().hex[:8]}"
                 materialized_prompts = await materialize_queue_plan_text(
                     text=plan_text,
                     working_directory=session.working_directory,
@@ -2753,10 +2873,14 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                         merged[_MILESTONE_MARKER_META_KEY] = milestone_name
                     usage_limits = _result_field(item, "usage_limits", ())
                     if usage_limits:
-                        merged[_USAGE_LIMITS_META_KEY] = _usage_limit_specs_to_meta(usage_limits)
+                        merged[_USAGE_LIMITS_META_KEY] = _usage_limit_specs_to_meta(
+                            usage_limits,
+                            backend=submission_backend,
+                            submission_token=submission_token,
+                        )
                     return merged or None
 
-                if session.get_backend() != "codex" and any(
+                if submission_backend != "codex" and any(
                     _result_field(item, "usage_limits", ()) for item in materialized_prompts
                 ):
                     await ctx.client.chat_postMessage(

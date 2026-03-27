@@ -21,6 +21,7 @@ from src.handlers.claude.queue import (
     ensure_queue_processor,
     register_queue_commands,
 )
+from src.tasks.queue_plan import QueueUsageLimitSpec
 
 
 class _FakeApp:
@@ -1361,6 +1362,139 @@ async def test_execute_queue_item_pauses_after_percentage_budget_is_exhausted():
 
 
 @pytest.mark.asyncio
+async def test_execute_queue_item_rebaselines_before_run_when_usage_window_has_reset():
+    """A new quota window should be rebaselined before execution so the item still counts."""
+    item = _queue_item(192, "ship fix")
+    item.automation_meta = {
+        "usage_limits": [
+            {
+                "id": "limit-1",
+                "percent": 1.5,
+                "window": "5h",
+                "action": "pause",
+                "backend": "codex",
+            }
+        ]
+    }
+    session = Session(id=1, channel_id="C123", model="gpt-5.4", working_directory="~")
+    stored_usage_state: dict[str, object] = {
+        "limits": {
+            "limit-1": {
+                "id": "limit-1",
+                "percent": 1.5,
+                "window": "5h",
+                "action": "pause",
+                "backend": "codex",
+                "baseline_used_percent": 48.0,
+                "baseline_resets_at": 1773291900,
+                "current_used_percent": 49.0,
+                "current_resets_at": 1773291900,
+                "spent_percent": 1.0,
+                "exhausted": False,
+            }
+        }
+    }
+
+    async def get_queue_control(*_args, **_kwargs):
+        return SimpleNamespace(
+            state="running", usage_limit_state=stored_usage_state, auto_finish_pending=False
+        )
+
+    async def set_queue_usage_limit_state(_channel_id, _thread_ts, usage_limit_state):
+        nonlocal stored_usage_state
+        stored_usage_state = usage_limit_state
+        return SimpleNamespace(
+            state="running", usage_limit_state=usage_limit_state, auto_finish_pending=False
+        )
+
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, True]),
+            get_queue_control=AsyncMock(side_effect=get_queue_control),
+            set_queue_usage_limit_state=AsyncMock(side_effect=set_queue_usage_limit_state),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+        ),
+        codex_executor=SimpleNamespace(
+            account_rate_limits_read=AsyncMock(
+                side_effect=[
+                    {
+                        "rateLimits": {
+                            "limitId": "codex",
+                            "primary": {
+                                "usedPercent": 5.0,
+                                "windowDurationMins": 300,
+                                "resetsAt": 1773295500,
+                            },
+                        }
+                    },
+                    {
+                        "rateLimits": {
+                            "limitId": "codex",
+                            "primary": {
+                                "usedPercent": 6.6,
+                                "windowDurationMins": 300,
+                                "resetsAt": 1773295500,
+                            },
+                        }
+                    },
+                ]
+            )
+        ),
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.001"}),
+        chat_update=AsyncMock(),
+    )
+
+    class _FakeStreamingState:
+        def __init__(self, **kwargs):
+            self.message_ts = kwargs["message_ts"]
+            self.accumulated_output = ""
+
+        def start_heartbeat(self):
+            return None
+
+        async def finalize(self, is_error: bool = False):
+            return None
+
+        async def stop_heartbeat(self):
+            return None
+
+    route_result = SimpleNamespace(
+        backend="codex",
+        result=SimpleNamespace(success=True, output="done", error=None, session_id=None),
+    )
+
+    with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
+        with patch(
+            "src.handlers.claude.queue.create_streaming_callback",
+            side_effect=lambda _state: AsyncMock(),
+        ):
+            with patch(
+                "src.handlers.claude.queue.execute_for_session",
+                new=AsyncMock(return_value=route_result),
+            ):
+                result = await _execute_queue_item(
+                    item,
+                    channel_id="C123",
+                    thread_ts=None,
+                    scope="C123:channel",
+                    deps=deps,
+                    client=client,
+                    log=MagicMock(),
+                    base_session=session,
+                    sequence_label="1",
+                    override_resume_ids={},
+                )
+
+    assert result == "completed"
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
+    assert stored_usage_state["limits"]["limit-1"]["baseline_used_percent"] == pytest.approx(5.0)
+    assert stored_usage_state["limits"]["limit-1"]["spent_percent"] == pytest.approx(1.6)
+    assert stored_usage_state["limits"]["limit-1"]["exhausted"] is True
+
+
+@pytest.mark.asyncio
 async def test_execute_queue_item_queue_only_budget_suppresses_auto_followups():
     """Exhausting a `queue-only` budget should suppress auto-generated follow-ups."""
     item = _queue_item(191, "ship fix")
@@ -1474,6 +1608,82 @@ async def test_execute_queue_item_queue_only_budget_suppresses_auto_followups():
     assert stored_usage_state["limits"]["limit-1"]["exhausted"] is True
     mock_decide.assert_not_awaited()
     deps.db.add_many_to_queue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_queue_item_pauses_when_usage_limit_backend_no_longer_matches():
+    """Limited items should pause and stay pending if the active backend changes."""
+    item = _queue_item(193, "ship fix")
+    item.automation_meta = {
+        "usage_limits": [
+            {
+                "id": "limit-1",
+                "percent": 2.5,
+                "window": "5h",
+                "action": "pause",
+                "backend": "codex",
+            }
+        ]
+    }
+    session = Session(id=1, channel_id="C123", model="opus", working_directory="~")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, True]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+        ),
+        codex_executor=None,
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.001"}),
+        chat_update=AsyncMock(),
+    )
+
+    class _FakeStreamingState:
+        def __init__(self, **kwargs):
+            self.message_ts = kwargs["message_ts"]
+            self.accumulated_output = ""
+
+        def start_heartbeat(self):
+            return None
+
+        async def finalize(self, is_error: bool = False):
+            return None
+
+        async def stop_heartbeat(self):
+            return None
+
+    with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
+        with patch(
+            "src.handlers.claude.queue.create_streaming_callback",
+            side_effect=lambda _state: AsyncMock(),
+        ):
+            with patch(
+                "src.handlers.claude.queue.execute_for_session",
+                new=AsyncMock(),
+            ) as mock_execute:
+                result = await _execute_queue_item(
+                    item,
+                    channel_id="C123",
+                    thread_ts=None,
+                    scope="C123:channel",
+                    deps=deps,
+                    client=client,
+                    log=MagicMock(),
+                    base_session=session,
+                    sequence_label="1",
+                    override_resume_ids={},
+                )
+
+    assert result is None
+    statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
+    assert statuses == ["running", "pending"]
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
+    mock_execute.assert_not_awaited()
+    assert (
+        "require the `codex` backend"
+        in client.chat_postMessage.await_args_list[1].kwargs["blocks"][1]["elements"][0]["text"]
+    )
 
 
 @pytest.mark.asyncio
@@ -2399,6 +2609,92 @@ async def test_q_structured_auto_directives_add_metadata_and_finish_flag():
         "Auto-finish checks/continuation enabled for queue drain."
         in client.chat_postMessage.await_args.kwargs["text"]
     )
+
+
+@pytest.mark.asyncio
+async def test_q_structured_usage_limits_receive_submission_scoped_ids():
+    """Separate structured submissions should namespace identical parsed limit ids."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(
+                return_value=Session(id=1, working_directory="/repo", model="gpt-5.4")
+            ),
+            add_many_to_queue=AsyncMock(
+                side_effect=[
+                    [SimpleNamespace(id=7, position=7)],
+                    [SimpleNamespace(id=8, position=8)],
+                ]
+            ),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/q"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    first_item = SimpleNamespace(
+        prompt="first",
+        working_directory_override=None,
+        parallel_group_id=None,
+        parallel_limit=None,
+        usage_limits=(
+            QueueUsageLimitSpec(limit_id="limit-1", percent=2.5, window="5h", action="pause"),
+        ),
+    )
+    second_item = SimpleNamespace(
+        prompt="second",
+        working_directory_override=None,
+        parallel_group_id=None,
+        parallel_limit=None,
+        usage_limits=(
+            QueueUsageLimitSpec(limit_id="limit-1", percent=2.5, window="5h", action="pause"),
+        ),
+    )
+    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
+        with patch(
+            "src.handlers.claude.queue.materialize_queue_plan_text",
+            new=AsyncMock(return_value=[first_item]),
+        ):
+            with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
+                await handler(
+                    ack=AsyncMock(),
+                    command={
+                        "channel_id": "C123",
+                        "user_id": "U123",
+                        "text": "(limit: 2.5% 5h pause)\nfirst",
+                        "command": "/q",
+                    },
+                    client=client,
+                    logger=MagicMock(),
+                )
+        with patch(
+            "src.handlers.claude.queue.materialize_queue_plan_text",
+            new=AsyncMock(return_value=[second_item]),
+        ):
+            with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
+                await handler(
+                    ack=AsyncMock(),
+                    command={
+                        "channel_id": "C123",
+                        "user_id": "U123",
+                        "text": "(limit: 2.5% 5h pause)\nsecond",
+                        "command": "/q",
+                    },
+                    client=client,
+                    logger=MagicMock(),
+                )
+
+    first_entries = deps.db.add_many_to_queue.await_args_list[0].kwargs["queue_entries"]
+    second_entries = deps.db.add_many_to_queue.await_args_list[1].kwargs["queue_entries"]
+    first_limit = first_entries[0][4]["usage_limits"][0]
+    second_limit = second_entries[0][4]["usage_limits"][0]
+    assert first_limit["backend"] == "codex"
+    assert second_limit["backend"] == "codex"
+    assert first_limit["id"] != second_limit["id"]
+    assert first_limit["id"].endswith(":limit-1")
+    assert second_limit["id"].endswith(":limit-1")
 
 
 @pytest.mark.asyncio
