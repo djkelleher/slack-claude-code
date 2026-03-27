@@ -39,6 +39,25 @@ class FinalizedTraceRun:
     commits: list[TraceCommit]
     tool_events: list[TraceEvent]
     queue_summary_text: Optional[str] = None
+    milestone_report: Optional["MilestoneReport"] = None
+
+
+@dataclass(frozen=True)
+class MilestoneReport:
+    """Aggregated milestone reporting payload."""
+
+    milestone: TraceMilestone
+    runs: list[TraceRun]
+    commits: list[TraceCommit]
+    summary_text: str
+
+
+@dataclass(frozen=True)
+class QueueTraceReport:
+    """Queue-end reporting payload including milestone summaries."""
+
+    queue_summary: Optional[TraceQueueSummary]
+    milestone_reports: list[MilestoneReport]
 
 
 @dataclass(frozen=True)
@@ -47,6 +66,7 @@ class RollbackPreview:
 
     target_commit: str
     current_head: Optional[str]
+    preview_key: str
     diff_text: str
     commit_url: Optional[str]
     compare_url: Optional[str]
@@ -122,6 +142,7 @@ class TraceService:
         queue_item_id: Optional[int],
         execution_id: str,
         prompt: str,
+        logical_run_id: Optional[str] = None,
         parent_run_id: Optional[int] = None,
         root_run_id: Optional[int] = None,
         root_key: Optional[str] = None,
@@ -175,6 +196,7 @@ class TraceService:
             parent_run_id=parent_run_id,
             root_run_id=root_run_id,
             milestone_id=milestone.id if milestone else None,
+            logical_run_id=logical_run_id or execution_id,
             execution_id=execution_id,
             backend=backend,
             model=model,
@@ -197,6 +219,7 @@ class TraceService:
                 "queue_item_id": queue_item_id,
                 "command_id": command_id,
                 "milestone_id": milestone.id if milestone else None,
+                "logical_run_id": logical_run_id or execution_id,
                 "root_key": root_key,
             },
         )
@@ -336,7 +359,7 @@ class TraceService:
         refreshed = await self.db.get_trace_run(trace_run_id)
         if refreshed is None:
             raise RuntimeError("Trace run disappeared after finalize")
-        await self._complete_milestone_if_ready(refreshed)
+        milestone_report = await self._complete_milestone_if_ready(trace_config, refreshed)
         openlineage_event_type = "COMPLETE"
         if final_status == "failed":
             openlineage_event_type = "FAIL"
@@ -348,7 +371,12 @@ class TraceService:
             event_type=openlineage_event_type,
             commits=commits,
         )
-        return FinalizedTraceRun(run=refreshed, commits=commits, tool_events=tool_events)
+        return FinalizedTraceRun(
+            run=refreshed,
+            commits=commits,
+            tool_events=tool_events,
+            milestone_report=milestone_report,
+        )
 
     async def build_queue_summary(
         self,
@@ -359,17 +387,18 @@ class TraceService:
         status_counts: dict[str, int],
         queue_item_ids: list[int],
         queue_drained: bool,
-    ) -> Optional[TraceQueueSummary]:
-        """Create an aggregated queue summary when trace reporting is enabled."""
+    ) -> QueueTraceReport:
+        """Create queue-end and milestone aggregate reports when enabled."""
         trace_config = await self.get_config(channel_id, thread_ts)
-        if not trace_config.enabled or not trace_config.report_queue_end:
-            return None
+        if not trace_config.enabled:
+            return QueueTraceReport(queue_summary=None, milestone_reports=[])
 
         runs = await self.db.list_trace_runs_by_queue_items(queue_item_ids)
         commit_count = 0
         tool_event_count = 0
         milestone_names: list[str] = []
         milestones_by_id: dict[int, TraceMilestone] = {}
+        milestone_reports: list[MilestoneReport] = []
         for run in runs:
             commit_count += len(await self.db.list_trace_commits(run.id))
             run_events = await self.db.list_trace_events(trace_run_id=run.id, limit=500)
@@ -385,27 +414,36 @@ class TraceService:
         if queue_drained:
             for milestone in milestones_by_id.values():
                 if milestone.status == "open" and milestone.mode != "explicit":
-                    await self.db.complete_trace_milestone(milestone.id, summary="Queue drained")
-        summary_text = (
-            f"Queue trace summary: {status_counts.get('completed', 0)} completed, "
-            f"{status_counts.get('failed', 0)} failed, "
-            f"{status_counts.get('cancelled', 0)} cancelled, "
-            f"{commit_count} commit(s) captured across {len(runs)} traced run(s)."
-        )
-        return await self.db.create_trace_queue_summary(
-            session_id=session_id,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            summary_text=summary_text,
-            payload={
-                "status_counts": status_counts,
-                "run_ids": [run.id for run in runs],
-                "run_count": len(runs),
-                "milestones": milestone_names,
-                "commit_count": commit_count,
-                "tool_event_count": tool_event_count,
-            },
-        )
+                    completed = await self.db.complete_trace_milestone(
+                        milestone.id, summary="Queue drained"
+                    )
+                    if completed and trace_config.report_milestone:
+                        refreshed = await self.db.get_trace_milestone(milestone.id)
+                        if refreshed is not None:
+                            milestone_reports.append(await self._build_milestone_report(refreshed))
+        queue_summary = None
+        if trace_config.report_queue_end:
+            summary_text = (
+                f"Queue trace summary: {status_counts.get('completed', 0)} completed, "
+                f"{status_counts.get('failed', 0)} failed, "
+                f"{status_counts.get('cancelled', 0)} cancelled, "
+                f"{commit_count} commit(s) captured across {len(runs)} traced run(s)."
+            )
+            queue_summary = await self.db.create_trace_queue_summary(
+                session_id=session_id,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                summary_text=summary_text,
+                payload={
+                    "status_counts": status_counts,
+                    "run_ids": [run.id for run in runs],
+                    "run_count": len(runs),
+                    "milestones": milestone_names,
+                    "commit_count": commit_count,
+                    "tool_event_count": tool_event_count,
+                },
+            )
+        return QueueTraceReport(queue_summary=queue_summary, milestone_reports=milestone_reports)
 
     async def preview_rollback(
         self,
@@ -419,6 +457,11 @@ class TraceService:
         """Build and persist a rollback preview."""
         resolved_target = await self.resolve_commit(working_directory, target_commit)
         current_head = await self.git_service.get_head_commit_hash(working_directory)
+        preview_key = self._build_rollback_preview_key(
+            working_directory=working_directory,
+            current_head=current_head,
+            target_commit=resolved_target,
+        )
         diff_text = await self.git_service.get_diff_between(
             working_directory,
             resolved_target,
@@ -429,6 +472,7 @@ class TraceService:
         preview = RollbackPreview(
             target_commit=resolved_target,
             current_head=current_head,
+            preview_key=preview_key,
             diff_text=diff_text,
             commit_url=self.git_service.build_commit_url(remote_url, resolved_target),
             compare_url=(
@@ -438,14 +482,25 @@ class TraceService:
             ),
             already_at_target=current_head == resolved_target,
         )
-        rollback_event = await self.db.create_rollback_event(
-            trace_run_id=trace_run_id,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            working_directory=working_directory,
-            target_commit=resolved_target,
-            preview_diff=diff_text,
-        )
+        get_existing_preview = getattr(self.db, "get_latest_rollback_event_by_preview_key", None)
+        rollback_event = None
+        if get_existing_preview is not None:
+            rollback_event = await get_existing_preview(
+                channel_id,
+                thread_ts,
+                preview_key,
+            )
+        if rollback_event is None:
+            rollback_event = await self.db.create_rollback_event(
+                trace_run_id=trace_run_id,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                working_directory=working_directory,
+                current_head_commit=current_head,
+                target_commit=resolved_target,
+                preview_key=preview_key,
+                preview_diff=diff_text,
+            )
         return rollback_event, preview
 
     async def apply_rollback(
@@ -461,8 +516,25 @@ class TraceService:
         rollback_event = await self.db.get_rollback_event(rollback_event_id)
         if rollback_event is None:
             raise RuntimeError(f"Rollback event {rollback_event_id} not found")
+        if rollback_event.applied:
+            return rollback_event
 
         target_working_directory = rollback_event.working_directory or working_directory
+        current_head = None
+        get_head_commit_hash = getattr(self.git_service, "get_head_commit_hash", None)
+        if await self._is_git_repo(target_working_directory) and get_head_commit_hash is not None:
+            current_head = await get_head_commit_hash(target_working_directory)
+        if current_head == rollback_event.target_commit:
+            await self.db.update_rollback_event(
+                rollback_event_id,
+                status="applied",
+                applied=True,
+                current_head_commit=current_head,
+            )
+            refreshed = await self.db.get_rollback_event(rollback_event_id)
+            if refreshed is None:
+                raise RuntimeError("Rollback event disappeared after idempotent apply")
+            return refreshed
 
         checkpoint_name = None
         checkpoint_ref = None
@@ -493,6 +565,7 @@ class TraceService:
             rollback_event_id,
             status="applied",
             applied=True,
+            current_head_commit=rollback_event.target_commit,
             checkpoint_name=checkpoint_name,
             checkpoint_ref=checkpoint_ref,
         )
@@ -719,13 +792,44 @@ class TraceService:
             )
         return summary, "\n\n".join(sections)
 
-    async def _complete_milestone_if_ready(self, trace_run: TraceRun) -> None:
+    async def _complete_milestone_if_ready(
+        self,
+        trace_config: TraceConfig,
+        trace_run: TraceRun,
+    ) -> Optional[MilestoneReport]:
         if trace_run.milestone_id is None:
-            return
+            return None
         if trace_run.queue_item_id is None and trace_run.parent_run_id is None:
-            await self.db.complete_trace_milestone(
+            completed = await self.db.complete_trace_milestone(
                 trace_run.milestone_id, summary=trace_run.summary
             )
+            if completed and trace_config.report_milestone:
+                milestone = await self.db.get_trace_milestone(trace_run.milestone_id)
+                if milestone is not None:
+                    return await self._build_milestone_report(milestone)
+        return None
+
+    async def _build_milestone_report(self, milestone: TraceMilestone) -> MilestoneReport:
+        list_runs = getattr(self.db, "list_trace_runs_for_milestone", None)
+        if list_runs is None:
+            runs = []
+        else:
+            runs = await list_runs(milestone.id)
+        commits: list[TraceCommit] = []
+        for run in runs:
+            commits.extend(await self.db.list_trace_commits(run.id))
+        summary_text = (
+            f"Milestone `{milestone.name}` completed with {len(runs)} traced run(s) and "
+            f"{len(commits)} commit(s)."
+        )
+        if milestone.summary:
+            summary_text += f" Summary: {milestone.summary}"
+        return MilestoneReport(
+            milestone=milestone,
+            runs=runs,
+            commits=commits,
+            summary_text=summary_text,
+        )
 
     def _schedule_openlineage_export(
         self,
@@ -777,6 +881,8 @@ class TraceService:
                     "threadTs": trace_run.thread_ts,
                     "backend": trace_run.backend,
                     "model": trace_run.model,
+                    "logicalRunId": trace_run.logical_run_id,
+                    "attemptNumber": trace_run.attempt_number,
                     "queueItemId": trace_run.queue_item_id,
                     "commandId": trace_run.command_id,
                     "commitHashes": [commit.commit_hash for commit in commits or []],
@@ -811,6 +917,16 @@ class TraceService:
     async def _is_git_repo(working_directory: str) -> bool:
         service = GitService()
         return await service.validate_git_repo(working_directory)
+
+    @staticmethod
+    def _build_rollback_preview_key(
+        *,
+        working_directory: str,
+        current_head: Optional[str],
+        target_commit: str,
+    ) -> str:
+        raw = f"{working_directory}\n{current_head or ''}\n{target_commit}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     @staticmethod
     def stable_prompt_hash(prompt: str) -> str:

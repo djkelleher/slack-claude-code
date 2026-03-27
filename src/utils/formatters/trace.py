@@ -11,7 +11,7 @@ from src.database.models import (
     TraceQueueSummary,
     TraceRun,
 )
-from src.trace.service import RollbackPreview
+from src.trace.service import MilestoneReport, RollbackPreview
 
 from .base import escape_markdown
 
@@ -89,6 +89,7 @@ def trace_step_report_blocks(
                     f"*Trace Step* `{run.execution_id}`\n"
                     f"*Status:* `{run.status}` | *Backend:* `{run.backend}`"
                     f"{f' | *Model:* `{run.model}`' if run.model else ''}"
+                    f"\n*Logical Run:* `{run.logical_run_id}` | *Attempt:* `{run.attempt_number}`"
                     f"{milestone_text}\n"
                     f"*Prompt:* {escape_markdown(' '.join(run.prompt.split())[:140])}"
                 ),
@@ -136,6 +137,9 @@ def trace_lineage_blocks(
         lines.append(f"*Parent Run:* `#{run.parent_run_id}`")
     if run.root_run_id:
         lines.append(f"*Root Run:* `#{run.root_run_id}`")
+    if run.logical_run_id:
+        lines.append(f"*Logical Run:* `{run.logical_run_id}`")
+        lines.append(f"*Attempt:* `{run.attempt_number}`")
     if milestone is not None:
         lines.append(f"*Milestone:* {escape_markdown(milestone.name)}")
     lines.append(f"*Events:* {events_count}")
@@ -165,6 +169,7 @@ def rollback_preview_blocks(event: RollbackEvent, preview: RollbackPreview) -> l
                     f"*Rollback Preview* `#{event.id}`\n"
                     f"*Target:* `{preview.target_commit}`\n"
                     f"*Current HEAD:* `{preview.current_head or 'unknown'}`\n"
+                    f"*Preview Key:* `{preview.preview_key[:12]}`\n"
                     f"{preview.diff_text}{compare_link}"
                 ),
             },
@@ -205,4 +210,35 @@ def queue_trace_summary_blocks(summary: TraceQueueSummary) -> list[dict]:
                 ),
             },
         }
+    ]
+
+
+def milestone_report_blocks(report: MilestoneReport) -> list[dict]:
+    """Render an aggregate milestone report."""
+    run_count = len(report.runs)
+    commit_count = len(report.commits)
+    commit_lines = [
+        f"- `{commit.short_hash}` {escape_markdown(commit.subject)}"
+        for commit in report.commits[:12]
+    ]
+    if not commit_lines:
+        commit_lines = ["- none"]
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*Milestone Report* `{report.milestone.id}`\n"
+                    f"*Name:* {escape_markdown(report.milestone.name)}\n"
+                    f"*Status:* `{report.milestone.status}` | *Runs:* {run_count} | "
+                    f"*Commits:* {commit_count}\n"
+                    f"{escape_markdown(report.summary_text)}"
+                ),
+            },
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "*Commits:*\n" + "\n".join(commit_lines)},
+        },
     ]

@@ -363,7 +363,9 @@ class TestTraceOperations:
             channel_id="CTRACE",
             thread_ts="123.456",
             working_directory="/repo",
+            current_head_commit="def456",
             target_commit="abc123",
+            preview_key="preview-1",
             preview_diff=" app.py | 2 +-",
         )
 
@@ -404,6 +406,8 @@ class TestTraceOperations:
         assert loaded_rollback is not None
         assert loaded_rollback.applied is True
         assert loaded_rollback.working_directory == "/repo"
+        assert loaded_rollback.current_head_commit == "def456"
+        assert loaded_rollback.preview_key == "preview-1"
         assert loaded_rollback.checkpoint_name == "rollback-abc123"
         assert loaded_milestone is not None
         assert loaded_milestone.status == "completed"

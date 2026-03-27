@@ -57,10 +57,10 @@ class DatabaseRepository:
     _TRACE_MILESTONE_SELECT = """id, session_id, channel_id, thread_ts, name, status, mode,
                               root_key, summary, created_at, completed_at"""
     _TRACE_RUN_SELECT = """id, session_id, channel_id, thread_ts, command_id, queue_item_id,
-                        parent_run_id, root_run_id, milestone_id, execution_id, backend, model,
-                        working_directory, prompt, status, git_base_commit, git_base_is_clean,
-                        git_head_commit, git_branch, remote_name, remote_url, summary, created_at,
-                        completed_at"""
+                        parent_run_id, root_run_id, milestone_id, logical_run_id,
+                        attempt_number, execution_id, backend, model, working_directory, prompt,
+                        status, git_base_commit, git_base_is_clean, git_head_commit, git_branch,
+                        remote_name, remote_url, summary, created_at, completed_at"""
     _TRACE_COMMIT_SELECT = """id, trace_run_id, commit_hash, parent_hash, short_hash, subject,
                            author_name, authored_at, commit_url, compare_url, origin, diff,
                            created_at"""
@@ -69,8 +69,9 @@ class DatabaseRepository:
     _TRACE_QUEUE_SUMMARY_SELECT = """id, session_id, channel_id, thread_ts, summary_text, payload,
                                   created_at"""
     _ROLLBACK_EVENT_SELECT = """id, trace_run_id, channel_id, thread_ts, working_directory,
-                             target_commit, preview_diff, checkpoint_name, checkpoint_ref, status,
-                             applied, created_at, applied_at"""
+                             current_head_commit, target_commit, preview_key, preview_diff,
+                             checkpoint_name, checkpoint_ref, status, applied, created_at,
+                             applied_at"""
 
     def __init__(self, db_path: str, timeout: float = DB_TIMEOUT):
         self.db_path = db_path
@@ -2146,6 +2147,7 @@ class DatabaseRepository:
         parent_run_id: Optional[int],
         root_run_id: Optional[int],
         milestone_id: Optional[int],
+        logical_run_id: Optional[str] = None,
         execution_id: str,
         backend: str,
         model: Optional[str],
@@ -2158,14 +2160,23 @@ class DatabaseRepository:
         remote_url: Optional[str],
     ) -> TraceRun:
         """Create a trace run."""
-        async with self._get_connection() as db:
+        async with self._transact() as db:
+            normalized_logical_run_id = logical_run_id or execution_id
+            attempt_cursor = await db.execute(
+                """SELECT COALESCE(MAX(attempt_number), 0) + 1
+                   FROM trace_runs
+                   WHERE logical_run_id = ?""",
+                (normalized_logical_run_id,),
+            )
+            attempt_row = await attempt_cursor.fetchone()
+            attempt_number = int(attempt_row[0] or 1)
             cursor = await db.execute(
                 """INSERT INTO trace_runs
                    (session_id, channel_id, thread_ts, command_id, queue_item_id, parent_run_id,
-                    root_run_id, milestone_id, execution_id, backend, model, working_directory,
-                    prompt, status, git_base_commit, git_base_is_clean, git_branch, remote_name,
-                    remote_url)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)""",
+                    root_run_id, milestone_id, logical_run_id, attempt_number, execution_id,
+                    backend, model, working_directory, prompt, status, git_base_commit,
+                    git_base_is_clean, git_branch, remote_name, remote_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     channel_id,
@@ -2175,6 +2186,8 @@ class DatabaseRepository:
                     parent_run_id,
                     root_run_id,
                     milestone_id,
+                    normalized_logical_run_id,
+                    attempt_number,
                     execution_id,
                     backend,
                     model,
@@ -2187,14 +2200,12 @@ class DatabaseRepository:
                     remote_url,
                 ),
             )
-            await db.commit()
             trace_run_id = cursor.lastrowid
             if root_run_id is None and trace_run_id is not None:
                 await db.execute(
                     "UPDATE trace_runs SET root_run_id = ? WHERE id = ?",
                     (trace_run_id, trace_run_id),
                 )
-                await db.commit()
             cursor = await db.execute(
                 f"""SELECT {self._TRACE_RUN_SELECT}
                    FROM trace_runs
@@ -2345,6 +2356,19 @@ class DatabaseRepository:
                    WHERE milestone_id = ?
                    ORDER BY created_at ASC, id ASC""",
                 (milestone_id,),
+            )
+            rows = await cursor.fetchall()
+            return [TraceRun.from_row(row) for row in rows]
+
+    async def list_trace_runs_for_logical_run(self, logical_run_id: str) -> list[TraceRun]:
+        """Return all attempts recorded for one logical run."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_RUN_SELECT}
+                   FROM trace_runs
+                   WHERE logical_run_id = ?
+                   ORDER BY attempt_number ASC, id ASC""",
+                (logical_run_id,),
             )
             rows = await cursor.fetchall()
             return [TraceRun.from_row(row) for row in rows]
@@ -2516,7 +2540,9 @@ class DatabaseRepository:
         channel_id: str,
         thread_ts: Optional[str],
         working_directory: Optional[str],
+        current_head_commit: Optional[str],
         target_commit: str,
+        preview_key: Optional[str],
         preview_diff: Optional[str],
         checkpoint_name: Optional[str] = None,
         checkpoint_ref: Optional[str] = None,
@@ -2527,15 +2553,18 @@ class DatabaseRepository:
         async with self._get_connection() as db:
             cursor = await db.execute(
                 """INSERT INTO rollback_events
-                   (trace_run_id, channel_id, thread_ts, working_directory, target_commit,
-                    preview_diff, checkpoint_name, checkpoint_ref, status, applied, applied_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (trace_run_id, channel_id, thread_ts, working_directory, current_head_commit,
+                    target_commit, preview_key, preview_diff, checkpoint_name, checkpoint_ref,
+                    status, applied, applied_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     trace_run_id,
                     channel_id,
                     self._normalize_thread_ts(thread_ts),
                     working_directory,
+                    current_head_commit,
                     target_commit,
+                    preview_key,
                     preview_diff,
                     checkpoint_name,
                     checkpoint_ref,
@@ -2562,6 +2591,7 @@ class DatabaseRepository:
         *,
         status: str,
         applied: bool,
+        current_head_commit: Optional[str] = None,
         checkpoint_name: Optional[str] = None,
         checkpoint_ref: Optional[str] = None,
     ) -> bool:
@@ -2569,12 +2599,14 @@ class DatabaseRepository:
         async with self._get_connection() as db:
             cursor = await db.execute(
                 """UPDATE rollback_events
-                   SET status = ?, applied = ?, checkpoint_name = COALESCE(?, checkpoint_name),
+                   SET status = ?, applied = ?, current_head_commit = COALESCE(?, current_head_commit),
+                       checkpoint_name = COALESCE(?, checkpoint_name),
                        checkpoint_ref = COALESCE(?, checkpoint_ref), applied_at = ?
                    WHERE id = ?""",
                 (
                     status,
                     1 if applied else 0,
+                    current_head_commit,
                     checkpoint_name,
                     checkpoint_ref,
                     datetime.now(timezone.utc).isoformat() if applied else None,
@@ -2583,6 +2615,25 @@ class DatabaseRepository:
             )
             await db.commit()
             return cursor.rowcount > 0
+
+    async def get_latest_rollback_event_by_preview_key(
+        self,
+        channel_id: str,
+        thread_ts: Optional[str],
+        preview_key: str,
+    ) -> Optional[RollbackEvent]:
+        """Return the most recent rollback preview matching one exact preview key."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._ROLLBACK_EVENT_SELECT}
+                   FROM rollback_events
+                   WHERE {self._SESSION_SCOPE_WHERE} AND preview_key = ?
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1""",
+                (*self._scope_params(channel_id, thread_ts), preview_key),
+            )
+            row = await cursor.fetchone()
+            return RollbackEvent.from_row(row) if row else None
 
     async def get_rollback_event(self, rollback_event_id: int) -> Optional[RollbackEvent]:
         """Return a rollback event by id."""

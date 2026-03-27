@@ -512,6 +512,8 @@ class TraceRun:
     parent_run_id: Optional[int] = None
     root_run_id: Optional[int] = None
     milestone_id: Optional[int] = None
+    logical_run_id: str = ""
+    attempt_number: int = 1
     execution_id: str = ""
     backend: str = ""
     model: Optional[str] = None
@@ -540,21 +542,23 @@ class TraceRun:
             parent_run_id=row[6],
             root_run_id=row[7],
             milestone_id=row[8],
-            execution_id=row[9],
-            backend=row[10] or "",
-            model=row[11],
-            working_directory=row[12] or "",
-            prompt=row[13] or "",
-            status=row[14] or "running",
-            git_base_commit=row[15],
-            git_base_is_clean=None if row[16] is None else bool(row[16]),
-            git_head_commit=row[17],
-            git_branch=row[18],
-            remote_name=row[19],
-            remote_url=row[20],
-            summary=row[21],
-            created_at=datetime.fromisoformat(row[22]) if row[22] else datetime.now(),
-            completed_at=datetime.fromisoformat(row[23]) if row[23] else None,
+            logical_run_id=row[9] or "",
+            attempt_number=int(row[10] or 1),
+            execution_id=row[11],
+            backend=row[12] or "",
+            model=row[13],
+            working_directory=row[14] or "",
+            prompt=row[15] or "",
+            status=row[16] or "running",
+            git_base_commit=row[17],
+            git_base_is_clean=None if row[18] is None else bool(row[18]),
+            git_head_commit=row[19],
+            git_branch=row[20],
+            remote_name=row[21],
+            remote_url=row[22],
+            summary=row[23],
+            created_at=datetime.fromisoformat(row[24]) if row[24] else datetime.now(),
+            completed_at=datetime.fromisoformat(row[25]) if row[25] else None,
         )
 
 
@@ -672,7 +676,9 @@ class RollbackEvent:
     channel_id: str = ""
     thread_ts: Optional[str] = None
     working_directory: Optional[str] = None
+    current_head_commit: Optional[str] = None
     target_commit: str = ""
+    preview_key: Optional[str] = None
     preview_diff: Optional[str] = None
     checkpoint_name: Optional[str] = None
     checkpoint_ref: Optional[str] = None
@@ -689,12 +695,14 @@ class RollbackEvent:
             channel_id=row[2],
             thread_ts=row[3],
             working_directory=row[4],
-            target_commit=row[5] or "",
-            preview_diff=row[6],
-            checkpoint_name=row[7],
-            checkpoint_ref=row[8],
-            status=row[9] or "previewed",
-            applied=bool(row[10]),
-            created_at=datetime.fromisoformat(row[11]) if row[11] else datetime.now(),
-            applied_at=datetime.fromisoformat(row[12]) if row[12] else None,
+            current_head_commit=row[5],
+            target_commit=row[6] or "",
+            preview_key=row[7],
+            preview_diff=row[8],
+            checkpoint_name=row[9],
+            checkpoint_ref=row[10],
+            status=row[11] or "previewed",
+            applied=bool(row[12]),
+            created_at=datetime.fromisoformat(row[13]) if row[13] else datetime.now(),
+            applied_at=datetime.fromisoformat(row[14]) if row[14] else None,
         )

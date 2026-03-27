@@ -31,7 +31,10 @@ class TestTraceService:
             target_commit="abc123def456",
             preview_diff="",
         )
-        db = SimpleNamespace(create_rollback_event=AsyncMock(return_value=rollback_event))
+        db = SimpleNamespace(
+            create_rollback_event=AsyncMock(return_value=rollback_event),
+            get_latest_rollback_event_by_preview_key=AsyncMock(return_value=None),
+        )
         git_service = SimpleNamespace(
             resolve_commit=AsyncMock(return_value="abc123def456"),
             get_head_commit_hash=AsyncMock(return_value="abc123def456"),
@@ -58,6 +61,7 @@ class TestTraceService:
         assert preview.target_commit == "abc123def456"
         assert preview.current_head == "abc123def456"
         assert preview.already_at_target is True
+        assert preview.preview_key
         assert preview.commit_url == "https://github.com/org/repo/commit/abc123def456"
         assert (
             preview.compare_url == "https://github.com/org/repo/compare/abc123def456...abc123def456"
@@ -67,7 +71,9 @@ class TestTraceService:
             channel_id="CTRACE",
             thread_ts="123.456",
             working_directory="/repo",
+            current_head_commit="abc123def456",
             target_commit="abc123def456",
+            preview_key=preview.preview_key,
             preview_diff="",
         )
 
@@ -99,6 +105,7 @@ class TestTraceService:
             create_checkpoint=AsyncMock(),
         )
         git_service = SimpleNamespace(
+            get_head_commit_hash=AsyncMock(return_value="feedface"),
             get_status=AsyncMock(return_value=GitStatus(branch="main", is_clean=True)),
             reset_hard=AsyncMock(),
             create_checkpoint=AsyncMock(),
@@ -123,6 +130,7 @@ class TestTraceService:
             3,
             status="applied",
             applied=True,
+            current_head_commit="abc123def456",
             checkpoint_name=None,
             checkpoint_ref=None,
         )
@@ -325,7 +333,7 @@ class TestTraceService:
         )
         service = TraceService(db, git_service=SimpleNamespace())
 
-        summary = await service.build_queue_summary(
+        report = await service.build_queue_summary(
             session_id=1,
             channel_id="CTRACE",
             thread_ts="123.456",
@@ -334,7 +342,8 @@ class TestTraceService:
             queue_drained=False,
         )
 
-        assert summary is summary_row
+        assert report.queue_summary is summary_row
+        assert report.milestone_reports == []
         db.list_trace_runs_by_queue_items.assert_awaited_once_with([10, 11, 10])
         db.create_trace_queue_summary.assert_awaited_once()
         payload = db.create_trace_queue_summary.await_args.kwargs["payload"]
@@ -372,6 +381,7 @@ class TestTraceService:
         db = SimpleNamespace(
             get_trace_config=AsyncMock(return_value=config),
             list_trace_runs_by_queue_items=AsyncMock(return_value=[run]),
+            list_trace_runs_for_milestone=AsyncMock(return_value=[run]),
             list_trace_commits=AsyncMock(return_value=[]),
             list_trace_events=AsyncMock(return_value=[]),
             get_trace_milestone=AsyncMock(return_value=milestone),

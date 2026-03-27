@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from uuid import uuid4
 
 from loguru import logger
 from slack_bolt.async_app import AsyncApp
@@ -39,7 +40,11 @@ from src.utils.formatters.queue import (
     queue_status,
 )
 from src.utils.formatters.streaming import processing_message
-from src.utils.formatters.trace import queue_trace_summary_blocks, trace_step_report_blocks
+from src.utils.formatters.trace import (
+    milestone_report_blocks,
+    queue_trace_summary_blocks,
+    trace_step_report_blocks,
+)
 from src.utils.mode_directives import (
     ModeDirectiveError,
     RuntimeModeOverrides,
@@ -1284,14 +1289,16 @@ async def _execute_queue_item(
             parent_run_id = None
             if lineage_entry is not None:
                 root_run_id, parent_run_id = lineage_entry
+            logical_run_id = f"queue-item:{item.id}"
             started_trace_run = await trace_service.start_run(
                 session=trace_session,
                 channel_id=channel_id,
                 thread_ts=thread_ts,
                 command_id=None,
                 queue_item_id=item.id,
-                execution_id=f"queue_{item.id}",
+                execution_id=f"queue_{item.id}_{uuid4().hex[:8]}",
                 prompt=item.prompt,
+                logical_run_id=logical_run_id,
                 parent_run_id=parent_run_id,
                 root_run_id=root_run_id,
                 root_key=root_token,
@@ -1347,6 +1354,14 @@ async def _execute_queue_item(
                             ),
                             milestone=milestone,
                         ),
+                    )
+                milestone_report = getattr(finalized_trace_run, "milestone_report", None)
+                if milestone_report is not None:
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=milestone_report.summary_text,
+                        blocks=milestone_report_blocks(milestone_report),
                     )
             return "completed"
         except Exception as exc:
@@ -1504,6 +1519,8 @@ async def _execute_queue_item(
         if automation_meta_for_suffix.get("auto_each"):
             effective_prompt = effective_prompt + "\n\n" + build_task_status_suffix()
         root_token = str(automation_meta_for_suffix.get("root_token") or f"queue-item:{item.id}")
+        logical_run_id = f"queue-item:{item.id}"
+        execution_id = f"queue_{item.id}_{uuid4().hex[:8]}"
         started_trace_run = None
         if trace_service is not None:
             lineage_entry = trace_lineage_state.get(root_token)
@@ -1517,8 +1534,9 @@ async def _execute_queue_item(
                 thread_ts=thread_ts,
                 command_id=None,
                 queue_item_id=item.id,
-                execution_id=f"queue_{item.id}",
+                execution_id=execution_id,
                 prompt=effective_prompt,
+                logical_run_id=logical_run_id,
                 parent_run_id=parent_run_id,
                 root_run_id=root_run_id,
                 root_key=root_token,
@@ -1530,7 +1548,7 @@ async def _execute_queue_item(
             prompt=effective_prompt,
             channel_id=channel_id,
             thread_ts=thread_ts,
-            execution_id=f"queue_{item.id}",
+            execution_id=execution_id,
             on_chunk=on_chunk,
             slack_client=client,
             logger=log,
@@ -1730,6 +1748,14 @@ async def _execute_queue_item(
                         ),
                         milestone=milestone,
                     ),
+                )
+            milestone_report = getattr(finalized_trace_run, "milestone_report", None)
+            if milestone_report is not None:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=milestone_report.summary_text,
+                    blocks=milestone_report_blocks(milestone_report),
                 )
         return final_status
 
@@ -3414,7 +3440,7 @@ async def _process_queue(
                     thread_ts=thread_ts,
                     default_cwd=config.DEFAULT_WORKING_DIR,
                 )
-                queue_trace_summary = await trace_service.build_queue_summary(
+                queue_trace_report = await trace_service.build_queue_summary(
                     session_id=session.id,
                     channel_id=channel_id,
                     thread_ts=thread_ts,
@@ -3422,17 +3448,30 @@ async def _process_queue(
                     queue_item_ids=processed_queue_item_ids,
                     queue_drained=queue_drained,
                 )
-                if queue_trace_summary is not None:
+                if queue_trace_report.queue_summary is not None:
                     try:
                         await client.chat_postMessage(
                             channel=channel_id,
                             thread_ts=thread_ts,
-                            text=queue_trace_summary.summary_text,
-                            blocks=queue_trace_summary_blocks(queue_trace_summary),
+                            text=queue_trace_report.queue_summary.summary_text,
+                            blocks=queue_trace_summary_blocks(queue_trace_report.queue_summary),
                         )
                     except Exception as trace_notify_error:
                         log.error(
                             f"Failed to post queue trace summary for scope {scope}: "
                             f"{trace_notify_error}"
+                        )
+                for milestone_report in queue_trace_report.milestone_reports:
+                    try:
+                        await client.chat_postMessage(
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            text=milestone_report.summary_text,
+                            blocks=milestone_report_blocks(milestone_report),
+                        )
+                    except Exception as milestone_notify_error:
+                        log.error(
+                            f"Failed to post milestone trace summary for scope {scope}: "
+                            f"{milestone_notify_error}"
                         )
         await _cleanup_queue_start_lock(task_id)

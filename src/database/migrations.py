@@ -208,6 +208,8 @@ CREATE TABLE IF NOT EXISTS trace_runs (
     parent_run_id INTEGER DEFAULT NULL,
     root_run_id INTEGER DEFAULT NULL,
     milestone_id INTEGER DEFAULT NULL,
+    logical_run_id TEXT DEFAULT NULL,
+    attempt_number INTEGER DEFAULT 1,
     execution_id TEXT NOT NULL,
     backend TEXT NOT NULL,
     model TEXT DEFAULT NULL,
@@ -276,7 +278,9 @@ CREATE TABLE IF NOT EXISTS rollback_events (
     channel_id TEXT NOT NULL,
     thread_ts TEXT DEFAULT NULL,
     working_directory TEXT DEFAULT NULL,
+    current_head_commit TEXT DEFAULT NULL,
     target_commit TEXT NOT NULL,
+    preview_key TEXT DEFAULT NULL,
     preview_diff TEXT DEFAULT NULL,
     checkpoint_name TEXT DEFAULT NULL,
     checkpoint_ref TEXT DEFAULT NULL,
@@ -317,6 +321,7 @@ WHERE status = 'active' AND released_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trace_configs_scope
 ON trace_configs(channel_id, COALESCE(thread_ts, ''));
 CREATE INDEX IF NOT EXISTS idx_trace_runs_scope ON trace_runs(channel_id, thread_ts, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trace_runs_logical_run ON trace_runs(logical_run_id, attempt_number DESC);
 CREATE INDEX IF NOT EXISTS idx_trace_runs_command ON trace_runs(command_id);
 CREATE INDEX IF NOT EXISTS idx_trace_runs_queue_item ON trace_runs(queue_item_id);
 CREATE INDEX IF NOT EXISTS idx_trace_runs_milestone ON trace_runs(milestone_id, created_at DESC);
@@ -330,6 +335,8 @@ CREATE INDEX IF NOT EXISTS idx_trace_queue_summaries_scope
 ON trace_queue_summaries(channel_id, thread_ts, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rollback_events_scope
 ON rollback_events(channel_id, thread_ts, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rollback_events_preview_key
+ON rollback_events(preview_key, created_at DESC);
 """
 
 
@@ -466,6 +473,8 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                parent_run_id INTEGER DEFAULT NULL,
                root_run_id INTEGER DEFAULT NULL,
                milestone_id INTEGER DEFAULT NULL,
+               logical_run_id TEXT DEFAULT NULL,
+               attempt_number INTEGER DEFAULT 1,
                execution_id TEXT NOT NULL,
                backend TEXT NOT NULL,
                model TEXT DEFAULT NULL,
@@ -529,7 +538,9 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                channel_id TEXT NOT NULL,
                thread_ts TEXT DEFAULT NULL,
                working_directory TEXT DEFAULT NULL,
+               current_head_commit TEXT DEFAULT NULL,
                target_commit TEXT NOT NULL,
+               preview_key TEXT DEFAULT NULL,
                preview_diff TEXT DEFAULT NULL,
                checkpoint_name TEXT DEFAULT NULL,
                checkpoint_ref TEXT DEFAULT NULL,
@@ -546,6 +557,10 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_trace_runs_scope "
         "ON trace_runs(channel_id, thread_ts, created_at DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_runs_logical_run "
+        "ON trace_runs(logical_run_id, attempt_number DESC)"
     )
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_trace_runs_command " "ON trace_runs(command_id)"
@@ -582,6 +597,10 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_rollback_events_scope "
         "ON rollback_events(channel_id, thread_ts, created_at DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rollback_events_preview_key "
+        "ON rollback_events(preview_key, created_at DESC)"
     )
 
     # Check if model column exists in sessions table
@@ -629,6 +648,18 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         "git_base_is_clean",
         "ALTER TABLE trace_runs ADD COLUMN git_base_is_clean INTEGER DEFAULT NULL",
     )
+    await _add_column_if_missing(
+        db,
+        trace_run_column_names,
+        "logical_run_id",
+        "ALTER TABLE trace_runs ADD COLUMN logical_run_id TEXT DEFAULT NULL",
+    )
+    await _add_column_if_missing(
+        db,
+        trace_run_column_names,
+        "attempt_number",
+        "ALTER TABLE trace_runs ADD COLUMN attempt_number INTEGER DEFAULT 1",
+    )
     cursor = await db.execute("PRAGMA table_info(rollback_events)")
     rollback_columns = await cursor.fetchall()
     rollback_column_names = [col[1] for col in rollback_columns]
@@ -637,6 +668,18 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         rollback_column_names,
         "working_directory",
         "ALTER TABLE rollback_events ADD COLUMN working_directory TEXT DEFAULT NULL",
+    )
+    await _add_column_if_missing(
+        db,
+        rollback_column_names,
+        "current_head_commit",
+        "ALTER TABLE rollback_events ADD COLUMN current_head_commit TEXT DEFAULT NULL",
+    )
+    await _add_column_if_missing(
+        db,
+        rollback_column_names,
+        "preview_key",
+        "ALTER TABLE rollback_events ADD COLUMN preview_key TEXT DEFAULT NULL",
     )
 
     history_cursor = await db.execute("PRAGMA table_info(command_history)")

@@ -13,7 +13,7 @@ from src.question.manager import QuestionManager
 from src.trace.service import TraceService
 from src.utils.formatters.command import error_message
 from src.utils.formatters.streaming import processing_fallback_text, processing_message
-from src.utils.formatters.trace import trace_step_report_blocks
+from src.utils.formatters.trace import milestone_report_blocks, trace_step_report_blocks
 from src.utils.mode_directives import PlanModeDirective
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
@@ -72,6 +72,7 @@ async def execute_prompt_with_runtime(
 
     smart_concat, terminal_style = streaming_flags_for_session(session)
     execution_id = str(uuid.uuid4())
+    logical_run_id = f"command:{cmd_history.id}"
     started_trace_run = None
     trace_run_finalized = False
     trace_service = getattr(deps, "trace_service", None)
@@ -148,6 +149,7 @@ async def execute_prompt_with_runtime(
                 queue_item_id=None,
                 execution_id=execution_id,
                 prompt=prompt,
+                logical_run_id=logical_run_id,
             )
         route = await execute_for_session(
             deps=deps,
@@ -240,6 +242,14 @@ async def execute_prompt_with_runtime(
                         ),
                         milestone=milestone,
                     ),
+                )
+            milestone_report = getattr(finalized_trace_run, "milestone_report", None)
+            if milestone_report is not None:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=milestone_report.summary_text,
+                    blocks=milestone_report_blocks(milestone_report),
                 )
         return ExecutionDeliveryResult(
             route=route, command_id=cmd_history.id, message_ts=message_ts

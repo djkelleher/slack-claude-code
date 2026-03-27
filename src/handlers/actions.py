@@ -530,10 +530,22 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             )
             return
         if rollback_event.applied:
-            await client.chat_postEphemeral(
+            await client.chat_postMessage(
                 channel=channel_id,
-                user=body["user"]["id"],
-                text="Rollback preview was already applied.",
+                thread_ts=rollback_event.thread_ts,
+                text=f"Rollback already applied to {rollback_event.target_commit}",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"Rollback already applied to `{rollback_event.target_commit}`.\n"
+                                f"Checkpoint: `{rollback_event.checkpoint_name or 'none'}`"
+                            ),
+                        },
+                    }
+                ],
             )
             return
         normalized_current_thread = (current_thread_ts or "").strip() or None
