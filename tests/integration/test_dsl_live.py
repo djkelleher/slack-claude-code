@@ -12,8 +12,8 @@ Required environment variables:
 Run with: pytest tests/integration/test_dsl_live.py --live -v
 """
 
-from datetime import datetime, timedelta
 import uuid
+from datetime import datetime, timedelta
 
 import pytest
 from slack_sdk.web.async_client import AsyncWebClient
