@@ -62,8 +62,8 @@ class TestConfigureLogging:
 
     def test_configure_logging_writes_log_file_to_database_directory(self, tmp_path):
         """Log file should live next to the configured database with 3-day retention."""
-        db_path = tmp_path / "data" / "slack_claude.db"
-        expected_log_path = db_path.parent / "slack_claude.log"
+        db_path = tmp_path / "data" / "code-sigmas.db"
+        expected_log_path = db_path.parent / "code-sigmas.log"
 
         with patch("src.app.config.DATABASE_PATH", str(db_path)):
             with patch("src.app.logger.remove") as mock_remove:
@@ -83,7 +83,7 @@ class TestConfigureLogging:
 
     def test_slack_uploads_dir_lives_under_application_data_dir(self, tmp_path):
         """Slack uploads should be stored under the app data directory."""
-        db_path = tmp_path / "data" / "slack_claude.db"
+        db_path = tmp_path / "data" / "code-sigmas.db"
         expected_data_dir = db_path.parent
 
         with patch("src.app.config.DATABASE_PATH", str(db_path)):

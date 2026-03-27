@@ -209,12 +209,12 @@ class TestPlansDirConstant:
 
     def test_plans_dir_path_format(self):
         """PLANS_DIR has correct path format."""
-        assert PLANS_DIR.endswith(".slack-claude-code/plans")
+        assert PLANS_DIR.endswith(".code-sigmas/plans")
         assert str(Path.home()) in PLANS_DIR
 
     def test_plans_dir_equals_expanded_path(self):
         """PLANS_DIR equals the expanded home path."""
-        expected = str(Path.home() / ".slack-claude-code" / "plans")
+        expected = str(Path.home() / ".code-sigmas" / "plans")
         assert PLANS_DIR == expected
 
 

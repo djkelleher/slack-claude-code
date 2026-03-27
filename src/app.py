@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Slack Claude Code Bot - Main Application Entry Point
+code-sigmas - Main Application Entry Point
 
 A Slack app that allows running Claude Code CLI commands from Slack,
 with each channel representing a separate session.
@@ -97,7 +97,7 @@ def configure_logging() -> None:
     """Configure log sinks for stderr and data-directory log file."""
     data_dir = _application_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
-    log_path = data_dir / "slack_claude.log"
+    log_path = data_dir / "code-sigmas.log"
 
     logger.remove()
     logger.add(sys.stderr, level="INFO", backtrace=False, diagnose=False)
@@ -1581,7 +1581,7 @@ async def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, signal_handler)
 
-    logger.info("Starting Slack Claude Code Bot...")
+    logger.info("Starting code-sigmas...")
     logger.info(f"Default working directory: {config.DEFAULT_WORKING_DIR}")
 
     # Start the handler

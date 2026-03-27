@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="assets/repo_logo.png" alt="Slack Claude Code Bot" width="1000">
+  <img src="assets/repo_logo.png" alt="code-sigmas" width="1000">
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/slack-claude-code/"><img src="https://img.shields.io/pypi/v/slack-claude-code" alt="PyPI version"></a>
-  <a href="https://pypi.org/project/slack-claude-code/"><img src="https://img.shields.io/pypi/pyversions/slack-claude-code" alt="Python versions"></a>
+  <a href="https://pypi.org/project/code-sigmas/"><img src="https://img.shields.io/pypi/v/code-sigmas" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/code-sigmas/"><img src="https://img.shields.io/pypi/pyversions/code-sigmas" alt="Python versions"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
-  <a href="https://github.com/djkelleher/slack-claude-code/actions/workflows/tests.yml"><img src="https://github.com/djkelleher/slack-claude-code/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/djkelleher/code-sigmas/actions/workflows/tests.yml"><img src="https://github.com/djkelleher/code-sigmas/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
 </p>
 
 **Claude Code and Codex, in Slack.** Access both backends remotely from any device, with Slack-native approvals, threads, uploads, queues, and status views.
@@ -33,7 +33,7 @@
 
 ### 1. Install the CLI
 ```bash
-pipx install slack-claude-code
+pipx install code-sigmas
 ```
 
 This installs:
@@ -459,7 +459,7 @@ aislack config set SLACK_BOT_TOKEN=xoxb-...
 | `aislack-config delete KEY` | Remove a configuration value |
 | `aislack-config path` | Show config file locations |
 
-Configuration is encrypted and stored in `~/.slack-claude-code/config.enc`. Sensitive values (tokens, secrets) are masked when displayed.
+Configuration is encrypted and stored in `~/.code-sigmas/config.enc`. Sensitive values (tokens, secrets) are masked when displayed.
 
 **Alternative:** You can also use environment variables or a `.env` file. Config values take precedence over environment variables.
 

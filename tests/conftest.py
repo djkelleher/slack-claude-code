@@ -1,4 +1,4 @@
-"""Pytest fixtures for Slack Claude Code tests."""
+"""Pytest fixtures for code-sigmas tests."""
 
 import asyncio
 import os

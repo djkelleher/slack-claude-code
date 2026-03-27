@@ -56,7 +56,7 @@ class ConfigStorage:
     """Encrypted storage for sensitive configuration values."""
 
     def __init__(self, config_dir: Path | None = None):
-        self.config_dir = config_dir or Path.home() / ".slack-claude-code"
+        self.config_dir = config_dir or Path.home() / ".code-sigmas"
         self.config_file = self.config_dir / "config.enc"
         self._fernet = Fernet(_get_machine_key())
         self._cache: dict[str, Any] | None = None

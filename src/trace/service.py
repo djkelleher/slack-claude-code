@@ -912,13 +912,13 @@ class TraceService:
             "eventTime": datetime.now(timezone.utc).isoformat(),
             "run": {"runId": trace_run.execution_id},
             "job": {
-                "namespace": config.TRACE_OPENLINEAGE_NAMESPACE or "slack-claude-code",
+                "namespace": config.TRACE_OPENLINEAGE_NAMESPACE or "code-sigmas",
                 "name": f"{trace_run.channel_id}:{trace_run.thread_ts or 'channel'}",
             },
-            "producer": "slack-claude-code",
+            "producer": "code-sigmas",
             "facets": {
                 "slack": {
-                    "_producer": "slack-claude-code",
+                    "_producer": "code-sigmas",
                     "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/UnknownRunFacet.json",
                     "channelId": trace_run.channel_id,
                     "threadTs": trace_run.thread_ts,

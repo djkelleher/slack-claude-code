@@ -113,7 +113,7 @@ class _AppServerConnection:
             init_response = await connection.send_request(
                 "initialize",
                 {
-                    "clientInfo": {"name": "slack-claude-code", "version": "1.0"},
+                    "clientInfo": {"name": "code-sigmas", "version": "1.0"},
                     "capabilities": {"experimentalApi": True},
                 },
             )

@@ -1,1 +1,1 @@
-"""Utilities module for Slack Claude Code bot."""
+"""Utilities module for code-sigmas."""

@@ -115,7 +115,7 @@ def cmd_path(args: list[str]) -> int:
     storage = get_storage()
     print(f"Config directory: {storage.config_dir}")
     print(f"Config file: {storage.config_file}")
-    print(f"Database file: {storage.config_dir / 'slack_claude.db'}")
+    print(f"Database file: {storage.config_dir / 'code-sigmas.db'}")
     return 0
 
 

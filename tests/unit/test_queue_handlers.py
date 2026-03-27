@@ -266,7 +266,7 @@ def test_queue_processing_log_line_keeps_full_prompt() -> None:
     """Processing log lines should include the full normalized prompt text."""
     prompt = (
         "how can we improve the logic, algorithmic edge, mathematical edge of this module " * 8
-    ) + "/home/dan/dev-repos/slack-claude-code/src/handlers/claude/queue.py"
+    ) + "/home/dan/dev-repos/code-sigmas/src/handlers/claude/queue.py"
 
     line = _queue_processing_log_line(7, prompt)
     normalized_prompt = " ".join(prompt.split())

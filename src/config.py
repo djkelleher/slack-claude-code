@@ -10,7 +10,7 @@ from src.backends.registry import BackendRegistry
 from src.config_storage import get_storage
 
 # Global constant for application plan directory
-PLANS_DIR = str(Path.home() / ".slack-claude-code" / "plans")
+PLANS_DIR = str(Path.home() / ".code-sigmas" / "plans")
 
 
 @dataclass(frozen=True)
@@ -392,7 +392,7 @@ class Config(BaseSettings):
     Application configuration loaded from multiple sources.
 
     Priority (highest to lowest):
-    1. Encrypted storage (~/.slack-claude-code/config.enc)
+    1. Encrypted storage (~/.code-sigmas/config.enc)
     2. Environment variables
     3. .env file
     4. Default values
@@ -430,9 +430,9 @@ class Config(BaseSettings):
     SLACK_QUESTION_MENTION: str = ""
     SLACK_PLAN_MENTION: str = "@channel"
 
-    # Database - defaults to ~/.slack-claude-code/
+    # Database - defaults to ~/.code-sigmas/
     DATABASE_PATH: str = Field(
-        default_factory=lambda: str(Path.home() / ".slack-claude-code" / "slack_claude.db")
+        default_factory=lambda: str(Path.home() / ".code-sigmas" / "code-sigmas.db")
     )
     DEFAULT_WORKING_DIR: str = Field(default_factory=lambda: str(Path.cwd()))
 
@@ -476,7 +476,7 @@ class Config(BaseSettings):
     GITHUB_REPO: str = ""
     TRACE_OPENLINEAGE_ENABLED: bool = False
     TRACE_OPENLINEAGE_URL: str = ""
-    TRACE_OPENLINEAGE_NAMESPACE: str = "slack-claude-code"
+    TRACE_OPENLINEAGE_NAMESPACE: str = "code-sigmas"
 
     # Codex configuration
     CODEX_SANDBOX_MODE: str = "danger-full-access"

@@ -50,7 +50,7 @@ Output your plan in structured markdown with:
 - Testing considerations
 
 IMPORTANT: Write the plan to the EXACT path specified in your system context as the "plan file path".
-If no path is specified, write to `~/.slack-claude-code/plans/<descriptive-name>.md`.
+If no path is specified, write to `~/.code-sigmas/plans/<descriptive-name>.md`.
 
 Do NOT implement - only plan. The plan will be reviewed before execution.
 

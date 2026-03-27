@@ -1,1 +1,1 @@
-"""Test suite for Slack Claude Code bot."""
+"""Test suite for code-sigmas."""

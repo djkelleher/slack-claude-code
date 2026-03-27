@@ -1,5 +1,5 @@
 [project]
-name = "slack-claude-code"
+name = "code-sigmas"
 version = "0.3.2"
 description = "Slack app for running Claude Code CLI commands"
 authors = [{name = "Dan"}]
@@ -8,8 +8,8 @@ requires-python = ">=3.10,<4.0"
 dynamic = ["dependencies"]
 
 [project.scripts]
-aislack = "src.app:run"
-aislack-config = "src.cli:run"
+cs = "src.app:run"
+cs-config = "src.cli:run"
 
 [tool.poetry]
 packages = [{include = "src"}]

@@ -58,7 +58,7 @@ def test_streaming_update_does_not_truncate_long_prompt() -> None:
     """Streaming status should show the full normalized prompt."""
     prompt = (
         "Processing queue item 13: how can we improve the logic, algorithmic edge, "
-        "mathematical edge in /home/dan/dev-repos/slack-claude-code/src/handlers/claude/queue.py"
+        "mathematical edge in /home/dan/dev-repos/code-sigmas/src/handlers/claude/queue.py"
     )
 
     blocks = streaming_update(
