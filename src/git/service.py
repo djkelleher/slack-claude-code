@@ -127,9 +127,7 @@ class GitService:
         except Exception:
             return False
 
-    async def initialize_repo(
-        self, working_directory: str, initial_branch: str = "main"
-    ) -> str:
+    async def initialize_repo(self, working_directory: str, initial_branch: str = "main") -> str:
         """Initialize a new git repository in the working directory."""
         self._validate_working_directory(working_directory)
         self._validate_branch_name(initial_branch)

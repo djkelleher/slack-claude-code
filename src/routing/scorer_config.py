@@ -6,7 +6,6 @@ most relevant for coding-focused AI CLI tools.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass(frozen=True)

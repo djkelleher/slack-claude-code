@@ -47,7 +47,7 @@ async def test_typed_model_message_shows_redirect(
         slack_client,
         slack_user_client,
         slack_test_channel,
-        f"/model",
+        "/model",
         text_contains_any("slash command", "/model"),
     )
     try:

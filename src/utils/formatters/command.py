@@ -1,7 +1,6 @@
 """Command response formatting."""
 
 import json
-
 from typing import Optional
 
 from src.config import config

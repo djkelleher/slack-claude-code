@@ -12,10 +12,10 @@ from loguru import logger
 
 from src.config import config
 from src.database.models import (
-    TraceEvent,
     RollbackEvent,
     TraceCommit,
     TraceConfig,
+    TraceEvent,
     TraceMilestone,
     TraceQueueSummary,
     TraceRun,

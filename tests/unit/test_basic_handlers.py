@@ -6,7 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.database.models import CommandHistory, Session, TraceMilestone, TraceQueueSummary, TraceRun
+from src.database.models import (
+    CommandHistory,
+    Session,
+    TraceMilestone,
+    TraceQueueSummary,
+    TraceRun,
+)
 from src.handlers.basic import _parse_history_selection, register_basic_commands
 
 
