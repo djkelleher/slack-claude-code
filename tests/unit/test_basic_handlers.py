@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.database.models import CommandHistory, Session
+from src.database.models import CommandHistory, Session, TraceRun
 from src.handlers.basic import _parse_history_selection, register_basic_commands
 
 
@@ -506,3 +506,48 @@ async def test_trace_on_offers_git_init_when_auto_commit_enabled_without_git_dir
     assert kwargs["text"] == "Traceability enabled. Initialize a git repository"
     assert kwargs["blocks"][2]["text"]["text"].startswith("*Git repository required*")
     assert kwargs["blocks"][4]["elements"][0]["action_id"] == "git_init_repo"
+
+
+@pytest.mark.asyncio
+async def test_trace_lineage_rejects_run_from_different_scope():
+    """`/trace lineage run` should not disclose trace runs from other scopes."""
+    app = _FakeApp()
+    session = Session(id=16, working_directory="/workspace")
+    foreign_run = TraceRun(
+        id=44,
+        session_id=99,
+        channel_id="C999",
+        thread_ts="999.000",
+        execution_id="exec-44",
+        backend="codex",
+        working_directory="/repo",
+        prompt="foreign",
+        status="completed",
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=session),
+            get_trace_run=AsyncMock(return_value=foreign_run),
+        ),
+        executor=SimpleNamespace(),
+        trace_service=SimpleNamespace(),
+    )
+    register_basic_commands(app, deps)
+
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    handler = app.handlers["/trace"]
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "lineage run 44",
+            "command": "/trace",
+            "thread_ts": "123.456",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "No matching trace run found."

@@ -518,7 +518,7 @@ async def test_execute_queue_item_routes_known_slash_command_through_router():
 @pytest.mark.asyncio
 async def test_execute_queue_item_traces_known_slash_command_when_trace_enabled():
     """Queued slash commands should still create and finalize trace runs."""
-    item = _queue_item(173, "/clear")
+    item = _queue_item(173, "/clear", working_directory_override="/repo/feature")
     session = Session(id=1, channel_id="C123", model="opus")
     slash_router = SimpleNamespace(
         has_command=MagicMock(return_value=True),
@@ -564,6 +564,10 @@ async def test_execute_queue_item_traces_known_slash_command_when_trace_enabled(
 
     assert result == "completed"
     deps.trace_service.start_run.assert_awaited_once()
+    assert (
+        deps.trace_service.start_run.await_args.kwargs["session"].working_directory
+        == "/repo/feature"
+    )
     deps.trace_service.finalize_run_with_status.assert_awaited_once_with(
         trace_run_id=21,
         final_status="completed",
@@ -1325,6 +1329,20 @@ async def test_execute_queue_item_pauses_and_requeues_on_question_when_enabled()
             update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
         ),
         codex_executor=None,
+        trace_service=SimpleNamespace(
+            start_run=AsyncMock(
+                return_value=SimpleNamespace(
+                    run=SimpleNamespace(id=51),
+                    config=SimpleNamespace(report_step=False),
+                )
+            ),
+            finalize_run_with_status=AsyncMock(
+                return_value=SimpleNamespace(
+                    run=SimpleNamespace(id=51, root_run_id=51, milestone_id=None),
+                    commits=[],
+                )
+            ),
+        ),
     )
     client = SimpleNamespace(
         chat_postMessage=AsyncMock(return_value={"ts": "123.001"}),
@@ -1353,6 +1371,7 @@ async def test_execute_queue_item_pauses_and_requeues_on_question_when_enabled()
             error="__QUEUE_PAUSE_ON_QUESTION__",
             session_id=None,
             paused_on_question=True,
+            git_tool_events=[],
         ),
     )
 
@@ -1382,6 +1401,13 @@ async def test_execute_queue_item_pauses_and_requeues_on_question_when_enabled()
     assert result is None
     statuses = [call.args[1] for call in deps.db.update_queue_item_status.await_args_list]
     assert statuses == ["running", "pending"]
+    deps.trace_service.finalize_run_with_status.assert_awaited_once_with(
+        trace_run_id=51,
+        final_status="cancelled",
+        output="",
+        error="__QUEUE_PAUSE_ON_QUESTION__",
+        git_tool_events=[],
+    )
     deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
     assert client.chat_postMessage.await_count == 2
     pause_notice = client.chat_postMessage.await_args_list[1].kwargs

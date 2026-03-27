@@ -1274,13 +1274,18 @@ async def _execute_queue_item(
         started_trace_run = None
         root_token = str(initial_meta.get("root_token") or f"queue-item:{item.id}")
         if trace_service is not None:
+            trace_session = (
+                replace(base_session, working_directory=queue_working_directory)
+                if queue_working_directory
+                else base_session
+            )
             lineage_entry = trace_lineage_state.get(root_token)
             root_run_id = None
             parent_run_id = None
             if lineage_entry is not None:
                 root_run_id, parent_run_id = lineage_entry
             started_trace_run = await trace_service.start_run(
-                session=base_session,
+                session=trace_session,
                 channel_id=channel_id,
                 thread_ts=thread_ts,
                 command_id=None,
@@ -1534,22 +1539,6 @@ async def _execute_queue_item(
         )
         result = route.result
         finalized_trace_run = None
-        if started_trace_run is not None:
-            finalized_trace_run = await trace_service.finalize_run(
-                trace_run_id=started_trace_run.run.id,
-                success=result.success,
-                output=result.output or "",
-                error=result.error,
-                git_tool_events=result.git_tool_events,
-            )
-            git_diff_summary, git_diff_output = TraceService.format_commit_snapshot(
-                finalized_trace_run.commits
-            )
-            result.git_diff_summary = git_diff_summary
-            result.git_diff_output = git_diff_output
-            trace_run_finalized = True
-            root_run_id = finalized_trace_run.run.root_run_id or finalized_trace_run.run.id
-            trace_lineage_state[root_token] = (root_run_id, finalized_trace_run.run.id)
         route_backend = "claude"
         try:
             route_backend = route.backend
@@ -1560,6 +1549,15 @@ async def _execute_queue_item(
             backend_resume[route_backend] = result.session_id
 
         if config.QUEUE_PAUSE_ON_QUESTIONS and _result_field(result, "paused_on_question", False):
+            if started_trace_run is not None:
+                await trace_service.finalize_run_with_status(
+                    trace_run_id=started_trace_run.run.id,
+                    final_status="cancelled",
+                    output=result.output or "",
+                    error=result.error or "Queue paused for user input",
+                    git_tool_events=result.git_tool_events,
+                )
+                trace_run_finalized = True
             await _pause_queue_for_question(
                 item=item,
                 channel_id=channel_id,
@@ -1582,6 +1580,15 @@ async def _execute_queue_item(
             was_success=result.success,
         )
         if usage_limit_state is not None:
+            if started_trace_run is not None:
+                await trace_service.finalize_run_with_status(
+                    trace_run_id=started_trace_run.run.id,
+                    final_status="cancelled",
+                    output=result.output or "",
+                    error=usage_limit_state.detail,
+                    git_tool_events=result.git_tool_events,
+                )
+                trace_run_finalized = True
             await _pause_queue_for_usage_limit(
                 item=item,
                 channel_id=channel_id,
@@ -1595,6 +1602,23 @@ async def _execute_queue_item(
             if streaming_state:
                 await streaming_state.finalize(is_error=True)
             return None
+
+        if started_trace_run is not None:
+            finalized_trace_run = await trace_service.finalize_run(
+                trace_run_id=started_trace_run.run.id,
+                success=result.success,
+                output=result.output or "",
+                error=result.error,
+                git_tool_events=result.git_tool_events,
+            )
+            git_diff_summary, git_diff_output = TraceService.format_commit_snapshot(
+                finalized_trace_run.commits
+            )
+            result.git_diff_summary = git_diff_summary
+            result.git_diff_output = git_diff_output
+            trace_run_finalized = True
+            root_run_id = finalized_trace_run.run.root_run_id or finalized_trace_run.run.id
+            trace_lineage_state[root_token] = (root_run_id, finalized_trace_run.run.id)
 
         automation_notices: list[str] = []
         if result.success:
@@ -3142,6 +3166,7 @@ async def _process_queue(
     status_counts = {"completed": 0, "failed": 0, "cancelled": 0}
     final_queue_state = "running"
     remaining_pending = 0
+    queue_drained = False
 
     try:
         while True:
@@ -3277,6 +3302,7 @@ async def _process_queue(
                                     f"{'; '.join(notices)}"
                                 )
                     log.info(f"Queue empty for scope {scope}, stopping processor")
+                    queue_drained = True
                     break
 
                 item = pending[0]
@@ -3384,6 +3410,7 @@ async def _process_queue(
                     thread_ts=thread_ts,
                     status_counts=status_counts,
                     queue_item_ids=processed_queue_item_ids,
+                    queue_drained=queue_drained,
                 )
                 if queue_trace_summary is not None:
                     try:

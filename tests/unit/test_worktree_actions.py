@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.database.models import Session
+from src.database.models import RollbackEvent, Session
 from src.git.models import Worktree
 from src.handlers.actions import register_actions
 
@@ -117,6 +117,78 @@ async def test_worktree_switch_action_updates_session_cwd():
 
     deps.db.update_session_cwd.assert_awaited_once_with(
         "C123", "123.456", "/repo-worktrees/feature-x"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rollback_apply_rejects_preview_from_different_scope():
+    app = _FakeApp()
+    rollback_event = RollbackEvent(
+        id=7,
+        channel_id="C999",
+        thread_ts="999.000",
+        working_directory="/repo",
+        target_commit="abc123",
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(get_rollback_event=AsyncMock(return_value=rollback_event)),
+        trace_service=SimpleNamespace(),
+    )
+    register_actions(app, deps)
+
+    client = SimpleNamespace(chat_postEphemeral=AsyncMock(), chat_postMessage=AsyncMock())
+    await app.actions["rollback_apply"](
+        ack=AsyncMock(),
+        action={"value": "7"},
+        body=_base_body(),
+        client=client,
+        logger=MagicMock(),
+    )
+
+    client.chat_postEphemeral.assert_awaited_once()
+    assert (
+        "does not belong to this channel/thread scope"
+        in client.chat_postEphemeral.await_args.kwargs["text"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_rollback_apply_rejects_when_session_cwd_changed_since_preview():
+    app = _FakeApp()
+    rollback_event = RollbackEvent(
+        id=8,
+        channel_id="C123",
+        thread_ts="123.456",
+        working_directory="/repo-a",
+        target_commit="abc123",
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_rollback_event=AsyncMock(return_value=rollback_event),
+            get_or_create_session=AsyncMock(
+                return_value=Session(id=1, working_directory="/repo-b")
+            ),
+        ),
+        executor=None,
+        codex_executor=None,
+        trace_service=SimpleNamespace(),
+    )
+    register_actions(app, deps)
+
+    with patch("src.handlers.actions.TaskManager.get", new=AsyncMock(return_value=None)):
+        client = SimpleNamespace(chat_postEphemeral=AsyncMock(), chat_postMessage=AsyncMock())
+        await app.actions["rollback_apply"](
+            ack=AsyncMock(),
+            action={"value": "8"},
+            body=_base_body(),
+            client=client,
+            logger=MagicMock(),
+        )
+
+    client.chat_postMessage.assert_awaited_once()
+    assert (
+        "working directory changed after preview"
+        in client.chat_postMessage.await_args.kwargs["text"]
     )
 
 

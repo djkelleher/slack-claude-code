@@ -58,6 +58,7 @@ class TestTraceService:
             trace_run_id=17,
             channel_id="CTRACE",
             thread_ts="123.456",
+            working_directory="/repo",
             target_commit="abc123def456",
             preview_diff="",
         )
@@ -69,6 +70,7 @@ class TestTraceService:
             id=3,
             channel_id="CTRACE",
             thread_ts="123.456",
+            working_directory="/repo",
             target_commit="abc123def456",
             preview_diff="stat",
         )
@@ -76,6 +78,7 @@ class TestTraceService:
             id=3,
             channel_id="CTRACE",
             thread_ts="123.456",
+            working_directory="/repo",
             target_commit="abc123def456",
             preview_diff="stat",
             status="applied",
@@ -305,8 +308,56 @@ class TestTraceService:
             thread_ts="123.456",
             status_counts={"completed": 2, "failed": 0, "cancelled": 0},
             queue_item_ids=[10, 11, 10],
+            queue_drained=False,
         )
 
         assert summary is summary_row
         assert db.get_trace_run_by_queue_item.await_count == 2
         db.create_trace_queue_summary.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_build_queue_summary_closes_non_explicit_milestones_when_queue_drains(self):
+        """Drained queues should close inferred/fixed milestones they completed."""
+        config = TraceConfig(
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            enabled=True,
+            report_queue_end=True,
+        )
+        milestone = TraceMilestone(
+            id=8,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            name="Batch 1",
+            mode="inferred",
+            status="open",
+        )
+        run = TraceRun(
+            id=11,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            queue_item_id=99,
+            milestone_id=8,
+        )
+        db = SimpleNamespace(
+            get_trace_config=AsyncMock(return_value=config),
+            get_trace_run_by_queue_item=AsyncMock(return_value=run),
+            list_trace_commits=AsyncMock(return_value=[]),
+            get_trace_milestone=AsyncMock(return_value=milestone),
+            complete_trace_milestone=AsyncMock(return_value=True),
+            create_trace_queue_summary=AsyncMock(return_value=SimpleNamespace(id=1)),
+        )
+        service = TraceService(db, git_service=SimpleNamespace())
+
+        await service.build_queue_summary(
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            status_counts={"completed": 1, "failed": 0, "cancelled": 0},
+            queue_item_ids=[99],
+            queue_drained=True,
+        )
+
+        db.complete_trace_milestone.assert_awaited_once_with(8, summary="Queue drained")

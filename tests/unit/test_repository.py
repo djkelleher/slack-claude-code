@@ -362,6 +362,7 @@ class TestTraceOperations:
             trace_run_id=trace_run.id,
             channel_id="CTRACE",
             thread_ts="123.456",
+            working_directory="/repo",
             target_commit="abc123",
             preview_diff=" app.py | 2 +-",
         )
@@ -402,6 +403,7 @@ class TestTraceOperations:
         assert loaded_summaries[0].payload["run_ids"] == [trace_run.id]
         assert loaded_rollback is not None
         assert loaded_rollback.applied is True
+        assert loaded_rollback.working_directory == "/repo"
         assert loaded_rollback.checkpoint_name == "rollback-abc123"
         assert loaded_milestone is not None
         assert loaded_milestone.status == "completed"

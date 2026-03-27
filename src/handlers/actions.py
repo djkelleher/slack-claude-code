@@ -516,6 +516,7 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         try:
             rollback_event_id = int(action["value"])
             channel_id = body["channel"]["id"]
+            current_thread_ts = body.get("message", {}).get("thread_ts")
         except (KeyError, ValueError) as exc:
             logger.error(f"Invalid rollback action data: {exc}")
             return
@@ -526,6 +527,25 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 channel=channel_id,
                 user=body["user"]["id"],
                 text="Rollback preview not found.",
+            )
+            return
+        if rollback_event.applied:
+            await client.chat_postEphemeral(
+                channel=channel_id,
+                user=body["user"]["id"],
+                text="Rollback preview was already applied.",
+            )
+            return
+        normalized_current_thread = (current_thread_ts or "").strip() or None
+        normalized_event_thread = (rollback_event.thread_ts or "").strip() or None
+        if (
+            rollback_event.channel_id != channel_id
+            or normalized_current_thread != normalized_event_thread
+        ):
+            await client.chat_postEphemeral(
+                channel=channel_id,
+                user=body["user"]["id"],
+                text="Rollback preview does not belong to this channel/thread scope.",
             )
             return
         trace_service = getattr(deps, "trace_service", None)
@@ -569,6 +589,20 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             thread_ts=rollback_event.thread_ts,
             default_cwd=config.DEFAULT_WORKING_DIR,
         )
+        if (
+            rollback_event.working_directory is not None
+            and session.working_directory != rollback_event.working_directory
+        ):
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=rollback_event.thread_ts,
+                text="Rollback blocked because the session working directory changed after preview.",
+                blocks=error_message(
+                    "Rollback blocked because the session working directory changed after preview. "
+                    "Run `/rollback <commitish>` again from the current directory."
+                ),
+            )
+            return
         latest_runs = await deps.db.list_recent_trace_runs(
             channel_id, rollback_event.thread_ts, limit=1
         )

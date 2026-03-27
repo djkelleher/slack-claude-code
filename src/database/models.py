@@ -671,6 +671,7 @@ class RollbackEvent:
     trace_run_id: Optional[int] = None
     channel_id: str = ""
     thread_ts: Optional[str] = None
+    working_directory: Optional[str] = None
     target_commit: str = ""
     preview_diff: Optional[str] = None
     checkpoint_name: Optional[str] = None
@@ -687,12 +688,13 @@ class RollbackEvent:
             trace_run_id=row[1],
             channel_id=row[2],
             thread_ts=row[3],
-            target_commit=row[4] or "",
-            preview_diff=row[5],
-            checkpoint_name=row[6],
-            checkpoint_ref=row[7],
-            status=row[8] or "previewed",
-            applied=bool(row[9]),
-            created_at=datetime.fromisoformat(row[10]) if row[10] else datetime.now(),
-            applied_at=datetime.fromisoformat(row[11]) if row[11] else None,
+            working_directory=row[4],
+            target_commit=row[5] or "",
+            preview_diff=row[6],
+            checkpoint_name=row[7],
+            checkpoint_ref=row[8],
+            status=row[9] or "previewed",
+            applied=bool(row[10]),
+            created_at=datetime.fromisoformat(row[11]) if row[11] else datetime.now(),
+            applied_at=datetime.fromisoformat(row[12]) if row[12] else None,
         )

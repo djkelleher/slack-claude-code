@@ -274,7 +274,7 @@ class TraceService:
 
         summary = self._build_run_summary(
             trace_run=trace_run,
-            success=success,
+            final_status=final_status,
             output=output,
             error=error,
             commits=commits,
@@ -355,6 +355,7 @@ class TraceService:
         thread_ts: Optional[str],
         status_counts: dict[str, int],
         queue_item_ids: list[int],
+        queue_drained: bool,
     ) -> Optional[TraceQueueSummary]:
         """Create an aggregated queue summary when trace reporting is enabled."""
         trace_config = await self.get_config(channel_id, thread_ts)
@@ -368,12 +369,19 @@ class TraceService:
                 runs.append(run)
         commit_count = 0
         milestone_names: list[str] = []
+        milestones_by_id: dict[int, TraceMilestone] = {}
         for run in runs:
             commit_count += len(await self.db.list_trace_commits(run.id))
             if run.milestone_id:
                 milestone = await self.db.get_trace_milestone(run.milestone_id)
-                if milestone and milestone.name not in milestone_names:
-                    milestone_names.append(milestone.name)
+                if milestone is not None:
+                    milestones_by_id[milestone.id] = milestone
+                    if milestone.name not in milestone_names:
+                        milestone_names.append(milestone.name)
+        if queue_drained:
+            for milestone in milestones_by_id.values():
+                if milestone.status == "open" and milestone.mode != "explicit":
+                    await self.db.complete_trace_milestone(milestone.id, summary="Queue drained")
         summary_text = (
             f"Queue trace summary: {status_counts.get('completed', 0)} completed, "
             f"{status_counts.get('failed', 0)} failed, "
@@ -428,6 +436,7 @@ class TraceService:
             trace_run_id=trace_run_id,
             channel_id=channel_id,
             thread_ts=thread_ts,
+            working_directory=working_directory,
             target_commit=resolved_target,
             preview_diff=diff_text,
         )
@@ -447,14 +456,16 @@ class TraceService:
         if rollback_event is None:
             raise RuntimeError(f"Rollback event {rollback_event_id} not found")
 
+        target_working_directory = rollback_event.working_directory or working_directory
+
         checkpoint_name = None
         checkpoint_ref = None
-        if await self._is_git_repo(working_directory):
-            status = await self.git_service.get_status(working_directory)
+        if await self._is_git_repo(target_working_directory):
+            status = await self.git_service.get_status(target_working_directory)
             if status.has_changes():
                 checkpoint_name = f"rollback-{rollback_event.target_commit[:8]}-{uuid4().hex[:8]}"
                 checkpoint = await self.git_service.create_checkpoint(
-                    working_directory,
+                    target_working_directory,
                     checkpoint_name,
                     description="Safety checkpoint before rollback",
                 )
@@ -468,7 +479,10 @@ class TraceService:
                     description=checkpoint.description,
                     is_auto=True,
                 )
-        await self.git_service.reset_hard(working_directory, rollback_event.target_commit)
+        await self.git_service.reset_hard(
+            target_working_directory,
+            rollback_event.target_commit,
+        )
         await self.db.update_rollback_event(
             rollback_event_id,
             status="applied",
@@ -633,12 +647,12 @@ class TraceService:
     def _build_run_summary(
         *,
         trace_run: TraceRun,
-        success: bool,
+        final_status: str,
         output: str,
         error: Optional[str],
         commits: list[TraceCommit],
     ) -> str:
-        state = "completed" if success else "failed"
+        state = final_status
         verification_hint = (
             "verification mentioned"
             if "test" in (output or "").lower()

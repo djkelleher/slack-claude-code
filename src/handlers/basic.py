@@ -295,6 +295,21 @@ def _parse_enabled_text(value: str) -> bool:
     raise ValueError("Expected `on` or `off`.")
 
 
+def _trace_scope_matches(
+    *,
+    current_channel_id: str,
+    current_thread_ts: str | None,
+    run_channel_id: str,
+    run_thread_ts: str | None,
+) -> bool:
+    """Return True when a trace run belongs to the current Slack scope."""
+    normalized_current_thread = (current_thread_ts or "").strip() or None
+    normalized_run_thread = (run_thread_ts or "").strip() or None
+    return (
+        current_channel_id == run_channel_id and normalized_current_thread == normalized_run_thread
+    )
+
+
 def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register basic command handlers.
 
@@ -753,6 +768,13 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 run = await deps.db.get_trace_run_by_command(int(tokens[2]))
             elif target_type == "queue" and len(tokens) > 2:
                 run = await deps.db.get_trace_run_by_queue_item(int(tokens[2]))
+            if run is not None and not _trace_scope_matches(
+                current_channel_id=ctx.channel_id,
+                current_thread_ts=ctx.thread_ts,
+                run_channel_id=run.channel_id,
+                run_thread_ts=run.thread_ts,
+            ):
+                run = None
             if run is None:
                 await ctx.client.chat_postMessage(
                     channel=ctx.channel_id,

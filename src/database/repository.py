@@ -68,9 +68,9 @@ class DatabaseRepository:
                           created_at"""
     _TRACE_QUEUE_SUMMARY_SELECT = """id, session_id, channel_id, thread_ts, summary_text, payload,
                                   created_at"""
-    _ROLLBACK_EVENT_SELECT = """id, trace_run_id, channel_id, thread_ts, target_commit,
-                             preview_diff, checkpoint_name, checkpoint_ref, status, applied,
-                             created_at, applied_at"""
+    _ROLLBACK_EVENT_SELECT = """id, trace_run_id, channel_id, thread_ts, working_directory,
+                             target_commit, preview_diff, checkpoint_name, checkpoint_ref, status,
+                             applied, created_at, applied_at"""
 
     def __init__(self, db_path: str, timeout: float = DB_TIMEOUT):
         self.db_path = db_path
@@ -2497,6 +2497,7 @@ class DatabaseRepository:
         trace_run_id: Optional[int],
         channel_id: str,
         thread_ts: Optional[str],
+        working_directory: Optional[str],
         target_commit: str,
         preview_diff: Optional[str],
         checkpoint_name: Optional[str] = None,
@@ -2508,13 +2509,14 @@ class DatabaseRepository:
         async with self._get_connection() as db:
             cursor = await db.execute(
                 """INSERT INTO rollback_events
-                   (trace_run_id, channel_id, thread_ts, target_commit, preview_diff,
-                    checkpoint_name, checkpoint_ref, status, applied, applied_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (trace_run_id, channel_id, thread_ts, working_directory, target_commit,
+                    preview_diff, checkpoint_name, checkpoint_ref, status, applied, applied_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     trace_run_id,
                     channel_id,
                     self._normalize_thread_ts(thread_ts),
+                    working_directory,
                     target_commit,
                     preview_diff,
                     checkpoint_name,

@@ -275,6 +275,7 @@ CREATE TABLE IF NOT EXISTS rollback_events (
     trace_run_id INTEGER DEFAULT NULL,
     channel_id TEXT NOT NULL,
     thread_ts TEXT DEFAULT NULL,
+    working_directory TEXT DEFAULT NULL,
     target_commit TEXT NOT NULL,
     preview_diff TEXT DEFAULT NULL,
     checkpoint_name TEXT DEFAULT NULL,
@@ -527,6 +528,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                trace_run_id INTEGER DEFAULT NULL,
                channel_id TEXT NOT NULL,
                thread_ts TEXT DEFAULT NULL,
+               working_directory TEXT DEFAULT NULL,
                target_commit TEXT NOT NULL,
                preview_diff TEXT DEFAULT NULL,
                checkpoint_name TEXT DEFAULT NULL,
@@ -626,6 +628,15 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         trace_run_column_names,
         "git_base_is_clean",
         "ALTER TABLE trace_runs ADD COLUMN git_base_is_clean INTEGER DEFAULT NULL",
+    )
+    cursor = await db.execute("PRAGMA table_info(rollback_events)")
+    rollback_columns = await cursor.fetchall()
+    rollback_column_names = [col[1] for col in rollback_columns]
+    await _add_column_if_missing(
+        db,
+        rollback_column_names,
+        "working_directory",
+        "ALTER TABLE rollback_events ADD COLUMN working_directory TEXT DEFAULT NULL",
     )
 
     history_cursor = await db.execute("PRAGMA table_info(command_history)")
