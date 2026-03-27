@@ -43,7 +43,7 @@ class AiderBackendProvider:
                 id="aider/deepseek",
                 backend_id="aider",
                 display_name="Aider (DeepSeek)",
-                aliases=("aider", "aider-deepseek"),
+                aliases=("aider-deepseek",),
                 description="Aider with DeepSeek V3 - strong open-source coding model",
                 tier=ModelTier.STANDARD,
                 quality_score=3,
