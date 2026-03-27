@@ -67,6 +67,13 @@ def test_parse_queue_plan_mode_block_scopes_prompts() -> None:
     assert [item.mode_directive for item in prompts] == ["plan", "plan", None]
 
 
+def test_parse_queue_plan_milestone_marker_creates_non_prompt_entry() -> None:
+    prompts = parse_queue_plan_text("(milestone phase 1)\nfirst")
+    assert prompts[0].milestone_name == "phase 1"
+    assert prompts[0].prompt == ""
+    assert prompts[1].prompt == "first"
+
+
 def test_parse_queue_plan_nested_mode_block_overrides_parent() -> None:
     prompts = parse_queue_plan_text(
         "(mode: plan)\n"
@@ -414,6 +421,18 @@ async def test_materialize_queue_plan_without_branch_does_not_touch_git() -> Non
     git_service.validate_git_repo.assert_not_called()
     git_service.list_worktrees.assert_not_called()
     git_service.add_worktree.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_materialize_queue_plan_preserves_milestone_marker() -> None:
+    materialized = await materialize_queue_plan_text(
+        text="(milestone alpha)\nfirst",
+        working_directory="/repo",
+    )
+
+    assert materialized[0].milestone_name == "alpha"
+    assert materialized[0].prompt == ""
+    assert materialized[1].prompt == "first"
 
 
 @pytest.mark.asyncio

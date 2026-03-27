@@ -1,6 +1,7 @@
 """Git operations service for version control integration."""
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -220,6 +221,101 @@ class GitService:
             raise GitError(f"Failed to resolve HEAD: {stderr or stdout}")
         return None
 
+    async def get_remote_url(
+        self, working_directory: str, remote_name: str = "origin"
+    ) -> Optional[str]:
+        """Return a configured remote URL when available."""
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        stdout, _, returncode = await self._run_git_command(
+            working_directory, "remote", "get-url", remote_name
+        )
+        if returncode != 0 or not stdout:
+            return None
+        return stdout.strip()
+
+    async def get_upstream_remote_name(self, working_directory: str) -> Optional[str]:
+        """Return the remote name for the current branch upstream."""
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        stdout, _, returncode = await self._run_git_command(
+            working_directory, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"
+        )
+        if returncode != 0 or not stdout:
+            return None
+        remote_name, _sep, _branch = stdout.partition("/")
+        return remote_name.strip() or None
+
+    async def get_preferred_remote(
+        self, working_directory: str
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Return the best remote name/url for browsing links."""
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        origin_url = await self.get_remote_url(working_directory, "origin")
+        if origin_url:
+            return "origin", origin_url
+
+        upstream_remote = await self.get_upstream_remote_name(working_directory)
+        if upstream_remote:
+            return upstream_remote, await self.get_remote_url(working_directory, upstream_remote)
+        return None, None
+
+    @staticmethod
+    def normalize_github_remote_url(remote_url: Optional[str]) -> Optional[str]:
+        """Normalize GitHub git remotes into a browser base URL."""
+        if not remote_url:
+            return None
+        cleaned = remote_url.strip()
+        ssh_match = re.match(r"^git@github\.com:(.+?)(?:\.git)?$", cleaned)
+        if ssh_match:
+            return f"https://github.com/{ssh_match.group(1)}"
+        https_match = re.match(r"^https://github\.com/(.+?)(?:\.git)?/?$", cleaned)
+        if https_match:
+            return f"https://github.com/{https_match.group(1)}"
+        ssh_url_match = re.match(r"^ssh://git@github\.com/(.+?)(?:\.git)?$", cleaned)
+        if ssh_url_match:
+            return f"https://github.com/{ssh_url_match.group(1)}"
+        return None
+
+    @classmethod
+    def build_commit_url(cls, remote_url: Optional[str], commit_hash: str) -> Optional[str]:
+        """Build a commit URL when the remote is GitHub."""
+        base_url = cls.normalize_github_remote_url(remote_url)
+        if not base_url or not commit_hash:
+            return None
+        return f"{base_url}/commit/{commit_hash}"
+
+    @classmethod
+    def build_compare_url(
+        cls,
+        remote_url: Optional[str],
+        base_commit: Optional[str],
+        head_commit: str,
+    ) -> Optional[str]:
+        """Build a compare URL when both commits are known and the remote is GitHub."""
+        base_url = cls.normalize_github_remote_url(remote_url)
+        if not base_url or not base_commit or not head_commit:
+            return None
+        return f"{base_url}/compare/{base_commit}...{head_commit}"
+
+    @classmethod
+    def build_file_url(
+        cls,
+        remote_url: Optional[str],
+        commit_hash: str,
+        relative_path: str,
+    ) -> Optional[str]:
+        """Build a file permalink for GitHub remotes."""
+        base_url = cls.normalize_github_remote_url(remote_url)
+        if not base_url or not commit_hash or not relative_path:
+            return None
+        normalized_path = relative_path.lstrip("/")
+        return f"{base_url}/blob/{commit_hash}/{normalized_path}"
+
     async def get_commit_diffs_since(
         self,
         working_directory: str,
@@ -250,7 +346,7 @@ class GitService:
                 working_directory,
                 "show",
                 "--stat=0",
-                "--format=%H%n%h%n%s%n%an%n%aI",
+                "--format=%H%n%P%n%h%n%s%n%an%n%aI",
                 "--no-patch",
                 commit_hash,
             )
@@ -261,7 +357,7 @@ class GitService:
                 )
 
             metadata_lines = metadata_out.splitlines()
-            if len(metadata_lines) < 5:
+            if len(metadata_lines) < 6:
                 raise GitError(f"Unexpected commit metadata format for {commit_hash}")
 
             diff_out, diff_err, diff_code = await self._run_git_command(
@@ -288,10 +384,13 @@ class GitService:
             commits.append(
                 CommitDiff(
                     commit_hash=metadata_lines[0],
-                    short_hash=metadata_lines[1],
-                    subject=metadata_lines[2],
-                    author_name=metadata_lines[3],
-                    authored_at=metadata_lines[4],
+                    parent_hash=(
+                        metadata_lines[1].split()[0] if metadata_lines[1].split() else None
+                    ),
+                    short_hash=metadata_lines[2],
+                    subject=metadata_lines[3],
+                    author_name=metadata_lines[4],
+                    authored_at=metadata_lines[5],
                     diff=diff_text,
                 )
             )
@@ -355,6 +454,16 @@ class GitService:
         if returncode != 0:
             raise GitError(f"Failed to undo changes: {stderr}")
 
+        return True
+
+    async def stage_all_changes(self, working_directory: str) -> bool:
+        """Stage all tracked and untracked changes in the repository."""
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+
+        _, stderr, returncode = await self._run_git_command(working_directory, "add", "-A")
+        if returncode != 0:
+            raise GitError(f"Failed to stage changes: {stderr}")
         return True
 
     async def commit_changes(
@@ -480,6 +589,53 @@ class GitService:
         if returncode != 0:
             raise GitError(f"Failed to get current branch: {stderr}")
         return stdout.strip()
+
+    async def resolve_commit(self, working_directory: str, revision: str) -> str:
+        """Resolve a revision expression to a full commit hash."""
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "rev-parse", revision
+        )
+        if returncode != 0 or not stdout:
+            raise GitError(f"Failed to resolve commit `{revision}`: {stderr or stdout}")
+        return stdout.strip()
+
+    async def get_diff_between(
+        self,
+        working_directory: str,
+        base_commit: str,
+        head_commit: str,
+        *,
+        stat_only: bool = False,
+        max_size: int = 1_000_000,
+    ) -> str:
+        """Return a diff or diff stat between two revisions."""
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+        args = ["diff"]
+        if stat_only:
+            args.append("--stat")
+        args.extend([f"{base_commit}..{head_commit}"])
+        stdout, stderr, returncode = await self._run_git_command(working_directory, *args)
+        if returncode != 0:
+            raise GitError(f"Failed to get diff between revisions: {stderr or stdout}")
+        if not stdout:
+            return "(no diff)"
+        if len(stdout) > max_size:
+            return stdout[:max_size] + f"\n\n... (diff truncated, {len(stdout)} bytes total)"
+        return stdout
+
+    async def reset_hard(self, working_directory: str, target_commit: str) -> bool:
+        """Hard reset the current checkout to a target commit."""
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Not a git repository")
+        _, stderr, returncode = await self._run_git_command(
+            working_directory, "reset", "--hard", target_commit
+        )
+        if returncode != 0:
+            raise GitError(f"Failed to reset to `{target_commit}`: {stderr}")
+        return True
 
     # -------------------------------------------------------------------------
     # Worktree Operations

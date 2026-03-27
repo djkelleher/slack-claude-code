@@ -54,13 +54,19 @@ class TestHistorySelectionParsing:
 async def test_registers_history_aliases():
     """Basic commands should include both `/hist` and `/h`."""
     app = _FakeApp()
-    deps = SimpleNamespace(db=SimpleNamespace(), executor=SimpleNamespace())
+    deps = SimpleNamespace(
+        db=SimpleNamespace(),
+        executor=SimpleNamespace(),
+        trace_service=SimpleNamespace(),
+    )
 
     register_basic_commands(app, deps)
 
     assert "/hist" in app.handlers
     assert "/h" in app.handlers
     assert "/diff" in app.handlers
+    assert "/trace" in app.handlers
+    assert "/rollback" in app.handlers
 
 
 @pytest.mark.asyncio

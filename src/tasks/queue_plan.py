@@ -34,6 +34,7 @@ class QueuePlanPrompt:
     """Expanded queue prompt with optional branch context."""
 
     prompt: str
+    milestone_name: Optional[str] = None
     branch_name: Optional[str] = None
     parallel_group_id: Optional[str] = None
     parallel_limit: Optional[int] = None
@@ -45,6 +46,7 @@ class MaterializedQueuePlanPrompt:
     """Queue prompt ready for storage, with optional worktree override."""
 
     prompt: str
+    milestone_name: Optional[str] = None
     working_directory_override: Optional[str] = None
     parallel_group_id: Optional[str] = None
     parallel_limit: Optional[int] = None
@@ -102,13 +104,20 @@ class _ModeNode:
 
 
 @dataclass
+class _MilestoneNode:
+    name: str
+
+
+@dataclass
 class _ForNode:
     variable_name: str
     values: list[str]
     children: list["_Node"]
 
 
-_Node = _PromptNode | _BranchNode | _LoopNode | _ParallelNode | _ModeNode | _ForNode
+_Node = (
+    _PromptNode | _BranchNode | _LoopNode | _ParallelNode | _ModeNode | _MilestoneNode | _ForNode
+)
 _Marker = tuple[str] | tuple[str, int | None | str] | tuple[str, str, list[str]]
 
 
@@ -429,6 +438,7 @@ async def materialize_queue_plan_prompts(
         return [
             MaterializedQueuePlanPrompt(
                 prompt=item.prompt,
+                milestone_name=item.milestone_name,
                 parallel_group_id=item.parallel_group_id,
                 parallel_limit=item.parallel_limit,
                 mode_directive=item.mode_directive,
@@ -474,6 +484,7 @@ async def materialize_queue_plan_prompts(
     return [
         MaterializedQueuePlanPrompt(
             prompt=item.prompt,
+            milestone_name=item.milestone_name,
             working_directory_override=(
                 _join_worktree_subdirectory(
                     worktree_paths_by_branch[item.branch_name], current_subdirectory
@@ -565,6 +576,14 @@ def _parse_to_ast(text: str) -> list[_Node]:
             stack.append(_Frame(kind="mode", start_line=line_number, mode_directive=str(marker[1])))
             if inline_prompt:
                 stack[-1].prompt_lines.append(inline_prompt)
+            continue
+
+        if marker_type == "milestone":
+            if inline_prompt:
+                raise QueuePlanError(
+                    f"Line {line_number}: inline prompt is not supported on milestone markers."
+                )
+            current.nodes.append(_MilestoneNode(name=str(marker[1])))
             continue
 
         raise QueuePlanError(f"Line {line_number}: unsupported queue-plan marker.")
@@ -667,6 +686,24 @@ def _expand_nodes(
             out.append(
                 QueuePlanPrompt(
                     prompt=_substitute_loop_variables(node.prompt, substitutions),
+                    milestone_name=None,
+                    branch_name=active_branch,
+                    parallel_group_id=active_parallel_group_id,
+                    parallel_limit=active_parallel_limit,
+                    mode_directive=active_mode_directive,
+                )
+            )
+            continue
+
+        if isinstance(node, _MilestoneNode):
+            if max_items is not None and len(out) >= max_items:
+                raise QueuePlanError(
+                    f"Structured queue plan expands to more than {max_items} items."
+                )
+            out.append(
+                QueuePlanPrompt(
+                    prompt="",
+                    milestone_name=_substitute_loop_variables(node.name, substitutions),
                     branch_name=active_branch,
                     parallel_group_id=active_parallel_group_id,
                     parallel_limit=active_parallel_limit,
@@ -909,6 +946,8 @@ def _parse_block_marker_part(
             return _parse_loop_marker_value(count_text, line, marker_type="loop_start")
     if lowered.startswith("branch "):
         return _parse_branch_marker_value(body[len("branch ") :], marker_type="branch_start")
+    if lowered.startswith("milestone "):
+        return _parse_milestone_marker_value(body[len("milestone ") :], marker_type="milestone")
     if lowered.startswith("mode:"):
         return _parse_mode_marker_value(body[len("mode:") :], marker_type="mode_start")
     return None
@@ -937,6 +976,7 @@ def _looks_like_queue_directive_part(body: str) -> bool:
         or lowered.startswith("clear")
         or lowered.startswith("replace")
         or lowered.startswith("branch ")
+        or lowered.startswith("milestone ")
         or lowered.startswith("mode:")
         or lowered.startswith("loop")
         or lowered.startswith("parallel")
@@ -1007,6 +1047,14 @@ def _parse_mode_marker_value(mode_text: str, marker_type: str) -> tuple[str, str
     if not mode_value:
         raise QueuePlanError("Mode marker must include a mode value.")
     return marker_type, mode_value
+
+
+def _parse_milestone_marker_value(name_text: str, marker_type: str) -> tuple[str, str]:
+    """Parse and validate milestone marker payload."""
+    milestone_name = name_text.strip()
+    if not milestone_name:
+        raise QueuePlanError("Milestone marker must include a milestone name.")
+    return marker_type, milestone_name
 
 
 def _parse_parallel_marker_value(limit_text: Optional[str], line: str) -> tuple[str, Optional[int]]:

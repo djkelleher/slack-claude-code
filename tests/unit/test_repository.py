@@ -255,6 +255,157 @@ class TestSessionOperations:
         )
 
 
+class TestTraceOperations:
+    """Tests for traceability persistence operations."""
+
+    @pytest.mark.asyncio
+    async def test_upsert_trace_config_updates_existing_scope(self, db_repo):
+        """Trace config upserts should reuse one row per session scope."""
+        initial = await db_repo.get_trace_config("CTRACE", None)
+
+        assert initial.enabled is False
+        assert initial.thread_ts is None
+
+        updated = await db_repo.upsert_trace_config(
+            "CTRACE",
+            None,
+            enabled=True,
+            report_tool=True,
+            milestone_mode="fixed",
+            milestone_batch_size=3,
+            openlineage_enabled=True,
+        )
+        rewritten = await db_repo.upsert_trace_config(
+            "CTRACE",
+            None,
+            report_step=False,
+            report_queue_end=False,
+        )
+
+        assert updated.id is not None
+        assert rewritten.id == updated.id
+        assert rewritten.enabled is True
+        assert rewritten.report_tool is True
+        assert rewritten.report_step is False
+        assert rewritten.report_queue_end is False
+        assert rewritten.milestone_mode == "fixed"
+        assert rewritten.milestone_batch_size == 3
+        assert rewritten.openlineage_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_trace_run_commit_event_and_rollback_lifecycle(self, db_repo):
+        """Trace runs should persist lineage, commits, events, summaries, and rollback state."""
+        session = await db_repo.get_or_create_session("CTRACE", "123.456", "/repo")
+        milestone = await db_repo.create_trace_milestone(
+            session_id=session.id,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            name="Milestone A",
+            mode="explicit",
+            root_key="root-1",
+        )
+        trace_run = await db_repo.create_trace_run(
+            session_id=session.id,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            command_id=7,
+            queue_item_id=11,
+            parent_run_id=None,
+            root_run_id=None,
+            milestone_id=milestone.id,
+            execution_id="exec-1",
+            backend="codex",
+            model="gpt-5.4",
+            working_directory="/repo",
+            prompt="Implement tracing",
+            git_base_commit="abc123",
+            git_branch="main",
+            remote_name="origin",
+            remote_url="git@github.com:org/repo.git",
+        )
+
+        assert trace_run.root_run_id == trace_run.id
+
+        commits = await db_repo.replace_trace_commits(
+            trace_run.id,
+            [
+                {
+                    "commit_hash": "def456",
+                    "parent_hash": "abc123",
+                    "short_hash": "def456",
+                    "subject": "Add tracing",
+                    "author_name": "Codex",
+                    "authored_at": "2026-03-27T12:00:00+00:00",
+                    "commit_url": "https://github.com/org/repo/commit/def456",
+                    "compare_url": "https://github.com/org/repo/compare/abc123...def456",
+                    "origin": "system",
+                    "diff": "diff --git a/app.py b/app.py",
+                }
+            ],
+        )
+        event = await db_repo.create_trace_event(
+            trace_run_id=trace_run.id,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            event_type="run_finished",
+            payload={"success": True},
+        )
+        summary = await db_repo.create_trace_queue_summary(
+            session_id=session.id,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            summary_text="Queue trace summary",
+            payload={"run_ids": [trace_run.id]},
+        )
+        rollback = await db_repo.create_rollback_event(
+            trace_run_id=trace_run.id,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            target_commit="abc123",
+            preview_diff=" app.py | 2 +-",
+        )
+
+        await db_repo.update_trace_run(
+            trace_run.id,
+            status="completed",
+            git_head_commit="def456",
+            summary="completed: 1 commit(s), verification mentioned",
+        )
+        await db_repo.complete_trace_milestone(milestone.id, summary="done")
+        await db_repo.update_rollback_event(
+            rollback.id,
+            status="applied",
+            applied=True,
+            checkpoint_name="rollback-abc123",
+            checkpoint_ref="stash@{0}",
+        )
+
+        loaded_run = await db_repo.get_trace_run_by_execution_id("exec-1")
+        loaded_commits = await db_repo.list_trace_commits(trace_run.id)
+        loaded_events = await db_repo.list_trace_events(trace_run_id=trace_run.id)
+        loaded_summaries = await db_repo.list_trace_queue_summaries("CTRACE", "123.456")
+        loaded_rollback = await db_repo.get_rollback_event(rollback.id)
+        loaded_milestone = await db_repo.get_trace_milestone(milestone.id)
+
+        assert loaded_run is not None
+        assert loaded_run.status == "completed"
+        assert loaded_run.git_head_commit == "def456"
+        assert loaded_run.summary == "completed: 1 commit(s), verification mentioned"
+        assert len(commits) == 1
+        assert loaded_commits[0].origin == "system"
+        assert loaded_commits[0].compare_url.endswith("abc123...def456")
+        assert event.payload == {"success": True}
+        assert loaded_events[0].event_type == "run_finished"
+        assert summary.id == loaded_summaries[0].id
+        assert loaded_summaries[0].payload["run_ids"] == [trace_run.id]
+        assert loaded_rollback is not None
+        assert loaded_rollback.applied is True
+        assert loaded_rollback.checkpoint_name == "rollback-abc123"
+        assert loaded_milestone is not None
+        assert loaded_milestone.status == "completed"
+        assert loaded_milestone.summary == "done"
+
+
 class TestWorkspaceLeaseOperations:
     """Tests for workspace lease persistence."""
 

@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from src.config import config, get_backend_for_model
 
@@ -419,4 +419,278 @@ class QueueScheduledEvent:
             error_message=row[6],
             created_at=datetime.fromisoformat(row[7]) if row[7] else datetime.now(),
             executed_at=datetime.fromisoformat(row[8]) if row[8] else None,
+        )
+
+
+@dataclass
+class TraceConfig:
+    """Session-scope traceability and reporting settings."""
+
+    id: Optional[int] = None
+    channel_id: str = ""
+    thread_ts: Optional[str] = None
+    enabled: bool = False
+    auto_commit: bool = True
+    report_tool: bool = False
+    report_step: bool = True
+    report_milestone: bool = True
+    report_queue_end: bool = True
+    milestone_mode: str = "inferred"  # inferred, explicit, fixed
+    milestone_batch_size: Optional[int] = None
+    openlineage_enabled: bool = False
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "TraceConfig":
+        return cls(
+            id=row[0],
+            channel_id=row[1],
+            thread_ts=row[2],
+            enabled=bool(row[3]),
+            auto_commit=bool(row[4]),
+            report_tool=bool(row[5]),
+            report_step=bool(row[6]),
+            report_milestone=bool(row[7]),
+            report_queue_end=bool(row[8]),
+            milestone_mode=row[9] or "inferred",
+            milestone_batch_size=row[10],
+            openlineage_enabled=bool(row[11]),
+            created_at=datetime.fromisoformat(row[12]) if row[12] else datetime.now(),
+            updated_at=datetime.fromisoformat(row[13]) if row[13] else datetime.now(),
+        )
+
+    @classmethod
+    def default(cls, channel_id: str, thread_ts: Optional[str]) -> "TraceConfig":
+        """Return default trace settings for a scope."""
+        return cls(channel_id=channel_id, thread_ts=thread_ts)
+
+
+@dataclass
+class TraceMilestone:
+    """A logical milestone grouping traced executions."""
+
+    id: Optional[int] = None
+    session_id: int = 0
+    channel_id: str = ""
+    thread_ts: Optional[str] = None
+    name: str = ""
+    status: str = "open"  # open, completed
+    mode: str = "inferred"
+    root_key: Optional[str] = None
+    summary: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    completed_at: Optional[datetime] = None
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "TraceMilestone":
+        return cls(
+            id=row[0],
+            session_id=row[1],
+            channel_id=row[2],
+            thread_ts=row[3],
+            name=row[4],
+            status=row[5] or "open",
+            mode=row[6] or "inferred",
+            root_key=row[7],
+            summary=row[8],
+            created_at=datetime.fromisoformat(row[9]) if row[9] else datetime.now(),
+            completed_at=datetime.fromisoformat(row[10]) if row[10] else None,
+        )
+
+
+@dataclass
+class TraceRun:
+    """Trace record for one executed prompt or queue item."""
+
+    id: Optional[int] = None
+    session_id: int = 0
+    channel_id: str = ""
+    thread_ts: Optional[str] = None
+    command_id: Optional[int] = None
+    queue_item_id: Optional[int] = None
+    parent_run_id: Optional[int] = None
+    root_run_id: Optional[int] = None
+    milestone_id: Optional[int] = None
+    execution_id: str = ""
+    backend: str = ""
+    model: Optional[str] = None
+    working_directory: str = ""
+    prompt: str = ""
+    status: str = "running"  # running, completed, failed, cancelled
+    git_base_commit: Optional[str] = None
+    git_head_commit: Optional[str] = None
+    git_branch: Optional[str] = None
+    remote_name: Optional[str] = None
+    remote_url: Optional[str] = None
+    summary: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    completed_at: Optional[datetime] = None
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "TraceRun":
+        return cls(
+            id=row[0],
+            session_id=row[1],
+            channel_id=row[2],
+            thread_ts=row[3],
+            command_id=row[4],
+            queue_item_id=row[5],
+            parent_run_id=row[6],
+            root_run_id=row[7],
+            milestone_id=row[8],
+            execution_id=row[9],
+            backend=row[10] or "",
+            model=row[11],
+            working_directory=row[12] or "",
+            prompt=row[13] or "",
+            status=row[14] or "running",
+            git_base_commit=row[15],
+            git_head_commit=row[16],
+            git_branch=row[17],
+            remote_name=row[18],
+            remote_url=row[19],
+            summary=row[20],
+            created_at=datetime.fromisoformat(row[21]) if row[21] else datetime.now(),
+            completed_at=datetime.fromisoformat(row[22]) if row[22] else None,
+        )
+
+
+@dataclass
+class TraceCommit:
+    """Commit captured for one trace run."""
+
+    id: Optional[int] = None
+    trace_run_id: int = 0
+    commit_hash: str = ""
+    parent_hash: Optional[str] = None
+    short_hash: str = ""
+    subject: str = ""
+    author_name: str = ""
+    authored_at: str = ""
+    commit_url: Optional[str] = None
+    compare_url: Optional[str] = None
+    origin: str = "model"  # model, system
+    diff: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "TraceCommit":
+        return cls(
+            id=row[0],
+            trace_run_id=row[1],
+            commit_hash=row[2],
+            parent_hash=row[3],
+            short_hash=row[4],
+            subject=row[5] or "",
+            author_name=row[6] or "",
+            authored_at=row[7] or "",
+            commit_url=row[8],
+            compare_url=row[9],
+            origin=row[10] or "model",
+            diff=row[11],
+            created_at=datetime.fromisoformat(row[12]) if row[12] else datetime.now(),
+        )
+
+
+@dataclass
+class TraceEvent:
+    """Structured trace event for reporting and export."""
+
+    id: Optional[int] = None
+    trace_run_id: Optional[int] = None
+    channel_id: str = ""
+    thread_ts: Optional[str] = None
+    event_type: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "TraceEvent":
+        raw_payload = row[5]
+        payload: dict[str, Any] = {}
+        if raw_payload:
+            try:
+                parsed = json.loads(raw_payload)
+            except (TypeError, json.JSONDecodeError):
+                parsed = {}
+            if isinstance(parsed, dict):
+                payload = parsed
+        return cls(
+            id=row[0],
+            trace_run_id=row[1],
+            channel_id=row[2],
+            thread_ts=row[3],
+            event_type=row[4] or "",
+            payload=payload,
+            created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
+        )
+
+
+@dataclass
+class TraceQueueSummary:
+    """Aggregated queue-end trace summary."""
+
+    id: Optional[int] = None
+    session_id: int = 0
+    channel_id: str = ""
+    thread_ts: Optional[str] = None
+    summary_text: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "TraceQueueSummary":
+        raw_payload = row[5]
+        payload: dict[str, Any] = {}
+        if raw_payload:
+            try:
+                parsed = json.loads(raw_payload)
+            except (TypeError, json.JSONDecodeError):
+                parsed = {}
+            if isinstance(parsed, dict):
+                payload = parsed
+        return cls(
+            id=row[0],
+            session_id=row[1],
+            channel_id=row[2],
+            thread_ts=row[3],
+            summary_text=row[4] or "",
+            payload=payload,
+            created_at=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
+        )
+
+
+@dataclass
+class RollbackEvent:
+    """Preview or apply record for rollback operations."""
+
+    id: Optional[int] = None
+    trace_run_id: Optional[int] = None
+    channel_id: str = ""
+    thread_ts: Optional[str] = None
+    target_commit: str = ""
+    preview_diff: Optional[str] = None
+    checkpoint_name: Optional[str] = None
+    checkpoint_ref: Optional[str] = None
+    status: str = "previewed"  # previewed, applied, failed
+    applied: bool = False
+    created_at: datetime = field(default_factory=datetime.now)
+    applied_at: Optional[datetime] = None
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "RollbackEvent":
+        return cls(
+            id=row[0],
+            trace_run_id=row[1],
+            channel_id=row[2],
+            thread_ts=row[3],
+            target_commit=row[4] or "",
+            preview_diff=row[5],
+            checkpoint_name=row[6],
+            checkpoint_ref=row[7],
+            status=row[8] or "previewed",
+            applied=bool(row[9]),
+            created_at=datetime.fromisoformat(row[10]) if row[10] else datetime.now(),
+            applied_at=datetime.fromisoformat(row[11]) if row[11] else None,
         )

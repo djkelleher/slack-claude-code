@@ -474,6 +474,9 @@ class Config(BaseSettings):
 
     # GitHub repository for web viewer links
     GITHUB_REPO: str = ""
+    TRACE_OPENLINEAGE_ENABLED: bool = False
+    TRACE_OPENLINEAGE_URL: str = ""
+    TRACE_OPENLINEAGE_NAMESPACE: str = "slack-claude-code"
 
     # Codex configuration
     CODEX_SANDBOX_MODE: str = "danger-full-access"

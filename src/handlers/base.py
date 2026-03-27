@@ -76,6 +76,7 @@ class HandlerDependencies:
     codex_executor: Any = None  # Codex SubprocessExecutor
     backend_registry: Any = None  # BackendRegistry
     slash_command_router: Any = None  # SlashCommandRouter
+    trace_service: Any = None  # TraceService
 
 
 def slack_command(

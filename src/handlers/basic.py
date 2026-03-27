@@ -9,10 +9,16 @@ from slack_bolt.async_app import AsyncApp
 
 from src.config import config
 from src.database.models import CommandHistory
+from src.git.service import GitService
 from src.handlers.response_delivery import deliver_command_response
 from src.utils.formatters.command import error_message
 from src.utils.formatters.directory import cwd_updated, directory_listing
 from src.utils.formatters.streaming import processing_message
+from src.utils.formatters.trace import (
+    rollback_preview_blocks,
+    trace_config_blocks,
+    trace_lineage_blocks,
+)
 
 from .base import CommandContext, HandlerDependencies, slack_command
 
@@ -270,6 +276,16 @@ def _build_prompt_diff_file_content(
     return "\n\n".join(sections)
 
 
+def _parse_enabled_text(value: str) -> bool:
+    """Parse a simple on/off flag."""
+    normalized = (value or "").strip().lower()
+    if normalized in {"on", "true", "yes"}:
+        return True
+    if normalized in {"off", "false", "no"}:
+        return False
+    raise ValueError("Expected `on` or `off`.")
+
+
 def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register basic command handlers.
 
@@ -504,6 +520,288 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 if len(history) == 1
                 else "Prompt-scoped git commit diff snapshots"
             ),
+        )
+
+    @app.command("/trace")
+    @slack_command()
+    async def handle_trace(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Handle traceability configuration and reporting commands."""
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            default_cwd=config.DEFAULT_WORKING_DIR,
+        )
+        trace_service = deps.trace_service
+        if trace_service is None:
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Trace service unavailable.",
+                blocks=error_message("Trace service unavailable."),
+            )
+            return
+
+        tokens = ctx.text.split()
+        if not tokens:
+            trace_config = await trace_service.get_config(ctx.channel_id, ctx.thread_ts)
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Trace configuration",
+                blocks=trace_config_blocks(trace_config),
+            )
+            return
+
+        subcommand = tokens[0].lower()
+        if subcommand == "on":
+            openlineage_enabled = None
+            if len(tokens) > 1 and tokens[1].lower() == "openlineage":
+                openlineage_enabled = True
+            trace_config = await trace_service.enable_scope(
+                ctx.channel_id,
+                ctx.thread_ts,
+                openlineage_enabled=openlineage_enabled,
+            )
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Traceability enabled.",
+                blocks=trace_config_blocks(trace_config),
+            )
+            return
+
+        if subcommand == "off":
+            trace_config = await trace_service.disable_scope(ctx.channel_id, ctx.thread_ts)
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Traceability disabled.",
+                blocks=trace_config_blocks(trace_config),
+            )
+            return
+
+        if subcommand in {"tool", "step", "milestone-report", "queue-report", "openlineage"}:
+            if len(tokens) < 2:
+                raise ValueError(
+                    "Usage: /trace <tool|step|milestone-report|queue-report|openlineage> <on|off>"
+                )
+            enabled = _parse_enabled_text(tokens[1])
+            kwargs = {}
+            if subcommand == "tool":
+                kwargs["report_tool"] = enabled
+            elif subcommand == "step":
+                kwargs["report_step"] = enabled
+            elif subcommand == "milestone-report":
+                kwargs["report_milestone"] = enabled
+            elif subcommand == "queue-report":
+                kwargs["report_queue_end"] = enabled
+            else:
+                kwargs["openlineage_enabled"] = enabled
+            trace_config = await deps.db.upsert_trace_config(
+                ctx.channel_id,
+                ctx.thread_ts,
+                **kwargs,
+            )
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Trace configuration updated.",
+                blocks=trace_config_blocks(trace_config),
+            )
+            return
+
+        if subcommand == "mode":
+            if len(tokens) < 2:
+                raise ValueError("Usage: /trace mode <inferred|explicit|fixed [batch_size]>")
+            mode_name = tokens[1].lower()
+            batch_size = None
+            if mode_name == "fixed":
+                if len(tokens) < 3:
+                    raise ValueError("Usage: /trace mode fixed <batch_size>")
+                batch_size = int(tokens[2])
+                if batch_size < 1:
+                    raise ValueError("Batch size must be at least 1.")
+            elif mode_name not in {"inferred", "explicit"}:
+                raise ValueError("Mode must be `inferred`, `explicit`, or `fixed`.")
+            trace_config = await deps.db.upsert_trace_config(
+                ctx.channel_id,
+                ctx.thread_ts,
+                milestone_mode=mode_name,
+                milestone_batch_size=batch_size,
+            )
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Trace milestone mode updated.",
+                blocks=trace_config_blocks(trace_config),
+            )
+            return
+
+        if subcommand == "milestone":
+            milestone_name = ctx.text[len("milestone") :].strip()
+            if not milestone_name:
+                raise ValueError("Usage: /trace milestone <name>")
+            milestone = await deps.db.create_trace_milestone(
+                session_id=session.id,
+                channel_id=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                name=milestone_name,
+                mode="explicit",
+                root_key=f"manual:{session.id}:{milestone_name}",
+            )
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text=f"Milestone created: {milestone_name}",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Milestone created:* {milestone_name}\n`#{milestone.id}`",
+                        },
+                    }
+                ],
+            )
+            return
+
+        if subcommand == "report":
+            target = tokens[1].lower() if len(tokens) > 1 else "latest"
+            if target == "queue":
+                summaries = await deps.db.list_trace_queue_summaries(
+                    ctx.channel_id,
+                    ctx.thread_ts,
+                    limit=1,
+                )
+                if not summaries:
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text="No queue trace summaries yet.",
+                    )
+                    return
+                summary = summaries[0]
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text=summary.summary_text,
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": summary.summary_text},
+                        }
+                    ],
+                )
+                return
+
+            runs = await deps.db.list_recent_trace_runs(ctx.channel_id, ctx.thread_ts, limit=1)
+            if not runs:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="No trace runs yet for this scope.",
+                )
+                return
+            run = runs[0]
+            commits = await deps.db.list_trace_commits(run.id)
+            milestone = (
+                await deps.db.get_trace_milestone(run.milestone_id) if run.milestone_id else None
+            )
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Trace report",
+                blocks=trace_lineage_blocks(
+                    run,
+                    commits,
+                    events_count=len(
+                        await deps.db.list_trace_events(trace_run_id=run.id, limit=100)
+                    ),
+                    milestone=milestone,
+                ),
+            )
+            return
+
+        if subcommand == "lineage":
+            target_type = tokens[1].lower() if len(tokens) > 1 else "latest"
+            run = None
+            if target_type == "latest":
+                runs = await deps.db.list_recent_trace_runs(ctx.channel_id, ctx.thread_ts, limit=1)
+                run = runs[0] if runs else None
+            elif target_type == "run" and len(tokens) > 2:
+                run = await deps.db.get_trace_run(int(tokens[2]))
+            elif target_type == "command" and len(tokens) > 2:
+                run = await deps.db.get_trace_run_by_command(int(tokens[2]))
+            elif target_type == "queue" and len(tokens) > 2:
+                run = await deps.db.get_trace_run_by_queue_item(int(tokens[2]))
+            if run is None:
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="No matching trace run found.",
+                )
+                return
+            commits = await deps.db.list_trace_commits(run.id)
+            milestone = (
+                await deps.db.get_trace_milestone(run.milestone_id) if run.milestone_id else None
+            )
+            events = await deps.db.list_trace_events(trace_run_id=run.id, limit=100)
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Trace lineage",
+                blocks=trace_lineage_blocks(
+                    run,
+                    commits,
+                    events_count=len(events),
+                    milestone=milestone,
+                ),
+            )
+            return
+
+        raise ValueError(
+            "Usage: /trace [on|off|tool on|step on|milestone-report on|queue-report on|openlineage on|"
+            "mode <inferred|explicit|fixed N>|report [latest|queue]|"
+            "lineage [latest|run ID|command ID|queue ID]|milestone <name>]"
+        )
+
+    @app.command("/rollback")
+    @slack_command(require_text=True, usage_hint="Usage: /rollback <commitish>")
+    async def handle_rollback(ctx: CommandContext, deps: HandlerDependencies = deps):
+        """Preview a rollback to a target commit."""
+        session = await deps.db.get_or_create_session(
+            ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            default_cwd=config.DEFAULT_WORKING_DIR,
+        )
+        git_service = GitService()
+        if not await git_service.validate_git_repo(session.working_directory):
+            await ctx.client.chat_postMessage(
+                channel=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                text="Current working directory is not a git repository.",
+                blocks=error_message("Current working directory is not a git repository."),
+            )
+            return
+        trace_service = getattr(deps, "trace_service", None)
+        if trace_service is None:
+            raise ValueError("Trace service unavailable.")
+        latest_trace_runs = await deps.db.list_recent_trace_runs(
+            ctx.channel_id, ctx.thread_ts, limit=1
+        )
+        trace_run_id = latest_trace_runs[0].id if latest_trace_runs else None
+        rollback_event, preview = await trace_service.preview_rollback(
+            channel_id=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            working_directory=session.working_directory,
+            target_commit=ctx.text,
+            trace_run_id=trace_run_id,
+        )
+        await ctx.client.chat_postMessage(
+            channel=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            text=f"Rollback preview for {preview.target_commit}",
+            blocks=rollback_preview_blocks(rollback_event, preview),
         )
 
     @app.command("/ls")

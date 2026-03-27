@@ -163,6 +163,128 @@ CREATE TABLE IF NOT EXISTS workspace_leases (
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
+-- Trace/reporting configuration per session scope
+CREATE TABLE IF NOT EXISTS trace_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
+    enabled INTEGER DEFAULT 0,
+    auto_commit INTEGER DEFAULT 1,
+    report_tool INTEGER DEFAULT 0,
+    report_step INTEGER DEFAULT 1,
+    report_milestone INTEGER DEFAULT 1,
+    report_queue_end INTEGER DEFAULT 1,
+    milestone_mode TEXT DEFAULT 'inferred',
+    milestone_batch_size INTEGER DEFAULT NULL,
+    openlineage_enabled INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Trace milestones
+CREATE TABLE IF NOT EXISTS trace_milestones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
+    name TEXT NOT NULL,
+    status TEXT DEFAULT 'open',
+    mode TEXT DEFAULT 'inferred',
+    root_key TEXT DEFAULT NULL,
+    summary TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP DEFAULT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+-- Trace run records
+CREATE TABLE IF NOT EXISTS trace_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
+    command_id INTEGER DEFAULT NULL,
+    queue_item_id INTEGER DEFAULT NULL,
+    parent_run_id INTEGER DEFAULT NULL,
+    root_run_id INTEGER DEFAULT NULL,
+    milestone_id INTEGER DEFAULT NULL,
+    execution_id TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    model TEXT DEFAULT NULL,
+    working_directory TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    status TEXT DEFAULT 'running',
+    git_base_commit TEXT DEFAULT NULL,
+    git_head_commit TEXT DEFAULT NULL,
+    git_branch TEXT DEFAULT NULL,
+    remote_name TEXT DEFAULT NULL,
+    remote_url TEXT DEFAULT NULL,
+    summary TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP DEFAULT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    FOREIGN KEY (milestone_id) REFERENCES trace_milestones(id)
+);
+
+-- Commits captured for traced runs
+CREATE TABLE IF NOT EXISTS trace_commits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_run_id INTEGER NOT NULL,
+    commit_hash TEXT NOT NULL,
+    parent_hash TEXT DEFAULT NULL,
+    short_hash TEXT NOT NULL,
+    subject TEXT DEFAULT NULL,
+    author_name TEXT DEFAULT NULL,
+    authored_at TEXT DEFAULT NULL,
+    commit_url TEXT DEFAULT NULL,
+    compare_url TEXT DEFAULT NULL,
+    origin TEXT DEFAULT 'model',
+    diff TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (trace_run_id) REFERENCES trace_runs(id)
+);
+
+-- Structured trace events
+CREATE TABLE IF NOT EXISTS trace_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_run_id INTEGER DEFAULT NULL,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (trace_run_id) REFERENCES trace_runs(id)
+);
+
+-- Queue-end trace summaries
+CREATE TABLE IF NOT EXISTS trace_queue_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
+    summary_text TEXT NOT NULL,
+    payload TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+-- Rollback preview/apply records
+CREATE TABLE IF NOT EXISTS rollback_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_run_id INTEGER DEFAULT NULL,
+    channel_id TEXT NOT NULL,
+    thread_ts TEXT DEFAULT NULL,
+    target_commit TEXT NOT NULL,
+    preview_diff TEXT DEFAULT NULL,
+    checkpoint_name TEXT DEFAULT NULL,
+    checkpoint_ref TEXT DEFAULT NULL,
+    status TEXT DEFAULT 'previewed',
+    applied INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    applied_at TIMESTAMP DEFAULT NULL,
+    FOREIGN KEY (trace_run_id) REFERENCES trace_runs(id)
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel_thread
@@ -190,6 +312,22 @@ CREATE INDEX IF NOT EXISTS idx_workspace_leases_repo ON workspace_leases(repo_ro
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_leases_active_root
 ON workspace_leases(leased_root)
 WHERE status = 'active' AND released_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trace_configs_scope
+ON trace_configs(channel_id, COALESCE(thread_ts, ''));
+CREATE INDEX IF NOT EXISTS idx_trace_runs_scope ON trace_runs(channel_id, thread_ts, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trace_runs_command ON trace_runs(command_id);
+CREATE INDEX IF NOT EXISTS idx_trace_runs_queue_item ON trace_runs(queue_item_id);
+CREATE INDEX IF NOT EXISTS idx_trace_runs_milestone ON trace_runs(milestone_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trace_commits_run ON trace_commits(trace_run_id, id ASC);
+CREATE INDEX IF NOT EXISTS idx_trace_commits_hash ON trace_commits(commit_hash);
+CREATE INDEX IF NOT EXISTS idx_trace_events_run ON trace_events(trace_run_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_trace_events_scope ON trace_events(channel_id, thread_ts, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trace_milestones_scope
+ON trace_milestones(channel_id, thread_ts, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trace_queue_summaries_scope
+ON trace_queue_summaries(channel_id, thread_ts, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rollback_events_scope
+ON rollback_events(channel_id, thread_ts, created_at DESC);
 """
 
 
@@ -281,6 +419,165 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_leases_active_root "
         "ON workspace_leases(leased_root) "
         "WHERE status = 'active' AND released_at IS NULL"
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS trace_configs (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               channel_id TEXT NOT NULL,
+               thread_ts TEXT DEFAULT NULL,
+               enabled INTEGER DEFAULT 0,
+               auto_commit INTEGER DEFAULT 1,
+               report_tool INTEGER DEFAULT 0,
+               report_step INTEGER DEFAULT 1,
+               report_milestone INTEGER DEFAULT 1,
+               report_queue_end INTEGER DEFAULT 1,
+               milestone_mode TEXT DEFAULT 'inferred',
+               milestone_batch_size INTEGER DEFAULT NULL,
+               openlineage_enabled INTEGER DEFAULT 0,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS trace_milestones (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               session_id INTEGER NOT NULL,
+               channel_id TEXT NOT NULL,
+               thread_ts TEXT DEFAULT NULL,
+               name TEXT NOT NULL,
+               status TEXT DEFAULT 'open',
+               mode TEXT DEFAULT 'inferred',
+               root_key TEXT DEFAULT NULL,
+               summary TEXT DEFAULT NULL,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               completed_at TIMESTAMP DEFAULT NULL
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS trace_runs (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               session_id INTEGER NOT NULL,
+               channel_id TEXT NOT NULL,
+               thread_ts TEXT DEFAULT NULL,
+               command_id INTEGER DEFAULT NULL,
+               queue_item_id INTEGER DEFAULT NULL,
+               parent_run_id INTEGER DEFAULT NULL,
+               root_run_id INTEGER DEFAULT NULL,
+               milestone_id INTEGER DEFAULT NULL,
+               execution_id TEXT NOT NULL,
+               backend TEXT NOT NULL,
+               model TEXT DEFAULT NULL,
+               working_directory TEXT NOT NULL,
+               prompt TEXT NOT NULL,
+               status TEXT DEFAULT 'running',
+               git_base_commit TEXT DEFAULT NULL,
+               git_head_commit TEXT DEFAULT NULL,
+               git_branch TEXT DEFAULT NULL,
+               remote_name TEXT DEFAULT NULL,
+               remote_url TEXT DEFAULT NULL,
+               summary TEXT DEFAULT NULL,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               completed_at TIMESTAMP DEFAULT NULL
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS trace_commits (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               trace_run_id INTEGER NOT NULL,
+               commit_hash TEXT NOT NULL,
+               parent_hash TEXT DEFAULT NULL,
+               short_hash TEXT NOT NULL,
+               subject TEXT DEFAULT NULL,
+               author_name TEXT DEFAULT NULL,
+               authored_at TEXT DEFAULT NULL,
+               commit_url TEXT DEFAULT NULL,
+               compare_url TEXT DEFAULT NULL,
+               origin TEXT DEFAULT 'model',
+               diff TEXT DEFAULT NULL,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS trace_events (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               trace_run_id INTEGER DEFAULT NULL,
+               channel_id TEXT NOT NULL,
+               thread_ts TEXT DEFAULT NULL,
+               event_type TEXT NOT NULL,
+               payload TEXT DEFAULT NULL,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS trace_queue_summaries (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               session_id INTEGER NOT NULL,
+               channel_id TEXT NOT NULL,
+               thread_ts TEXT DEFAULT NULL,
+               summary_text TEXT NOT NULL,
+               payload TEXT DEFAULT NULL,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS rollback_events (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               trace_run_id INTEGER DEFAULT NULL,
+               channel_id TEXT NOT NULL,
+               thread_ts TEXT DEFAULT NULL,
+               target_commit TEXT NOT NULL,
+               preview_diff TEXT DEFAULT NULL,
+               checkpoint_name TEXT DEFAULT NULL,
+               checkpoint_ref TEXT DEFAULT NULL,
+               status TEXT DEFAULT 'previewed',
+               applied INTEGER DEFAULT 0,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               applied_at TIMESTAMP DEFAULT NULL
+           )"""
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_trace_configs_scope "
+        "ON trace_configs(channel_id, COALESCE(thread_ts, ''))"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_runs_scope "
+        "ON trace_runs(channel_id, thread_ts, created_at DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_runs_command " "ON trace_runs(command_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_runs_queue_item " "ON trace_runs(queue_item_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_runs_milestone "
+        "ON trace_runs(milestone_id, created_at DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_commits_run " "ON trace_commits(trace_run_id, id ASC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_commits_hash " "ON trace_commits(commit_hash)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_events_run "
+        "ON trace_events(trace_run_id, created_at ASC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_events_scope "
+        "ON trace_events(channel_id, thread_ts, created_at DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_milestones_scope "
+        "ON trace_milestones(channel_id, thread_ts, created_at DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trace_queue_summaries_scope "
+        "ON trace_queue_summaries(channel_id, thread_ts, created_at DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rollback_events_scope "
+        "ON rollback_events(channel_id, thread_ts, created_at DESC)"
     )
 
     # Check if model column exists in sessions table
@@ -471,6 +768,13 @@ async def reset_database(db_path: str) -> None:
             DROP TABLE IF EXISTS queue_scheduled_events;
             DROP TABLE IF EXISTS queue_controls;
             DROP TABLE IF EXISTS git_checkpoints;
+            DROP TABLE IF EXISTS rollback_events;
+            DROP TABLE IF EXISTS trace_queue_summaries;
+            DROP TABLE IF EXISTS trace_events;
+            DROP TABLE IF EXISTS trace_commits;
+            DROP TABLE IF EXISTS trace_runs;
+            DROP TABLE IF EXISTS trace_milestones;
+            DROP TABLE IF EXISTS trace_configs;
             DROP TABLE IF EXISTS uploaded_files;
             DROP TABLE IF EXISTS queue_items;
             DROP TABLE IF EXISTS parallel_jobs;

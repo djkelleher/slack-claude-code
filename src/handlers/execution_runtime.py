@@ -10,8 +10,10 @@ from slack_sdk.errors import SlackApiError
 from src.handlers.command_router import CommandRouteResult, execute_for_session
 from src.handlers.response_delivery import deliver_command_response
 from src.question.manager import QuestionManager
+from src.trace.service import TraceService
 from src.utils.formatters.command import error_message
 from src.utils.formatters.streaming import processing_fallback_text, processing_message
+from src.utils.formatters.trace import trace_step_report_blocks
 from src.utils.mode_directives import PlanModeDirective
 from src.utils.streaming import StreamingMessageState, create_streaming_callback
 
@@ -70,6 +72,8 @@ async def execute_prompt_with_runtime(
 
     smart_concat, terminal_style = streaming_flags_for_session(session)
     execution_id = str(uuid.uuid4())
+    started_trace_run = None
+    trace_service = getattr(deps, "trace_service", None)
 
     async def on_streaming_error(error_msg: str) -> None:
         """Post streaming-update failures back to the user thread."""
@@ -134,6 +138,16 @@ async def execute_prompt_with_runtime(
         return create_streaming_callback(streaming_state)
 
     try:
+        if trace_service is not None:
+            started_trace_run = await trace_service.start_run(
+                session=session,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                command_id=cmd_history.id,
+                queue_item_id=None,
+                execution_id=execution_id,
+                prompt=prompt,
+            )
         route = await execute_for_session(
             deps=deps,
             session=session,
@@ -150,6 +164,20 @@ async def execute_prompt_with_runtime(
             plan_mode_directive=plan_mode_directive,
         )
         result = route.result
+        finalized_trace_run = None
+        if started_trace_run is not None:
+            finalized_trace_run = await trace_service.finalize_run(
+                trace_run_id=started_trace_run.run.id,
+                success=result.success,
+                output=result.output or "",
+                error=result.error,
+                git_tool_events=result.git_tool_events,
+            )
+            git_diff_summary, git_diff_output = TraceService.format_commit_snapshot(
+                finalized_trace_run.commits
+            )
+            result.git_diff_summary = git_diff_summary
+            result.git_diff_output = git_diff_output
 
         if result.success:
             await deps.db.update_command_status(cmd_history.id, "completed", result.output)
@@ -189,6 +217,23 @@ async def execute_prompt_with_runtime(
             api_with_retry=api_with_retry,
             terminal_style=route.backend == "codex",
         )
+        if finalized_trace_run is not None and started_trace_run is not None:
+            if started_trace_run.config.report_step:
+                milestone = None
+                if finalized_trace_run.run.milestone_id is not None:
+                    milestone = await deps.db.get_trace_milestone(
+                        finalized_trace_run.run.milestone_id
+                    )
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text="Trace step report",
+                    blocks=trace_step_report_blocks(
+                        finalized_trace_run.run,
+                        finalized_trace_run.commits,
+                        milestone=milestone,
+                    ),
+                )
         return ExecutionDeliveryResult(
             route=route, command_id=cmd_history.id, message_ts=message_ts
         )

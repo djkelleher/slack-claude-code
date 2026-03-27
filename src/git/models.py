@@ -82,6 +82,7 @@ class CommitDiff:
     """Metadata and patch content for one git commit."""
 
     commit_hash: str
+    parent_hash: Optional[str]
     short_hash: str
     subject: str
     author_name: str

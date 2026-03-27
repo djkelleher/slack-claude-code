@@ -6,6 +6,7 @@ from src.backends.registry import BackendRegistry
 from src.claude.sdk_executor import SDKExecutor as ClaudeExecutor
 from src.codex.subprocess_executor import SubprocessExecutor as CodexExecutor
 from src.database.repository import DatabaseRepository
+from src.trace.service import TraceService
 
 from .base import HandlerDependencies
 from .basic import register_basic_commands
@@ -56,6 +57,7 @@ def register_commands(
         executor=executor,
         codex_executor=codex_executor,
         backend_registry=backend_registry,
+        trace_service=TraceService(db),
     )
 
     # Shared handlers (work with any backend)

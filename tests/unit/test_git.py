@@ -303,10 +303,14 @@ class TestGitServiceAsync:
                 with patch.object(service, "_run_git_command") as mock_cmd:
                     mock_cmd.side_effect = [
                         ("abc123\ndef456", "", 0),
-                        ("abc123full\nabc123\nFirst commit\nDan\n2026-03-25T16:00:00+00:00", "", 0),
+                        (
+                            "abc123full\nbase001\nabc123\nFirst commit\nDan\n2026-03-25T16:00:00+00:00",
+                            "",
+                            0,
+                        ),
                         ("diff --git a/a.py b/a.py", "", 0),
                         (
-                            "def456full\ndef456\nSecond commit\nDan\n2026-03-25T16:05:00+00:00",
+                            "def456full\nabc123full\ndef456\nSecond commit\nDan\n2026-03-25T16:05:00+00:00",
                             "",
                             0,
                         ),
@@ -318,10 +322,23 @@ class TestGitServiceAsync:
                     )
 
         assert [commit.short_hash for commit in commits] == ["abc123", "def456"]
+        assert commits[0].parent_hash == "base001"
         assert commits[0].subject == "First commit"
         assert "diff --git a/a.py b/a.py" in commits[0].diff
         assert commits[1].subject == "Second commit"
         assert "diff --git a/b.py b/b.py" in commits[1].diff
+
+    def test_normalize_github_remote_url_handles_ssh_and_https(self):
+        """GitHub remote normalization should support common remote formats."""
+        assert (
+            GitService.normalize_github_remote_url("git@github.com:owner/repo.git")
+            == "https://github.com/owner/repo"
+        )
+        assert (
+            GitService.normalize_github_remote_url("https://github.com/owner/repo.git")
+            == "https://github.com/owner/repo"
+        )
+        assert GitService.normalize_github_remote_url("git@gitlab.com:owner/repo.git") is None
 
     @pytest.mark.asyncio
     async def test_get_status_parses_output(self, tmp_path):

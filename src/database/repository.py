@@ -14,7 +14,14 @@ from .models import (
     QueueControl,
     QueueItem,
     QueueScheduledEvent,
+    RollbackEvent,
     Session,
+    TraceCommit,
+    TraceConfig,
+    TraceEvent,
+    TraceMilestone,
+    TraceQueueSummary,
+    TraceRun,
     UploadedFile,
     WorkspaceLease,
 )
@@ -44,6 +51,25 @@ class DatabaseRepository:
                               leased_root, leased_cwd, base_cwd, relative_subdir, lease_kind,
                               worktree_name, worktree_origin, merge_status, status,
                               created_at, released_at"""
+    _TRACE_CONFIG_SELECT = """id, channel_id, thread_ts, enabled, auto_commit, report_tool,
+                           report_step, report_milestone, report_queue_end, milestone_mode,
+                           milestone_batch_size, openlineage_enabled, created_at, updated_at"""
+    _TRACE_MILESTONE_SELECT = """id, session_id, channel_id, thread_ts, name, status, mode,
+                              root_key, summary, created_at, completed_at"""
+    _TRACE_RUN_SELECT = """id, session_id, channel_id, thread_ts, command_id, queue_item_id,
+                        parent_run_id, root_run_id, milestone_id, execution_id, backend, model,
+                        working_directory, prompt, status, git_base_commit, git_head_commit,
+                        git_branch, remote_name, remote_url, summary, created_at, completed_at"""
+    _TRACE_COMMIT_SELECT = """id, trace_run_id, commit_hash, parent_hash, short_hash, subject,
+                           author_name, authored_at, commit_url, compare_url, origin, diff,
+                           created_at"""
+    _TRACE_EVENT_SELECT = """id, trace_run_id, channel_id, thread_ts, event_type, payload,
+                          created_at"""
+    _TRACE_QUEUE_SUMMARY_SELECT = """id, session_id, channel_id, thread_ts, summary_text, payload,
+                                  created_at"""
+    _ROLLBACK_EVENT_SELECT = """id, trace_run_id, channel_id, thread_ts, target_commit,
+                             preview_diff, checkpoint_name, checkpoint_ref, status, applied,
+                             created_at, applied_at"""
 
     def __init__(self, db_path: str, timeout: float = DB_TIMEOUT):
         self.db_path = db_path
@@ -1880,6 +1906,655 @@ class DatabaseRepository:
             )
             await db.commit()
             return cursor.rowcount
+
+    # -------------------------------------------------------------------------
+    # Traceability / reporting operations
+    # -------------------------------------------------------------------------
+
+    async def get_trace_config(self, channel_id: str, thread_ts: Optional[str]) -> TraceConfig:
+        """Return trace configuration for one session scope."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_CONFIG_SELECT}
+                   FROM trace_configs
+                   WHERE {self._SESSION_SCOPE_WHERE}
+                   ORDER BY updated_at DESC, id DESC
+                   LIMIT 1""",
+                self._scope_params(channel_id, thread_ts),
+            )
+            row = await cursor.fetchone()
+            if row:
+                return TraceConfig.from_row(row)
+        return TraceConfig.default(channel_id, self._normalize_thread_ts(thread_ts))
+
+    async def upsert_trace_config(
+        self,
+        channel_id: str,
+        thread_ts: Optional[str],
+        *,
+        enabled: Optional[bool] = None,
+        auto_commit: Optional[bool] = None,
+        report_tool: Optional[bool] = None,
+        report_step: Optional[bool] = None,
+        report_milestone: Optional[bool] = None,
+        report_queue_end: Optional[bool] = None,
+        milestone_mode: Optional[str] = None,
+        milestone_batch_size: Optional[int] = None,
+        openlineage_enabled: Optional[bool] = None,
+    ) -> TraceConfig:
+        """Create or update trace configuration for a scope."""
+        normalized_thread_ts = self._normalize_thread_ts(thread_ts)
+        current = await self.get_trace_config(channel_id, normalized_thread_ts)
+        values = {
+            "enabled": current.enabled if enabled is None else bool(enabled),
+            "auto_commit": current.auto_commit if auto_commit is None else bool(auto_commit),
+            "report_tool": current.report_tool if report_tool is None else bool(report_tool),
+            "report_step": current.report_step if report_step is None else bool(report_step),
+            "report_milestone": (
+                current.report_milestone if report_milestone is None else bool(report_milestone)
+            ),
+            "report_queue_end": (
+                current.report_queue_end if report_queue_end is None else bool(report_queue_end)
+            ),
+            "milestone_mode": milestone_mode or current.milestone_mode or "inferred",
+            "milestone_batch_size": (
+                current.milestone_batch_size
+                if milestone_batch_size is None
+                else milestone_batch_size
+            ),
+            "openlineage_enabled": (
+                current.openlineage_enabled
+                if openlineage_enabled is None
+                else bool(openlineage_enabled)
+            ),
+        }
+        async with self._transact() as db:
+            cursor = await db.execute(
+                """SELECT id FROM trace_configs
+                   WHERE """
+                + self._SESSION_SCOPE_WHERE
+                + """
+                   ORDER BY updated_at DESC, id DESC
+                   LIMIT 1""",
+                self._scope_params(channel_id, normalized_thread_ts),
+            )
+            row = await cursor.fetchone()
+            params = (
+                1 if values["enabled"] else 0,
+                1 if values["auto_commit"] else 0,
+                1 if values["report_tool"] else 0,
+                1 if values["report_step"] else 0,
+                1 if values["report_milestone"] else 0,
+                1 if values["report_queue_end"] else 0,
+                values["milestone_mode"],
+                values["milestone_batch_size"],
+                1 if values["openlineage_enabled"] else 0,
+                datetime.now(timezone.utc).isoformat(),
+            )
+            if row:
+                await db.execute(
+                    """UPDATE trace_configs
+                       SET enabled = ?, auto_commit = ?, report_tool = ?, report_step = ?,
+                           report_milestone = ?, report_queue_end = ?, milestone_mode = ?,
+                           milestone_batch_size = ?, openlineage_enabled = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (*params, row[0]),
+                )
+            else:
+                await db.execute(
+                    """INSERT INTO trace_configs
+                       (channel_id, thread_ts, enabled, auto_commit, report_tool, report_step,
+                        report_milestone, report_queue_end, milestone_mode, milestone_batch_size,
+                        openlineage_enabled, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (channel_id, normalized_thread_ts, *params),
+                )
+        return await self.get_trace_config(channel_id, normalized_thread_ts)
+
+    async def create_trace_milestone(
+        self,
+        *,
+        session_id: int,
+        channel_id: str,
+        thread_ts: Optional[str],
+        name: str,
+        mode: str,
+        root_key: Optional[str] = None,
+    ) -> TraceMilestone:
+        """Create a trace milestone record."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """INSERT INTO trace_milestones
+                   (session_id, channel_id, thread_ts, name, status, mode, root_key)
+                   VALUES (?, ?, ?, ?, 'open', ?, ?)""",
+                (
+                    session_id,
+                    channel_id,
+                    self._normalize_thread_ts(thread_ts),
+                    name,
+                    mode,
+                    root_key,
+                ),
+            )
+            await db.commit()
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_MILESTONE_SELECT}
+                   FROM trace_milestones
+                   WHERE id = ?""",
+                (cursor.lastrowid,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError("Failed to load created trace milestone")
+            return TraceMilestone.from_row(row)
+
+    async def get_open_trace_milestone(
+        self,
+        channel_id: str,
+        thread_ts: Optional[str],
+        *,
+        root_key: Optional[str] = None,
+    ) -> Optional[TraceMilestone]:
+        """Return the latest open milestone for a scope, optionally narrowed by root key."""
+        params: list[object] = list(self._scope_params(channel_id, thread_ts))
+        sql = f"""SELECT {self._TRACE_MILESTONE_SELECT}
+                FROM trace_milestones
+                WHERE {self._SESSION_SCOPE_WHERE} AND status = 'open'"""
+        if root_key is not None:
+            sql += " AND root_key = ?"
+            params.append(root_key)
+        sql += " ORDER BY created_at DESC, id DESC LIMIT 1"
+        async with self._get_connection() as db:
+            cursor = await db.execute(sql, tuple(params))
+            row = await cursor.fetchone()
+            return TraceMilestone.from_row(row) if row else None
+
+    async def complete_trace_milestone(
+        self,
+        milestone_id: int,
+        *,
+        summary: Optional[str] = None,
+    ) -> bool:
+        """Mark a milestone as completed."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """UPDATE trace_milestones
+                   SET status = 'completed', summary = ?, completed_at = ?
+                   WHERE id = ? AND status = 'open'""",
+                (summary, datetime.now(timezone.utc).isoformat(), milestone_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_trace_milestone(self, milestone_id: int) -> Optional[TraceMilestone]:
+        """Return one milestone by id."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_MILESTONE_SELECT}
+                   FROM trace_milestones
+                   WHERE id = ?""",
+                (milestone_id,),
+            )
+            row = await cursor.fetchone()
+            return TraceMilestone.from_row(row) if row else None
+
+    async def list_recent_trace_milestones(
+        self,
+        channel_id: str,
+        thread_ts: Optional[str],
+        *,
+        limit: int = 10,
+    ) -> list[TraceMilestone]:
+        """Return recent milestones for a scope."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_MILESTONE_SELECT}
+                   FROM trace_milestones
+                   WHERE {self._SESSION_SCOPE_WHERE}
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ?""",
+                (*self._scope_params(channel_id, thread_ts), limit),
+            )
+            rows = await cursor.fetchall()
+            return [TraceMilestone.from_row(row) for row in rows]
+
+    async def create_trace_run(
+        self,
+        *,
+        session_id: int,
+        channel_id: str,
+        thread_ts: Optional[str],
+        command_id: Optional[int],
+        queue_item_id: Optional[int],
+        parent_run_id: Optional[int],
+        root_run_id: Optional[int],
+        milestone_id: Optional[int],
+        execution_id: str,
+        backend: str,
+        model: Optional[str],
+        working_directory: str,
+        prompt: str,
+        git_base_commit: Optional[str],
+        git_branch: Optional[str],
+        remote_name: Optional[str],
+        remote_url: Optional[str],
+    ) -> TraceRun:
+        """Create a trace run."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """INSERT INTO trace_runs
+                   (session_id, channel_id, thread_ts, command_id, queue_item_id, parent_run_id,
+                    root_run_id, milestone_id, execution_id, backend, model, working_directory,
+                    prompt, status, git_base_commit, git_branch, remote_name, remote_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    channel_id,
+                    self._normalize_thread_ts(thread_ts),
+                    command_id,
+                    queue_item_id,
+                    parent_run_id,
+                    root_run_id,
+                    milestone_id,
+                    execution_id,
+                    backend,
+                    model,
+                    working_directory,
+                    prompt,
+                    git_base_commit,
+                    git_branch,
+                    remote_name,
+                    remote_url,
+                ),
+            )
+            await db.commit()
+            trace_run_id = cursor.lastrowid
+            if root_run_id is None and trace_run_id is not None:
+                await db.execute(
+                    "UPDATE trace_runs SET root_run_id = ? WHERE id = ?",
+                    (trace_run_id, trace_run_id),
+                )
+                await db.commit()
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_RUN_SELECT}
+                   FROM trace_runs
+                   WHERE id = ?""",
+                (trace_run_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError("Failed to load created trace run")
+            return TraceRun.from_row(row)
+
+    async def update_trace_run(
+        self,
+        trace_run_id: int,
+        *,
+        status: Optional[str] = None,
+        git_head_commit: Optional[str] = None,
+        summary: Optional[str] = None,
+        milestone_id: Optional[int] = None,
+    ) -> bool:
+        """Update mutable fields on a trace run."""
+        updates: list[str] = []
+        params: list[object] = []
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+            if status in {"completed", "failed", "cancelled"}:
+                updates.append("completed_at = ?")
+                params.append(datetime.now(timezone.utc).isoformat())
+        if git_head_commit is not None:
+            updates.append("git_head_commit = ?")
+            params.append(git_head_commit)
+        if summary is not None:
+            updates.append("summary = ?")
+            params.append(summary)
+        if milestone_id is not None:
+            updates.append("milestone_id = ?")
+            params.append(milestone_id)
+        if not updates:
+            return False
+        params.append(trace_run_id)
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                "UPDATE trace_runs SET " + ", ".join(updates) + " WHERE id = ?",
+                tuple(params),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_trace_run(self, trace_run_id: int) -> Optional[TraceRun]:
+        """Return one trace run by id."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_RUN_SELECT}
+                   FROM trace_runs
+                   WHERE id = ?""",
+                (trace_run_id,),
+            )
+            row = await cursor.fetchone()
+            return TraceRun.from_row(row) if row else None
+
+    async def get_trace_run_by_command(self, command_id: int) -> Optional[TraceRun]:
+        """Return the latest trace run attached to a command history record."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_RUN_SELECT}
+                   FROM trace_runs
+                   WHERE command_id = ?
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1""",
+                (command_id,),
+            )
+            row = await cursor.fetchone()
+            return TraceRun.from_row(row) if row else None
+
+    async def get_trace_run_by_queue_item(self, queue_item_id: int) -> Optional[TraceRun]:
+        """Return the latest trace run attached to a queue item."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_RUN_SELECT}
+                   FROM trace_runs
+                   WHERE queue_item_id = ?
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1""",
+                (queue_item_id,),
+            )
+            row = await cursor.fetchone()
+            return TraceRun.from_row(row) if row else None
+
+    async def get_trace_run_by_execution_id(self, execution_id: str) -> Optional[TraceRun]:
+        """Return one trace run by execution id."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_RUN_SELECT}
+                   FROM trace_runs
+                   WHERE execution_id = ?
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1""",
+                (execution_id,),
+            )
+            row = await cursor.fetchone()
+            return TraceRun.from_row(row) if row else None
+
+    async def list_recent_trace_runs(
+        self,
+        channel_id: str,
+        thread_ts: Optional[str],
+        *,
+        limit: int = 10,
+    ) -> list[TraceRun]:
+        """List recent trace runs for a scope."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_RUN_SELECT}
+                   FROM trace_runs
+                   WHERE {self._SESSION_SCOPE_WHERE}
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ?""",
+                (*self._scope_params(channel_id, thread_ts), limit),
+            )
+            rows = await cursor.fetchall()
+            return [TraceRun.from_row(row) for row in rows]
+
+    async def list_trace_runs_for_milestone(self, milestone_id: int) -> list[TraceRun]:
+        """Return all runs for a milestone."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_RUN_SELECT}
+                   FROM trace_runs
+                   WHERE milestone_id = ?
+                   ORDER BY created_at ASC, id ASC""",
+                (milestone_id,),
+            )
+            rows = await cursor.fetchall()
+            return [TraceRun.from_row(row) for row in rows]
+
+    async def replace_trace_commits(
+        self,
+        trace_run_id: int,
+        commits: list[dict[str, object]],
+    ) -> list[TraceCommit]:
+        """Replace captured commits for a trace run."""
+        async with self._transact() as db:
+            await db.execute("DELETE FROM trace_commits WHERE trace_run_id = ?", (trace_run_id,))
+            for commit in commits:
+                await db.execute(
+                    """INSERT INTO trace_commits
+                       (trace_run_id, commit_hash, parent_hash, short_hash, subject, author_name,
+                        authored_at, commit_url, compare_url, origin, diff)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        trace_run_id,
+                        commit.get("commit_hash"),
+                        commit.get("parent_hash"),
+                        commit.get("short_hash"),
+                        commit.get("subject"),
+                        commit.get("author_name"),
+                        commit.get("authored_at"),
+                        commit.get("commit_url"),
+                        commit.get("compare_url"),
+                        commit.get("origin") or "model",
+                        commit.get("diff"),
+                    ),
+                )
+        return await self.list_trace_commits(trace_run_id)
+
+    async def list_trace_commits(self, trace_run_id: int) -> list[TraceCommit]:
+        """Return commits captured for one trace run."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_COMMIT_SELECT}
+                   FROM trace_commits
+                   WHERE trace_run_id = ?
+                   ORDER BY id ASC""",
+                (trace_run_id,),
+            )
+            rows = await cursor.fetchall()
+            return [TraceCommit.from_row(row) for row in rows]
+
+    async def create_trace_event(
+        self,
+        *,
+        trace_run_id: Optional[int],
+        channel_id: str,
+        thread_ts: Optional[str],
+        event_type: str,
+        payload: Optional[dict[str, object]] = None,
+    ) -> TraceEvent:
+        """Persist one trace event."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """INSERT INTO trace_events
+                   (trace_run_id, channel_id, thread_ts, event_type, payload)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    trace_run_id,
+                    channel_id,
+                    self._normalize_thread_ts(thread_ts),
+                    event_type,
+                    json.dumps(payload or {}),
+                ),
+            )
+            await db.commit()
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_EVENT_SELECT}
+                   FROM trace_events
+                   WHERE id = ?""",
+                (cursor.lastrowid,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError("Failed to load created trace event")
+            return TraceEvent.from_row(row)
+
+    async def list_trace_events(
+        self,
+        *,
+        trace_run_id: Optional[int] = None,
+        channel_id: Optional[str] = None,
+        thread_ts: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[TraceEvent]:
+        """List trace events for a run or scope."""
+        sql = f"SELECT {self._TRACE_EVENT_SELECT} FROM trace_events"
+        params: list[object] = []
+        clauses: list[str] = []
+        if trace_run_id is not None:
+            clauses.append("trace_run_id = ?")
+            params.append(trace_run_id)
+        if channel_id is not None:
+            clauses.append(self._SESSION_SCOPE_WHERE)
+            params.extend(self._scope_params(channel_id, thread_ts))
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(limit)
+        async with self._get_connection() as db:
+            cursor = await db.execute(sql, tuple(params))
+            rows = await cursor.fetchall()
+            return [TraceEvent.from_row(row) for row in rows]
+
+    async def create_trace_queue_summary(
+        self,
+        *,
+        session_id: int,
+        channel_id: str,
+        thread_ts: Optional[str],
+        summary_text: str,
+        payload: Optional[dict[str, object]] = None,
+    ) -> TraceQueueSummary:
+        """Persist one queue summary."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """INSERT INTO trace_queue_summaries
+                   (session_id, channel_id, thread_ts, summary_text, payload)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    channel_id,
+                    self._normalize_thread_ts(thread_ts),
+                    summary_text,
+                    json.dumps(payload or {}),
+                ),
+            )
+            await db.commit()
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_QUEUE_SUMMARY_SELECT}
+                   FROM trace_queue_summaries
+                   WHERE id = ?""",
+                (cursor.lastrowid,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError("Failed to load created trace queue summary")
+            return TraceQueueSummary.from_row(row)
+
+    async def list_trace_queue_summaries(
+        self,
+        channel_id: str,
+        thread_ts: Optional[str],
+        *,
+        limit: int = 10,
+    ) -> list[TraceQueueSummary]:
+        """Return recent queue summaries for a scope."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_QUEUE_SUMMARY_SELECT}
+                   FROM trace_queue_summaries
+                   WHERE {self._SESSION_SCOPE_WHERE}
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ?""",
+                (*self._scope_params(channel_id, thread_ts), limit),
+            )
+            rows = await cursor.fetchall()
+            return [TraceQueueSummary.from_row(row) for row in rows]
+
+    async def create_rollback_event(
+        self,
+        *,
+        trace_run_id: Optional[int],
+        channel_id: str,
+        thread_ts: Optional[str],
+        target_commit: str,
+        preview_diff: Optional[str],
+        checkpoint_name: Optional[str] = None,
+        checkpoint_ref: Optional[str] = None,
+        status: str = "previewed",
+        applied: bool = False,
+    ) -> RollbackEvent:
+        """Persist a rollback preview or apply record."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """INSERT INTO rollback_events
+                   (trace_run_id, channel_id, thread_ts, target_commit, preview_diff,
+                    checkpoint_name, checkpoint_ref, status, applied, applied_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    trace_run_id,
+                    channel_id,
+                    self._normalize_thread_ts(thread_ts),
+                    target_commit,
+                    preview_diff,
+                    checkpoint_name,
+                    checkpoint_ref,
+                    status,
+                    1 if applied else 0,
+                    datetime.now(timezone.utc).isoformat() if applied else None,
+                ),
+            )
+            await db.commit()
+            cursor = await db.execute(
+                f"""SELECT {self._ROLLBACK_EVENT_SELECT}
+                   FROM rollback_events
+                   WHERE id = ?""",
+                (cursor.lastrowid,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError("Failed to load created rollback event")
+            return RollbackEvent.from_row(row)
+
+    async def update_rollback_event(
+        self,
+        rollback_event_id: int,
+        *,
+        status: str,
+        applied: bool,
+        checkpoint_name: Optional[str] = None,
+        checkpoint_ref: Optional[str] = None,
+    ) -> bool:
+        """Update rollback apply status."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """UPDATE rollback_events
+                   SET status = ?, applied = ?, checkpoint_name = COALESCE(?, checkpoint_name),
+                       checkpoint_ref = COALESCE(?, checkpoint_ref), applied_at = ?
+                   WHERE id = ?""",
+                (
+                    status,
+                    1 if applied else 0,
+                    checkpoint_name,
+                    checkpoint_ref,
+                    datetime.now(timezone.utc).isoformat() if applied else None,
+                    rollback_event_id,
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_rollback_event(self, rollback_event_id: int) -> Optional[RollbackEvent]:
+        """Return a rollback event by id."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._ROLLBACK_EVENT_SELECT}
+                   FROM rollback_events
+                   WHERE id = ?""",
+                (rollback_event_id,),
+            )
+            row = await cursor.fetchone()
+            return RollbackEvent.from_row(row) if row else None
 
     # -------------------------------------------------------------------------
     # Notification Settings

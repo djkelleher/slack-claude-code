@@ -18,7 +18,9 @@ from src.question.slack_ui import (
     build_custom_answer_modal,
     build_question_result_blocks,
 )
+from src.tasks.manager import TaskManager
 from src.utils.detail_cache import DetailCache
+from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.base import markdown_to_mrkdwn
 from src.utils.formatters.command import error_message
 from src.utils.formatters.job import parallel_job_status, sequential_job_status
@@ -83,9 +85,6 @@ async def _get_github_file_url(tool: ToolActivity, working_directory: str) -> st
     str | None
         The GitHub URL or None if not applicable.
     """
-    if not config.GITHUB_REPO:
-        return None
-
     # Only supported for Read, Edit, Write tools
     if tool.name not in ("Read", "Edit", "Write"):
         return None
@@ -100,13 +99,12 @@ async def _get_github_file_url(tool: ToolActivity, working_directory: str) -> st
     else:
         relative_path = file_path.lstrip("/")
 
-    # Get current commit hash
+    git_service = GitService()
     commit_hash = await _get_git_commit_hash(working_directory)
     if not commit_hash:
         return None
-
-    # Generate GitHub URL
-    return f"https://github.com/{config.GITHUB_REPO}/blob/{commit_hash}/{relative_path}"
+    _remote_name, remote_url = await git_service.get_preferred_remote(working_directory)
+    return git_service.build_file_url(remote_url, commit_hash, relative_path)
 
 
 async def _get_github_diff_url(working_directory: str) -> str | None:
@@ -122,16 +120,12 @@ async def _get_github_diff_url(working_directory: str) -> str | None:
     str | None
         The GitHub diff URL or None if not applicable.
     """
-    if not config.GITHUB_REPO:
-        return None
-
-    # Get current commit hash
+    git_service = GitService()
     commit_hash = await _get_git_commit_hash(working_directory)
     if not commit_hash:
         return None
-
-    # Generate GitHub commit URL (shows diff)
-    return f"https://github.com/{config.GITHUB_REPO}/commit/{commit_hash}"
+    _remote_name, remote_url = await git_service.get_preferred_remote(working_directory)
+    return git_service.build_commit_url(remote_url, commit_hash)
 
 
 async def _handle_approval_action(
@@ -514,6 +508,96 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
                 text=f"Job #{job_id} not found or already completed.",
             )
 
+    @app.action("rollback_apply")
+    async def handle_rollback_apply(ack, action, body, client, logger):
+        """Apply a rollback preview after operator confirmation."""
+        await ack()
+
+        try:
+            rollback_event_id = int(action["value"])
+            channel_id = body["channel"]["id"]
+        except (KeyError, ValueError) as exc:
+            logger.error(f"Invalid rollback action data: {exc}")
+            return
+
+        rollback_event = await deps.db.get_rollback_event(rollback_event_id)
+        if rollback_event is None:
+            await client.chat_postEphemeral(
+                channel=channel_id,
+                user=body["user"]["id"],
+                text="Rollback preview not found.",
+            )
+            return
+        trace_service = getattr(deps, "trace_service", None)
+        if trace_service is None:
+            await client.chat_postEphemeral(
+                channel=channel_id,
+                user=body["user"]["id"],
+                text="Trace service unavailable.",
+            )
+            return
+
+        scope = build_session_scope(channel_id, rollback_event.thread_ts)
+        queue_task = await TaskManager.get(f"queue_{scope}")
+        if queue_task is not None and not queue_task.is_done:
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=rollback_event.thread_ts,
+                text="Rollback blocked while queue processing is active.",
+                blocks=error_message("Rollback blocked while queue processing is active."),
+            )
+            return
+        if deps.executor and await deps.executor.has_active_execution(scope):
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=rollback_event.thread_ts,
+                text="Rollback blocked while Claude execution is active.",
+                blocks=error_message("Rollback blocked while Claude execution is active."),
+            )
+            return
+        if deps.codex_executor and await deps.codex_executor.has_active_turn(scope):
+            await client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=rollback_event.thread_ts,
+                text="Rollback blocked while Codex execution is active.",
+                blocks=error_message("Rollback blocked while Codex execution is active."),
+            )
+            return
+
+        session = await deps.db.get_or_create_session(
+            channel_id,
+            thread_ts=rollback_event.thread_ts,
+            default_cwd=config.DEFAULT_WORKING_DIR,
+        )
+        latest_runs = await deps.db.list_recent_trace_runs(
+            channel_id, rollback_event.thread_ts, limit=1
+        )
+        trace_run_id = latest_runs[0].id if latest_runs else None
+        applied = await trace_service.apply_rollback(
+            rollback_event_id=rollback_event_id,
+            working_directory=session.working_directory,
+            session_id=session.id,
+            channel_id=channel_id,
+            trace_run_id=trace_run_id,
+        )
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=rollback_event.thread_ts,
+            text=f"Rollback applied to {applied.target_commit}",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f":warning: Rolled back to `{applied.target_commit}`.\n"
+                            f"Checkpoint: `{applied.checkpoint_name or 'none'}`"
+                        ),
+                    },
+                }
+            ],
+        )
+
     # -------------------------------------------------------------------------
     # Worktree action handlers
     # -------------------------------------------------------------------------
@@ -713,6 +797,14 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         await ack()
 
         try:
+            channel_id = body["channel"]["id"]
+            thread_ts = body.get("message", {}).get("thread_ts")
+        except KeyError as e:
+            logger.error(f"Invalid tool detail context: {e}")
+            channel_id = None
+            thread_ts = None
+
+        try:
             action_value = action["value"]
             # Validate size before parsing to prevent resource exhaustion
             max_size = config.timeouts.limits.max_action_value_size
@@ -756,9 +848,17 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
         # Get formatted blocks
         detail_blocks = format_tool_detail_blocks(tool)
 
-        # Add GitHub link button if GITHUB_REPO is configured
-        if config.GITHUB_REPO and tool.name in ("Read", "Edit", "Write"):
-            github_url = await _get_github_file_url(tool, config.DEFAULT_WORKING_DIR)
+        # Add GitHub link button when the active repo remote resolves to GitHub
+        if tool.name in ("Read", "Edit", "Write"):
+            working_directory = config.DEFAULT_WORKING_DIR
+            if channel_id is not None:
+                session = await deps.db.get_or_create_session(
+                    channel_id,
+                    thread_ts=thread_ts,
+                    default_cwd=config.DEFAULT_WORKING_DIR,
+                )
+                working_directory = session.working_directory
+            github_url = await _get_github_file_url(tool, working_directory)
             if github_url:
                 detail_blocks.append({"type": "divider"})
                 detail_blocks.append(
