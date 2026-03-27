@@ -52,7 +52,7 @@ def _queue_item(item_id: int, prompt: str, working_directory_override: str | Non
 
 def _queue_control(state: str = "running"):
     """Build a queue-control-like namespace for tests."""
-    return SimpleNamespace(state=state)
+    return SimpleNamespace(state=state, usage_limit_state={}, auto_finish_pending=False)
 
 
 def _registered_handler(command_name: str, db):
@@ -1244,6 +1244,239 @@ async def test_execute_queue_item_pauses_and_requeues_on_codex_usage_limit():
 
 
 @pytest.mark.asyncio
+async def test_execute_queue_item_pauses_after_percentage_budget_is_exhausted():
+    """Exhausting a `pause` usage budget should pause after the current item finishes."""
+    item = _queue_item(190, "ship fix")
+    item.automation_meta = {
+        "usage_limits": [{"id": "limit-1", "percent": 2.5, "window": "5h", "action": "pause"}]
+    }
+    session = Session(id=1, channel_id="C123", model="gpt-5.4", working_directory="~")
+    stored_usage_state: dict[str, object] = {}
+
+    async def get_queue_control(*_args, **_kwargs):
+        return SimpleNamespace(
+            state="running", usage_limit_state=stored_usage_state, auto_finish_pending=False
+        )
+
+    async def set_queue_usage_limit_state(_channel_id, _thread_ts, usage_limit_state):
+        nonlocal stored_usage_state
+        stored_usage_state = usage_limit_state
+        return SimpleNamespace(
+            state="running", usage_limit_state=usage_limit_state, auto_finish_pending=False
+        )
+
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, True]),
+            get_queue_control=AsyncMock(side_effect=get_queue_control),
+            set_queue_usage_limit_state=AsyncMock(side_effect=set_queue_usage_limit_state),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+        ),
+        codex_executor=SimpleNamespace(
+            account_rate_limits_read=AsyncMock(
+                side_effect=[
+                    {
+                        "rateLimits": {
+                            "limitId": "codex",
+                            "primary": {
+                                "usedPercent": 10.0,
+                                "windowDurationMins": 300,
+                                "resetsAt": 1773291900,
+                            },
+                            "secondary": {
+                                "usedPercent": 25.0,
+                                "windowDurationMins": 10080,
+                                "resetsAt": 1773852600,
+                            },
+                        }
+                    },
+                    {
+                        "rateLimits": {
+                            "limitId": "codex",
+                            "primary": {
+                                "usedPercent": 13.0,
+                                "windowDurationMins": 300,
+                                "resetsAt": 1773291900,
+                            },
+                            "secondary": {
+                                "usedPercent": 25.0,
+                                "windowDurationMins": 10080,
+                                "resetsAt": 1773852600,
+                            },
+                        }
+                    },
+                ]
+            )
+        ),
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.001"}),
+        chat_update=AsyncMock(),
+    )
+
+    class _FakeStreamingState:
+        def __init__(self, **kwargs):
+            self.message_ts = kwargs["message_ts"]
+            self.accumulated_output = ""
+
+        def start_heartbeat(self):
+            return None
+
+        async def finalize(self, is_error: bool = False):
+            return None
+
+        async def stop_heartbeat(self):
+            return None
+
+    route_result = SimpleNamespace(
+        backend="codex",
+        result=SimpleNamespace(success=True, output="done", error=None, session_id=None),
+    )
+
+    with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
+        with patch(
+            "src.handlers.claude.queue.create_streaming_callback",
+            side_effect=lambda _state: AsyncMock(),
+        ):
+            with patch(
+                "src.handlers.claude.queue.execute_for_session",
+                new=AsyncMock(return_value=route_result),
+            ):
+                result = await _execute_queue_item(
+                    item,
+                    channel_id="C123",
+                    thread_ts=None,
+                    scope="C123:channel",
+                    deps=deps,
+                    client=client,
+                    log=MagicMock(),
+                    base_session=session,
+                    sequence_label="1",
+                    override_resume_ids={},
+                )
+
+    assert result == "completed"
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
+    assert stored_usage_state["limits"]["limit-1"]["exhausted"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_queue_item_queue_only_budget_suppresses_auto_followups():
+    """Exhausting a `queue-only` budget should suppress auto-generated follow-ups."""
+    item = _queue_item(191, "ship fix")
+    item.automation_meta = {
+        "auto_each": True,
+        "origin": "manual",
+        "continue_round": 0,
+        "check_round": 0,
+        "usage_limits": [{"id": "limit-1", "percent": 2.5, "window": "5h", "action": "queue-only"}],
+    }
+    session = Session(id=1, channel_id="C123", model="gpt-5.4", working_directory="~")
+    stored_usage_state: dict[str, object] = {}
+
+    async def get_queue_control(*_args, **_kwargs):
+        return SimpleNamespace(
+            state="running", usage_limit_state=stored_usage_state, auto_finish_pending=False
+        )
+
+    async def set_queue_usage_limit_state(_channel_id, _thread_ts, usage_limit_state):
+        nonlocal stored_usage_state
+        stored_usage_state = usage_limit_state
+        return SimpleNamespace(
+            state="running", usage_limit_state=usage_limit_state, auto_finish_pending=False
+        )
+
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, True]),
+            get_queue_control=AsyncMock(side_effect=get_queue_control),
+            set_queue_usage_limit_state=AsyncMock(side_effect=set_queue_usage_limit_state),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+            add_many_to_queue=AsyncMock(),
+        ),
+        codex_executor=SimpleNamespace(
+            account_rate_limits_read=AsyncMock(
+                side_effect=[
+                    {
+                        "rateLimits": {
+                            "limitId": "codex",
+                            "primary": {
+                                "usedPercent": 10.0,
+                                "windowDurationMins": 300,
+                                "resetsAt": 1773291900,
+                            },
+                        }
+                    },
+                    {
+                        "rateLimits": {
+                            "limitId": "codex",
+                            "primary": {
+                                "usedPercent": 13.0,
+                                "windowDurationMins": 300,
+                                "resetsAt": 1773291900,
+                            },
+                        }
+                    },
+                ]
+            )
+        ),
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.001"}),
+        chat_update=AsyncMock(),
+    )
+
+    class _FakeStreamingState:
+        def __init__(self, **kwargs):
+            self.message_ts = kwargs["message_ts"]
+            self.accumulated_output = ""
+
+        def start_heartbeat(self):
+            return None
+
+        async def finalize(self, is_error: bool = False):
+            return None
+
+        async def stop_heartbeat(self):
+            return None
+
+    route_result = SimpleNamespace(
+        backend="codex",
+        result=SimpleNamespace(success=True, output="done", error=None, session_id=None),
+    )
+
+    with patch("src.handlers.claude.queue.StreamingMessageState", _FakeStreamingState):
+        with patch(
+            "src.handlers.claude.queue.create_streaming_callback",
+            side_effect=lambda _state: AsyncMock(),
+        ):
+            with patch(
+                "src.handlers.claude.queue.execute_for_session",
+                new=AsyncMock(return_value=route_result),
+            ):
+                with patch(
+                    "src.handlers.claude.queue.decide_queue_automation", new=AsyncMock()
+                ) as mock_decide:
+                    result = await _execute_queue_item(
+                        item,
+                        channel_id="C123",
+                        thread_ts=None,
+                        scope="C123:channel",
+                        deps=deps,
+                        client=client,
+                        log=MagicMock(),
+                        base_session=session,
+                        sequence_label="1",
+                        override_resume_ids={},
+                    )
+
+    assert result == "completed"
+    assert stored_usage_state["limits"]["limit-1"]["exhausted"] is True
+    mock_decide.assert_not_awaited()
+    deps.db.add_many_to_queue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_execute_queue_item_pauses_queue_on_prompt_policy_block():
     """Prompt-policy failures should fail the item and pause later queue work."""
     item = _queue_item(91, "ship fix")
@@ -1870,6 +2103,7 @@ async def test_qclear_clears_pending_items():
     deps = SimpleNamespace(
         db=SimpleNamespace(
             clear_queue=AsyncMock(return_value=3),
+            get_running_queue_items=AsyncMock(return_value=[]),
         )
     )
     register_queue_commands(app, deps)
@@ -1889,6 +2123,7 @@ async def test_qclear_clears_pending_items():
     )
 
     deps.db.clear_queue.assert_awaited_once_with("C123", None)
+    deps.db.get_running_queue_items.assert_awaited_once_with("C123", None)
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "Cleared 3 item(s) from queue"
 

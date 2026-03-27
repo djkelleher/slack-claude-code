@@ -25,6 +25,7 @@ def test_contains_queue_plan_markers_detects_known_markers() -> None:
     assert contains_queue_plan_markers("(branch feature/x)\nrun\n(end)") is True
     assert contains_queue_plan_markers("(parallel2)\nrun\n***\nmore\n(end)") is True
     assert contains_queue_plan_markers("(mode: plan)\nrun\n(end)") is True
+    assert contains_queue_plan_markers("(limit: 2.5% 5h pause)\nrun\n(end)") is True
     assert contains_queue_plan_markers("FOR name IN (joe, tod)\nrun (name)\n(end)") is True
 
 
@@ -90,6 +91,29 @@ def test_parse_queue_plan_nested_mode_block_overrides_parent() -> None:
         "sandbox: read-only",
         "plan",
     ]
+
+
+def test_parse_queue_plan_usage_limit_block_scopes_prompts() -> None:
+    prompts = parse_queue_plan_text("(limit: 2.5% 5h pause)\nfirst\n***\nsecond\n(end)\noutside")
+    assert [item.prompt for item in prompts] == ["first", "second", "outside"]
+    assert [len(item.usage_limits) for item in prompts] == [1, 1, 0]
+    assert prompts[0].usage_limits[0].percent == 2.5
+    assert prompts[0].usage_limits[0].window == "5h"
+    assert prompts[0].usage_limits[0].action == "pause"
+
+
+def test_parse_queue_plan_usage_limit_defaults_to_weekly() -> None:
+    prompts = parse_queue_plan_text("(limit: 10% queue-only) review")
+    assert prompts[0].usage_limits[0].window == "weekly"
+    assert prompts[0].usage_limits[0].action == "queue-only"
+
+
+def test_parse_queue_plan_usage_limit_nested_limits_both_apply() -> None:
+    prompts = parse_queue_plan_text("(limit: 5% pause)\n(limit: 2.5% 5h queue-only)\nrun\n(end2)")
+    attached_limits = prompts[0].usage_limits
+    assert len(attached_limits) == 2
+    assert {limit.window for limit in attached_limits} == {"weekly", "5h"}
+    assert {limit.action for limit in attached_limits} == {"pause", "queue-only"}
 
 
 def test_parse_queue_plan_loop_expands_prompts() -> None:

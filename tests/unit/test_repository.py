@@ -1030,6 +1030,32 @@ class TestQueueOperations:
         assert control_after.auto_finish_pending is False
 
     @pytest.mark.asyncio
+    async def test_set_queue_usage_limit_state_persists(self, db_repo):
+        """Queue usage-limit runtime state should persist by scope."""
+        control = await db_repo.set_queue_usage_limit_state(
+            "C123ABC",
+            None,
+            {
+                "limits": {
+                    "limit-1": {
+                        "id": "limit-1",
+                        "percent": 2.5,
+                        "window": "weekly",
+                        "action": "pause",
+                        "spent_percent": 1.25,
+                        "exhausted": False,
+                    }
+                }
+            },
+        )
+
+        assert "limit-1" in control.usage_limit_state["limits"]
+        assert control.usage_limit_state["limits"]["limit-1"]["percent"] == 2.5
+
+        loaded = await db_repo.get_queue_control("C123ABC", None)
+        assert loaded.usage_limit_state["limits"]["limit-1"]["spent_percent"] == 1.25
+
+    @pytest.mark.asyncio
     async def test_add_queue_scheduled_events_persists_and_lists_by_scope(self, db_repo):
         """Scheduled queue controls should persist and be returned in time order."""
         now = datetime.now(timezone.utc)

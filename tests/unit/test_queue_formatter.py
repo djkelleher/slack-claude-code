@@ -89,6 +89,27 @@ def test_queue_status_formats_pending_parallel_suffix() -> None:
     assert "parallel max all" in blocks[-1]["text"]["text"]
 
 
+def test_queue_status_includes_usage_limit_prefixes() -> None:
+    """Queue status should show attached usage-limit labels in item previews."""
+    pending = [
+        SimpleNamespace(
+            id=31,
+            prompt="limited task",
+            parallel_group_id=None,
+            parallel_limit=None,
+            automation_meta={
+                "usage_limits": [
+                    {"id": "limit-1", "percent": 2.5, "window": "5h", "action": "pause"}
+                ]
+            },
+        )
+    ]
+
+    blocks = queue_fmt.queue_status(pending=pending, running=None)
+
+    assert "limit 2.5% 5h pause" in blocks[-1]["text"]["text"]
+
+
 def test_queue_item_running_and_complete_render_status_and_truncation() -> None:
     """Queue item formatters should keep running previews Slack-safe and truncate long output."""
     item = SimpleNamespace(id=9, prompt="process " + ("x" * 4000), automation_meta=None)

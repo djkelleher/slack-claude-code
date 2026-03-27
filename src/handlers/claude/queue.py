@@ -26,6 +26,7 @@ from src.tasks.manager import TaskManager
 from src.tasks.queue_plan import (
     QueuePlanError,
     QueueScheduledControl,
+    QueueUsageLimitSpec,
     contains_queue_plan_markers,
     materialize_queue_plan_text,
     parse_queue_plan_submission,
@@ -64,6 +65,9 @@ QUEUE_PROCESSOR_TIMEOUT = 3600
 _QUEUE_START_LOCKS: dict[str, asyncio.Lock] = {}
 _QUEUE_START_LOCKS_GUARD: Optional[asyncio.Lock] = None
 _QUEUE_START_LOCKS_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_QUEUE_USAGE_LIMIT_LOCKS: dict[str, asyncio.Lock] = {}
+_QUEUE_USAGE_LIMIT_LOCKS_GUARD: Optional[asyncio.Lock] = None
+_QUEUE_USAGE_LIMIT_LOCKS_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _PARALLEL_HISTORY_COMMAND_LIMIT = 10
 _PARALLEL_HISTORY_OUTPUT_LIMIT = 1000
 _PARALLEL_HISTORY_TOTAL_LIMIT = 12000
@@ -112,6 +116,12 @@ _AUTO_META_ORIGIN_CHECK = "auto_check"
 _AUTO_META_ORIGIN_CONTINUE = "auto_continue"
 _RUNTIME_MODE_DIRECTIVE_META_KEY = "runtime_mode_directive"
 _MILESTONE_MARKER_META_KEY = "milestone_marker"
+_USAGE_LIMITS_META_KEY = "usage_limits"
+_USAGE_LIMIT_STATE_LIMITS_KEY = "limits"
+_USAGE_LIMIT_ACTION_PAUSE = "pause"
+_USAGE_LIMIT_ACTION_QUEUE_ONLY = "queue-only"
+_USAGE_LIMIT_WINDOW_WEEKLY = "weekly"
+_USAGE_LIMIT_WINDOW_5H = "5h"
 
 
 @dataclass(frozen=True)
@@ -127,6 +137,22 @@ class _QueueUsageLimitState:
 
     resume_at: Optional[datetime]
     detail: str
+
+
+@dataclass(frozen=True)
+class _UsageWindowSnapshot:
+    """Resolved usage window snapshot for a backend quota window."""
+
+    used_percent: float
+    resets_at: Optional[int]
+
+
+@dataclass(frozen=True)
+class _UsageLimitEvaluation:
+    """Outcome of usage-limit evaluation for a completed queue item."""
+
+    state: dict[str, object]
+    newly_exhausted: list[dict[str, object]]
 
 
 def _queue_task_id(channel_id: str, thread_ts: Optional[str]) -> str:
@@ -321,6 +347,402 @@ async def _cleanup_queue_start_lock(task_id: str) -> None:
         lock = _QUEUE_START_LOCKS.get(task_id)
         if lock and not lock.locked():
             _QUEUE_START_LOCKS.pop(task_id, None)
+
+
+async def _get_queue_usage_limit_lock(scope: str) -> asyncio.Lock:
+    """Return a per-scope lock used to serialize usage-limit state updates."""
+    global _QUEUE_USAGE_LIMIT_LOCKS_GUARD, _QUEUE_USAGE_LIMIT_LOCKS_LOOP
+    current_loop = asyncio.get_running_loop()
+    if _QUEUE_USAGE_LIMIT_LOCKS_LOOP is not current_loop:
+        _QUEUE_USAGE_LIMIT_LOCKS.clear()
+        _QUEUE_USAGE_LIMIT_LOCKS_LOOP = current_loop
+        _QUEUE_USAGE_LIMIT_LOCKS_GUARD = asyncio.Lock()
+
+    if _QUEUE_USAGE_LIMIT_LOCKS_GUARD is None:
+        _QUEUE_USAGE_LIMIT_LOCKS_GUARD = asyncio.Lock()
+
+    async with _QUEUE_USAGE_LIMIT_LOCKS_GUARD:
+        if scope not in _QUEUE_USAGE_LIMIT_LOCKS:
+            _QUEUE_USAGE_LIMIT_LOCKS[scope] = asyncio.Lock()
+        return _QUEUE_USAGE_LIMIT_LOCKS[scope]
+
+
+def _normalize_usage_limit_specs(raw_specs: Any) -> list[dict[str, object]]:
+    """Normalize queue-item usage-limit metadata into a stable list."""
+    if not isinstance(raw_specs, list):
+        return []
+    normalized_specs: list[dict[str, object]] = []
+    for raw_spec in raw_specs:
+        if not isinstance(raw_spec, dict):
+            continue
+        limit_id = str(raw_spec.get("id") or "").strip()
+        window = str(raw_spec.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY).strip().lower()
+        action = str(raw_spec.get("action") or "").strip().lower()
+        try:
+            percent = float(raw_spec.get("percent"))
+        except (TypeError, ValueError):
+            continue
+        if not limit_id or percent <= 0 or percent > 100:
+            continue
+        if window not in {_USAGE_LIMIT_WINDOW_WEEKLY, _USAGE_LIMIT_WINDOW_5H}:
+            continue
+        if action not in {_USAGE_LIMIT_ACTION_PAUSE, _USAGE_LIMIT_ACTION_QUEUE_ONLY}:
+            continue
+        normalized_specs.append(
+            {
+                "id": limit_id,
+                "percent": percent,
+                "window": window,
+                "action": action,
+            }
+        )
+    return normalized_specs
+
+
+def _usage_limit_specs_from_meta(raw_meta: Any) -> list[dict[str, object]]:
+    """Return normalized usage-limit specs stored on a queue item."""
+    normalized_meta = _normalize_automation_meta(raw_meta)
+    return _normalize_usage_limit_specs(normalized_meta.get(_USAGE_LIMITS_META_KEY))
+
+
+def _usage_limit_specs_to_meta(
+    usage_limits: tuple[QueueUsageLimitSpec, ...],
+) -> list[dict[str, object]]:
+    """Serialize queue-plan usage-limit specs into queue item metadata."""
+    return [
+        {
+            "id": spec.limit_id,
+            "percent": spec.percent,
+            "window": spec.window,
+            "action": spec.action,
+        }
+        for spec in usage_limits
+    ]
+
+
+def _normalize_usage_limit_state(raw_state: Any) -> dict[str, object]:
+    """Normalize queue-scope usage-limit runtime state."""
+    limits_by_id: dict[str, dict[str, object]] = {}
+    if isinstance(raw_state, dict):
+        raw_limits = raw_state.get(_USAGE_LIMIT_STATE_LIMITS_KEY)
+        if isinstance(raw_limits, dict):
+            for raw_limit_id, raw_limit in raw_limits.items():
+                if not isinstance(raw_limit, dict):
+                    continue
+                limit_id = str(raw_limit.get("id") or raw_limit_id).strip()
+                window = str(raw_limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY).strip().lower()
+                action = str(raw_limit.get("action") or "").strip().lower()
+                try:
+                    percent = float(raw_limit.get("percent"))
+                except (TypeError, ValueError):
+                    continue
+                if not limit_id or percent <= 0 or percent > 100:
+                    continue
+                if window not in {_USAGE_LIMIT_WINDOW_WEEKLY, _USAGE_LIMIT_WINDOW_5H}:
+                    continue
+                if action not in {_USAGE_LIMIT_ACTION_PAUSE, _USAGE_LIMIT_ACTION_QUEUE_ONLY}:
+                    continue
+                baseline_used = raw_limit.get("baseline_used_percent")
+                current_used = raw_limit.get("current_used_percent")
+                spent_percent = raw_limit.get("spent_percent")
+                limits_by_id[limit_id] = {
+                    "id": limit_id,
+                    "percent": percent,
+                    "window": window,
+                    "action": action,
+                    "baseline_used_percent": (
+                        float(baseline_used) if isinstance(baseline_used, (int, float)) else None
+                    ),
+                    "baseline_resets_at": _to_int_like(raw_limit.get("baseline_resets_at")),
+                    "current_used_percent": (
+                        float(current_used) if isinstance(current_used, (int, float)) else None
+                    ),
+                    "current_resets_at": _to_int_like(raw_limit.get("current_resets_at")),
+                    "spent_percent": (
+                        float(spent_percent) if isinstance(spent_percent, (int, float)) else 0.0
+                    ),
+                    "exhausted": bool(raw_limit.get("exhausted")),
+                }
+    return {_USAGE_LIMIT_STATE_LIMITS_KEY: limits_by_id}
+
+
+def _to_int_like(value: Any) -> Optional[int]:
+    """Best-effort integer conversion used by usage-limit state parsing."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _queue_followups_suppressed(usage_limit_state: dict[str, object]) -> bool:
+    """Return True when queue-wide auto-follow suppression is active."""
+    limits = usage_limit_state.get(_USAGE_LIMIT_STATE_LIMITS_KEY)
+    if not isinstance(limits, dict):
+        return False
+    return any(
+        isinstance(limit, dict)
+        and bool(limit.get("exhausted"))
+        and str(limit.get("action") or "").strip().lower() == _USAGE_LIMIT_ACTION_QUEUE_ONLY
+        for limit in limits.values()
+    )
+
+
+def _usage_limit_state_lines(usage_limit_state: dict[str, object]) -> list[str]:
+    """Build queue-status summary lines for persisted usage-limit state."""
+    lines: list[str] = []
+    limits = usage_limit_state.get(_USAGE_LIMIT_STATE_LIMITS_KEY)
+    if not isinstance(limits, dict) or not limits:
+        return lines
+    for limit in limits.values():
+        if not isinstance(limit, dict):
+            continue
+        percent = limit.get("percent")
+        spent = limit.get("spent_percent", 0.0)
+        window = str(limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY)
+        action = str(limit.get("action") or "")
+        if not isinstance(percent, (int, float)) or not isinstance(spent, (int, float)):
+            continue
+        state_text = "exhausted" if bool(limit.get("exhausted")) else "active"
+        lines.append(f"`{window}` {spent:.2f}/{float(percent):g}% used • {action} • {state_text}")
+    if _queue_followups_suppressed(usage_limit_state):
+        lines.append("Auto follow-up suppression is active for this queue scope.")
+    return lines
+
+
+def _usage_limit_description(limit: dict[str, object]) -> str:
+    """Return a compact human-readable usage-limit description."""
+    percent = float(limit.get("percent") or 0.0)
+    window = str(limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY)
+    action = str(limit.get("action") or "")
+    return f"{percent:g}% {window} ({action})"
+
+
+def _pick_codex_rate_limit_snapshot(rate_limits: dict[str, Any]) -> Optional[Any]:
+    """Pick the default Codex rate-limit snapshot from extracted RPC data."""
+    if "codex" in rate_limits:
+        return rate_limits["codex"]
+    if "default" in rate_limits:
+        return rate_limits["default"]
+    for snapshot in rate_limits.values():
+        return snapshot
+    return None
+
+
+def _snapshot_window_for_limit(snapshot: Any, window: str) -> Optional[_UsageWindowSnapshot]:
+    """Resolve one normalized window from a Codex rate-limit snapshot."""
+    if snapshot is None:
+        return None
+    candidates = [getattr(snapshot, "primary", None), getattr(snapshot, "secondary", None)]
+    target_minutes = 10080 if window == _USAGE_LIMIT_WINDOW_WEEKLY else 300
+    for candidate in candidates:
+        minutes = getattr(candidate, "window_minutes", None)
+        if minutes != target_minutes:
+            continue
+        used_percent = getattr(candidate, "used_percent", None)
+        if not isinstance(used_percent, (int, float)):
+            continue
+        return _UsageWindowSnapshot(
+            used_percent=float(used_percent),
+            resets_at=_to_int_like(getattr(candidate, "resets_at", None)),
+        )
+    return None
+
+
+async def _fetch_usage_window_snapshots(
+    *,
+    deps: HandlerDependencies,
+    session: Session,
+    working_directory: str,
+    windows: set[str],
+) -> dict[str, _UsageWindowSnapshot]:
+    """Fetch current backend usage snapshots for the requested windows."""
+    normalized_windows = {
+        window
+        for window in windows
+        if window in {_USAGE_LIMIT_WINDOW_WEEKLY, _USAGE_LIMIT_WINDOW_5H}
+    }
+    if not normalized_windows:
+        return {}
+
+    backend = session.get_backend()
+    if backend != "codex":
+        raise ValueError(
+            "Percentage-based queue usage limits currently require structured rate-limit data. "
+            "Claude support is not implemented in this repository yet."
+        )
+    if deps.codex_executor is None:
+        raise ValueError("Codex executor is not configured for usage-limit checks.")
+
+    payload = await deps.codex_executor.account_rate_limits_read(working_directory)
+    rate_limits = _extract_rate_limits_from_rpc(payload)
+    snapshot = _pick_codex_rate_limit_snapshot(rate_limits)
+    resolved: dict[str, _UsageWindowSnapshot] = {}
+    for window in normalized_windows:
+        resolved_window = _snapshot_window_for_limit(snapshot, window)
+        if resolved_window is None:
+            raise ValueError(f"Unable to resolve the current Codex `{window}` usage window.")
+        resolved[window] = resolved_window
+    return resolved
+
+
+def _merge_usage_limit_specs_into_state(
+    usage_limit_state: dict[str, object], specs: list[dict[str, object]]
+) -> dict[str, object]:
+    """Ensure all attached usage-limit specs exist in queue-scope runtime state."""
+    normalized_state = _normalize_usage_limit_state(usage_limit_state)
+    limits = normalized_state[_USAGE_LIMIT_STATE_LIMITS_KEY]
+    if not isinstance(limits, dict):
+        limits = {}
+        normalized_state[_USAGE_LIMIT_STATE_LIMITS_KEY] = limits
+    for spec in specs:
+        limit_id = str(spec.get("id") or "").strip()
+        if not limit_id:
+            continue
+        existing = limits.get(limit_id)
+        if isinstance(existing, dict):
+            existing["percent"] = float(spec["percent"])
+            existing["window"] = str(spec["window"])
+            existing["action"] = str(spec["action"])
+            continue
+        limits[limit_id] = {
+            "id": limit_id,
+            "percent": float(spec["percent"]),
+            "window": str(spec["window"]),
+            "action": str(spec["action"]),
+            "baseline_used_percent": None,
+            "baseline_resets_at": None,
+            "current_used_percent": None,
+            "current_resets_at": None,
+            "spent_percent": 0.0,
+            "exhausted": False,
+        }
+    return normalized_state
+
+
+async def _prepare_usage_limits_for_item(
+    *,
+    scope: str,
+    item,
+    deps: HandlerDependencies,
+    session: Session,
+    channel_id: str,
+    thread_ts: Optional[str],
+    working_directory: str,
+) -> dict[str, object]:
+    """Initialize missing usage-limit baselines before a limited item executes."""
+    specs = _usage_limit_specs_from_meta(_result_field(item, "automation_meta", None))
+    if not specs:
+        return {}
+
+    usage_lock = await _get_queue_usage_limit_lock(scope)
+    async with usage_lock:
+        control = await deps.db.get_queue_control(channel_id, thread_ts)
+        usage_limit_state = _merge_usage_limit_specs_into_state(control.usage_limit_state, specs)
+        limits = usage_limit_state[_USAGE_LIMIT_STATE_LIMITS_KEY]
+        windows_to_fetch = {
+            str(limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY)
+            for limit in limits.values()
+            if isinstance(limit, dict) and limit.get("baseline_used_percent") is None
+        }
+        if windows_to_fetch:
+            snapshots = await _fetch_usage_window_snapshots(
+                deps=deps,
+                session=session,
+                working_directory=working_directory,
+                windows=windows_to_fetch,
+            )
+            for limit in limits.values():
+                if not isinstance(limit, dict):
+                    continue
+                if limit.get("baseline_used_percent") is not None:
+                    continue
+                snapshot = snapshots.get(str(limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY))
+                if snapshot is None:
+                    continue
+                limit["baseline_used_percent"] = snapshot.used_percent
+                limit["baseline_resets_at"] = snapshot.resets_at
+                limit["current_used_percent"] = snapshot.used_percent
+                limit["current_resets_at"] = snapshot.resets_at
+                limit["spent_percent"] = 0.0
+        await deps.db.set_queue_usage_limit_state(channel_id, thread_ts, usage_limit_state)
+        return usage_limit_state
+
+
+async def _evaluate_usage_limits_for_item(
+    *,
+    scope: str,
+    item,
+    deps: HandlerDependencies,
+    session: Session,
+    channel_id: str,
+    thread_ts: Optional[str],
+    working_directory: str,
+) -> _UsageLimitEvaluation:
+    """Update usage-limit runtime state after a limited item finishes."""
+    specs = _usage_limit_specs_from_meta(_result_field(item, "automation_meta", None))
+    if not specs:
+        return _UsageLimitEvaluation(state={}, newly_exhausted=[])
+
+    usage_lock = await _get_queue_usage_limit_lock(scope)
+    async with usage_lock:
+        control = await deps.db.get_queue_control(channel_id, thread_ts)
+        usage_limit_state = _merge_usage_limit_specs_into_state(control.usage_limit_state, specs)
+        limits = usage_limit_state[_USAGE_LIMIT_STATE_LIMITS_KEY]
+        windows = {str(spec["window"]) for spec in specs}
+        snapshots = await _fetch_usage_window_snapshots(
+            deps=deps,
+            session=session,
+            working_directory=working_directory,
+            windows=windows,
+        )
+
+        newly_exhausted: list[dict[str, object]] = []
+        for spec in specs:
+            limit_id = str(spec["id"])
+            limit = limits.get(limit_id)
+            if not isinstance(limit, dict):
+                continue
+            snapshot = snapshots.get(str(limit.get("window") or _USAGE_LIMIT_WINDOW_WEEKLY))
+            if snapshot is None:
+                continue
+            baseline_used = limit.get("baseline_used_percent")
+            baseline_reset = _to_int_like(limit.get("baseline_resets_at"))
+            if baseline_used is None or (
+                baseline_reset is not None
+                and snapshot.resets_at is not None
+                and baseline_reset != snapshot.resets_at
+                and snapshot.used_percent < float(baseline_used)
+            ):
+                baseline_used = snapshot.used_percent
+                baseline_reset = snapshot.resets_at
+                limit["baseline_used_percent"] = baseline_used
+                limit["baseline_resets_at"] = baseline_reset
+                limit["spent_percent"] = 0.0
+
+            limit["current_used_percent"] = snapshot.used_percent
+            limit["current_resets_at"] = snapshot.resets_at
+            spent_percent = max(0.0, snapshot.used_percent - float(limit["baseline_used_percent"]))
+            limit["spent_percent"] = spent_percent
+            was_exhausted = bool(limit.get("exhausted"))
+            is_exhausted = spent_percent >= float(limit.get("percent") or 0.0)
+            limit["exhausted"] = is_exhausted
+            if is_exhausted and not was_exhausted:
+                newly_exhausted.append(dict(limit))
+
+        await deps.db.set_queue_usage_limit_state(channel_id, thread_ts, usage_limit_state)
+        return _UsageLimitEvaluation(state=usage_limit_state, newly_exhausted=newly_exhausted)
+
+
+async def _clear_queue_usage_limit_state(
+    deps: HandlerDependencies,
+    channel_id: str,
+    thread_ts: Optional[str],
+) -> None:
+    """Reset queue-scope usage-limit state."""
+    try:
+        await deps.db.set_queue_usage_limit_state(channel_id, thread_ts, {})
+    except AttributeError:
+        return
 
 
 def _status_prompt_text(prompt: str) -> str:
@@ -1105,6 +1527,7 @@ def _build_auto_generated_queue_entries(
     include_math_check: bool,
     should_continue: bool,
     task_status: "Optional[object]" = None,
+    usage_limits: Optional[list[dict[str, object]]] = None,
 ) -> tuple[
     list[tuple[str, Optional[str], Optional[str], Optional[int], dict[str, object]]],
     list[str],
@@ -1121,6 +1544,24 @@ def _build_auto_generated_queue_entries(
     notices: list[str] = []
     next_check_round = check_round
 
+    def build_auto_entry_meta(
+        *,
+        origin: str,
+        continue_round_value: int,
+        check_round_value: int,
+        auto_each: bool,
+    ) -> dict[str, object]:
+        metadata = _build_auto_meta(
+            root_token=root_token,
+            origin=origin,
+            continue_round=continue_round_value,
+            check_round=check_round_value,
+            auto_each=auto_each,
+        )
+        if usage_limits:
+            metadata[_USAGE_LIMITS_META_KEY] = _normalize_usage_limit_specs(usage_limits)
+        return metadata
+
     if check_round < config.QUEUE_AUTO_MAX_CHECK_ROUNDS:
         next_check_round = check_round + 1
         for prompt in build_check_prompts(include_math_check):
@@ -1130,11 +1571,10 @@ def _build_auto_generated_queue_entries(
                     None,
                     None,
                     None,
-                    _build_auto_meta(
-                        root_token=root_token,
+                    build_auto_entry_meta(
                         origin=_AUTO_META_ORIGIN_CHECK,
-                        continue_round=continue_round,
-                        check_round=next_check_round,
+                        continue_round_value=continue_round,
+                        check_round_value=next_check_round,
                         auto_each=False,
                     ),
                 )
@@ -1152,11 +1592,10 @@ def _build_auto_generated_queue_entries(
                     None,
                     None,
                     None,
-                    _build_auto_meta(
-                        root_token=root_token,
+                    build_auto_entry_meta(
                         origin=_AUTO_META_ORIGIN_CONTINUE,
-                        continue_round=continue_round + 1,
-                        check_round=next_check_round,
+                        continue_round_value=continue_round + 1,
+                        check_round_value=next_check_round,
                         auto_each=True,
                     ),
                 )
@@ -1521,6 +1960,18 @@ async def _execute_queue_item(
         root_token = str(automation_meta_for_suffix.get("root_token") or f"queue-item:{item.id}")
         logical_run_id = f"queue-item:{item.id}"
         execution_id = f"queue_{item.id}_{uuid4().hex[:8]}"
+        effective_working_directory = getattr(
+            effective_session, "working_directory", config.DEFAULT_WORKING_DIR
+        )
+        await _prepare_usage_limits_for_item(
+            scope=scope,
+            item=item,
+            deps=deps,
+            session=effective_session,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            working_directory=effective_working_directory,
+        )
         started_trace_run = None
         if trace_service is not None:
             lineage_entry = trace_lineage_state.get(root_token)
@@ -1626,6 +2077,21 @@ async def _execute_queue_item(
                 await streaming_state.finalize(is_error=True)
             return None
 
+        usage_limit_evaluation = await _evaluate_usage_limits_for_item(
+            scope=scope,
+            item=item,
+            deps=deps,
+            session=effective_session,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            working_directory=effective_working_directory,
+        )
+        scope_followups_suppressed = _queue_followups_suppressed(usage_limit_evaluation.state)
+        pause_for_percentage_limit = any(
+            str(limit.get("action") or "").strip().lower() == _USAGE_LIMIT_ACTION_PAUSE
+            for limit in usage_limit_evaluation.newly_exhausted
+        )
+
         if started_trace_run is not None:
             finalized_trace_run = await trace_service.finalize_run(
                 trace_run_id=started_trace_run.run.id,
@@ -1644,13 +2110,25 @@ async def _execute_queue_item(
             trace_lineage_state[root_token] = (root_run_id, finalized_trace_run.run.id)
 
         automation_notices: list[str] = []
+        for exhausted_limit in usage_limit_evaluation.newly_exhausted:
+            automation_notices.append(
+                "Usage-limit budget exhausted for "
+                f"{_usage_limit_description(exhausted_limit)} after completing this item."
+            )
+        if scope_followups_suppressed:
+            automation_notices.append(
+                "Auto follow-up enqueue is suppressed for this queue scope because a "
+                "`queue-only` usage limit was exhausted."
+            )
         if result.success:
             await deps.db.update_queue_item_status(item.id, "completed", output=result.output)
             final_status = "completed"
             processed_queue_item_ids.append(item.id)
 
             automation_meta = _normalize_automation_meta(item.automation_meta)
-            if automation_meta.get("auto_each"):
+            if automation_meta.get("auto_each") and not (
+                pause_for_percentage_limit or scope_followups_suppressed
+            ):
                 root_token = _auto_root_token(item, automation_meta)
                 continue_round = _coerce_int(automation_meta.get("continue_round"), 0)
                 check_round = _coerce_int(automation_meta.get("check_round"), 0)
@@ -1684,6 +2162,7 @@ async def _execute_queue_item(
                     include_math_check=decision.include_math_check,
                     should_continue=decision.should_continue,
                     task_status=decision.task_status,
+                    usage_limits=_usage_limit_specs_from_meta(item.automation_meta),
                 )
                 automation_notices.extend(cap_notices)
                 if generated_entries:
@@ -1701,6 +2180,12 @@ async def _execute_queue_item(
                         automation_notices.append(
                             f"Queued {len(queued_auto_items)} auto follow-up item(s) ({decision.reason})."
                         )
+            elif automation_meta.get("auto_each") and (
+                pause_for_percentage_limit or scope_followups_suppressed
+            ):
+                automation_notices.append(
+                    "Skipped auto follow-up generation because a queue usage limit was reached."
+                )
         else:
             await deps.db.update_queue_item_status(
                 item.id,
@@ -1719,6 +2204,11 @@ async def _execute_queue_item(
                 )
             final_status = "failed"
             processed_queue_item_ids.append(item.id)
+        if pause_for_percentage_limit:
+            await deps.db.update_queue_control_state(channel_id, thread_ts, "paused")
+            automation_notices.append(
+                "Paused the queue after this item because a `pause` usage limit was exhausted."
+            )
         final_output = result.output or result.error or "No output"
         if automation_notices:
             notice_block = "\n".join(f"- {note}" for note in automation_notices)
@@ -1727,6 +2217,40 @@ async def _execute_queue_item(
             streaming_state.accumulated_output = final_output
         if streaming_state:
             await streaming_state.finalize(is_error=not result.success)
+        if usage_limit_evaluation.newly_exhausted:
+            exhausted_descriptions = ", ".join(
+                _usage_limit_description(limit) for limit in usage_limit_evaluation.newly_exhausted
+            )
+            queue_action_text = (
+                "Queue paused before the next item."
+                if pause_for_percentage_limit
+                else (
+                    "Queue remains running, but auto follow-up enqueue is suppressed."
+                    if scope_followups_suppressed
+                    else "Queue remains running."
+                )
+            )
+            usage_notice_text = (
+                f"{_queue_scope_label(thread_ts)}: queue item #{item.id} exhausted usage limit "
+                f"{exhausted_descriptions}. {queue_action_text}"
+            )
+            try:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=usage_notice_text,
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": usage_notice_text},
+                        }
+                    ],
+                )
+            except Exception as usage_notice_error:
+                log.error(
+                    f"Failed to post usage-limit notice for queue item {item.id} in "
+                    f"scope {scope}: {usage_notice_error}"
+                )
         if finalized_trace_run is not None and started_trace_run is not None:
             if started_trace_run.config.report_step:
                 milestone = None
@@ -2227,7 +2751,25 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     milestone_name = _result_field(item, "milestone_name", None)
                     if milestone_name:
                         merged[_MILESTONE_MARKER_META_KEY] = milestone_name
+                    usage_limits = _result_field(item, "usage_limits", ())
+                    if usage_limits:
+                        merged[_USAGE_LIMITS_META_KEY] = _usage_limit_specs_to_meta(usage_limits)
                     return merged or None
+
+                if session.get_backend() != "codex" and any(
+                    _result_field(item, "usage_limits", ()) for item in materialized_prompts
+                ):
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        thread_ts=ctx.thread_ts,
+                        text="Claude usage-limit directives are not supported yet",
+                        blocks=error_message(
+                            "Percentage-based queue usage limits currently require "
+                            "structured Codex rate-limit data. Claude support is not "
+                            "implemented in this repository yet."
+                        ),
+                    )
+                    return
 
             except QueuePlanError as e:
                 await ctx.client.chat_postMessage(
@@ -2294,6 +2836,9 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             # Keep default structured submissions non-destructive when a queue item
             # is actively running, unless the DSL explicitly requested replacement.
             replace_pending = False
+
+        if replace_pending:
+            await _clear_queue_usage_limit_state(deps, ctx.channel_id, ctx.thread_ts)
 
         queued_items = await deps.db.add_many_to_queue(
             session_id=session.id,
@@ -2416,8 +2961,12 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         scheduled = await deps.db.get_pending_queue_scheduled_events(
             ctx.channel_id, target_thread_ts
         )
-        queue_state = await _get_queue_state(deps, ctx.channel_id, target_thread_ts)
+        queue_control = await deps.db.get_queue_control(ctx.channel_id, target_thread_ts)
+        queue_state = queue_control.state
         blocks = queue_status(pending, running, scheduled)
+        usage_limit_lines = _usage_limit_state_lines(
+            _normalize_usage_limit_state(queue_control.usage_limit_state)
+        )
         if queue_state != "running":
             blocks.insert(
                 2,
@@ -2438,6 +2987,19 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 ],
             },
         )
+        if usage_limit_lines:
+            blocks.insert(
+                3,
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": "*Usage limits:* " + " | ".join(usage_limit_lines[:3]),
+                        }
+                    ],
+                },
+            )
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
@@ -2509,10 +3071,13 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
 
     async def _clear_pending_queue(ctx: CommandContext) -> None:
         cleared = await deps.db.clear_queue(ctx.channel_id, ctx.thread_ts)
+        running_items = await deps.db.get_running_queue_items(ctx.channel_id, ctx.thread_ts)
         try:
             await deps.db.set_queue_auto_finish_pending(ctx.channel_id, ctx.thread_ts, False)
         except AttributeError:
             pass
+        if not running_items:
+            await _clear_queue_usage_limit_state(deps, ctx.channel_id, ctx.thread_ts)
 
         await ctx.client.chat_postMessage(
             channel=ctx.channel_id,
@@ -2540,6 +3105,7 @@ def register_queue_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             await deps.db.set_queue_auto_finish_pending(ctx.channel_id, ctx.thread_ts, False)
         except AttributeError:
             pass
+        await _clear_queue_usage_limit_state(deps, ctx.channel_id, ctx.thread_ts)
         await deps.db.update_queue_control_state(ctx.channel_id, ctx.thread_ts, "running")
 
         await ctx.client.chat_postMessage(
@@ -3248,13 +3814,22 @@ async def _process_queue(
                     remaining_pending = 0
                     final_queue_state = await _get_queue_state(deps, channel_id, thread_ts)
                     if final_queue_state == "running":
+                        queue_control = await deps.db.get_queue_control(channel_id, thread_ts)
+                        usage_limit_state = _normalize_usage_limit_state(
+                            queue_control.usage_limit_state
+                        )
                         try:
                             consumed_auto_finish = await deps.db.consume_queue_auto_finish_pending(
                                 channel_id, thread_ts
                             )
                         except AttributeError:
                             consumed_auto_finish = False
-                        if consumed_auto_finish:
+                        if consumed_auto_finish and _queue_followups_suppressed(usage_limit_state):
+                            log.info(
+                                f"Skipping auto-finish for scope {scope} because queue-wide "
+                                "follow-up suppression is active"
+                            )
+                        elif consumed_auto_finish:
                             session = await deps.db.get_or_create_session(
                                 channel_id,
                                 thread_ts=thread_ts,
@@ -3398,6 +3973,8 @@ async def _process_queue(
         log.info(f"Queue processor cancelled for scope {scope}")
         raise
     finally:
+        if queue_drained:
+            await _clear_queue_usage_limit_state(deps, channel_id, thread_ts)
         if sum(status_counts.values()) > 0:
             final_queue_state = await _get_queue_state(deps, channel_id, thread_ts)
             if final_queue_state in {"paused", "stopped"}:

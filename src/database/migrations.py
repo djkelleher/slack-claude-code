@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS queue_controls (
     thread_ts TEXT DEFAULT NULL,
     state TEXT DEFAULT 'running',
     auto_finish_pending INTEGER DEFAULT 0,
+    usage_limit_state TEXT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -370,6 +371,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                thread_ts TEXT DEFAULT NULL,
                state TEXT DEFAULT 'running',
                auto_finish_pending INTEGER DEFAULT 0,
+               usage_limit_state TEXT DEFAULT NULL,
                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
            )"""
@@ -747,6 +749,12 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         queue_control_column_names,
         "auto_finish_pending",
         "ALTER TABLE queue_controls ADD COLUMN auto_finish_pending INTEGER DEFAULT 0",
+    )
+    await _add_column_if_missing(
+        db,
+        queue_control_column_names,
+        "usage_limit_state",
+        "ALTER TABLE queue_controls ADD COLUMN usage_limit_state TEXT DEFAULT NULL",
     )
 
     # Ensure queue scope indexes exist for channel+thread isolation

@@ -39,6 +39,17 @@ class QueuePlanPrompt:
     parallel_group_id: Optional[str] = None
     parallel_limit: Optional[int] = None
     mode_directive: Optional[str] = None
+    usage_limits: tuple["QueueUsageLimitSpec", ...] = ()
+
+
+@dataclass(frozen=True)
+class QueueUsageLimitSpec:
+    """Usage-limit spec attached to one or more queue prompts."""
+
+    limit_id: str
+    percent: float
+    window: str
+    action: str
 
 
 @dataclass(frozen=True)
@@ -51,6 +62,7 @@ class MaterializedQueuePlanPrompt:
     parallel_group_id: Optional[str] = None
     parallel_limit: Optional[int] = None
     mode_directive: Optional[str] = None
+    usage_limits: tuple[QueueUsageLimitSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -104,6 +116,12 @@ class _ModeNode:
 
 
 @dataclass
+class _UsageLimitNode:
+    spec: QueueUsageLimitSpec
+    children: list["_Node"]
+
+
+@dataclass
 class _MilestoneNode:
     name: str
 
@@ -116,9 +134,16 @@ class _ForNode:
 
 
 _Node = (
-    _PromptNode | _BranchNode | _LoopNode | _ParallelNode | _ModeNode | _MilestoneNode | _ForNode
+    _PromptNode
+    | _BranchNode
+    | _LoopNode
+    | _ParallelNode
+    | _ModeNode
+    | _UsageLimitNode
+    | _MilestoneNode
+    | _ForNode
 )
-_Marker = tuple[str] | tuple[str, int | None | str] | tuple[str, str, list[str]]
+_Marker = tuple[object, ...]
 
 
 @dataclass
@@ -129,6 +154,7 @@ class _Frame:
     loop_count: Optional[int] = None
     parallel_limit: Optional[int] = None
     mode_directive: Optional[str] = None
+    usage_limit_spec: Optional[QueueUsageLimitSpec] = None
     substitution_variable: Optional[str] = None
     substitution_values: Optional[list[str]] = None
     nodes: list[_Node] = field(default_factory=list)
@@ -176,6 +202,7 @@ def parse_queue_plan_text(
         active_parallel_group_id=None,
         active_parallel_limit=None,
         active_mode_directive=None,
+        active_usage_limits=(),
         substitutions={},
         out=expanded,
         max_items=max_expanded_items,
@@ -442,6 +469,7 @@ async def materialize_queue_plan_prompts(
                 parallel_group_id=item.parallel_group_id,
                 parallel_limit=item.parallel_limit,
                 mode_directive=item.mode_directive,
+                usage_limits=item.usage_limits,
             )
             for item in expanded
         ]
@@ -495,6 +523,7 @@ async def materialize_queue_plan_prompts(
             parallel_group_id=item.parallel_group_id,
             parallel_limit=item.parallel_limit,
             mode_directive=item.mode_directive,
+            usage_limits=item.usage_limits,
         )
         for item in expanded
     ]
@@ -502,6 +531,7 @@ async def materialize_queue_plan_prompts(
 
 def _parse_to_ast(text: str) -> list[_Node]:
     stack: list[_Frame] = [_Frame(kind="root", start_line=0)]
+    usage_limit_counter = 0
 
     for line_number, line in enumerate(text.splitlines(), start=1):
         marker, inline_prompt = _parse_marker_with_inline_prompt(line.strip(), strict=True)
@@ -578,6 +608,24 @@ def _parse_to_ast(text: str) -> list[_Node]:
                 stack[-1].prompt_lines.append(inline_prompt)
             continue
 
+        if marker_type == "usage_limit_start":
+            usage_limit_counter += 1
+            stack.append(
+                _Frame(
+                    kind="usage_limit",
+                    start_line=line_number,
+                    usage_limit_spec=QueueUsageLimitSpec(
+                        limit_id=f"limit-{usage_limit_counter}",
+                        percent=float(marker[1]),
+                        window=str(marker[2]),
+                        action=str(marker[3]),
+                    ),
+                )
+            )
+            if inline_prompt:
+                stack[-1].prompt_lines.append(inline_prompt)
+            continue
+
         if marker_type == "milestone":
             if inline_prompt:
                 raise QueuePlanError(
@@ -620,6 +668,13 @@ def _close_frame(stack: list[_Frame]) -> None:
             )
         )
         return
+    if finished.kind == "usage_limit":
+        if finished.usage_limit_spec is None:
+            raise QueuePlanError("Usage-limit block is missing limit metadata.")
+        stack[-1].nodes.append(
+            _UsageLimitNode(spec=finished.usage_limit_spec, children=finished.nodes)
+        )
+        return
     if finished.kind == "for":
         stack[-1].nodes.append(
             _ForNode(
@@ -657,6 +712,18 @@ def _unexpected_block_close_detail(current: _Frame) -> str:
             f"`{current.mode_directive or ''}` opened on line {current.start_line}. "
             "Close it first with `(end)`."
         )
+    if current.kind == "usage_limit":
+        spec = current.usage_limit_spec
+        if spec is None:
+            return (
+                f"You are currently inside a usage-limit block opened on line "
+                f"{current.start_line}. Close it first with `(end)`."
+            )
+        return (
+            "You are currently inside usage-limit block "
+            f"`{spec.percent:g}% {spec.window} {spec.action}` opened on line "
+            f"{current.start_line}. Close it first with `(end)`."
+        )
     if current.kind == "for":
         return (
             "You are currently inside substitution loop "
@@ -672,6 +739,7 @@ def _expand_nodes(
     active_parallel_group_id: Optional[str],
     active_parallel_limit: Optional[int],
     active_mode_directive: Optional[str],
+    active_usage_limits: tuple[QueueUsageLimitSpec, ...],
     substitutions: dict[str, str],
     out: list[QueuePlanPrompt],
     max_items: int,
@@ -691,6 +759,7 @@ def _expand_nodes(
                     parallel_group_id=active_parallel_group_id,
                     parallel_limit=active_parallel_limit,
                     mode_directive=active_mode_directive,
+                    usage_limits=active_usage_limits,
                 )
             )
             continue
@@ -708,6 +777,7 @@ def _expand_nodes(
                     parallel_group_id=active_parallel_group_id,
                     parallel_limit=active_parallel_limit,
                     mode_directive=active_mode_directive,
+                    usage_limits=active_usage_limits,
                 )
             )
             continue
@@ -719,6 +789,7 @@ def _expand_nodes(
                 active_parallel_group_id=active_parallel_group_id,
                 active_parallel_limit=active_parallel_limit,
                 active_mode_directive=active_mode_directive,
+                active_usage_limits=active_usage_limits,
                 substitutions=substitutions,
                 out=out,
                 max_items=max_items,
@@ -734,6 +805,7 @@ def _expand_nodes(
                     active_parallel_group_id=active_parallel_group_id,
                     active_parallel_limit=active_parallel_limit,
                     active_mode_directive=active_mode_directive,
+                    active_usage_limits=active_usage_limits,
                     substitutions=substitutions,
                     out=out,
                     max_items=max_items,
@@ -749,6 +821,7 @@ def _expand_nodes(
                 active_parallel_group_id=f"parallel-{group_counter[0]}",
                 active_parallel_limit=node.limit,
                 active_mode_directive=active_mode_directive,
+                active_usage_limits=active_usage_limits,
                 substitutions=substitutions,
                 out=out,
                 max_items=max_items,
@@ -763,6 +836,22 @@ def _expand_nodes(
                 active_parallel_group_id=active_parallel_group_id,
                 active_parallel_limit=active_parallel_limit,
                 active_mode_directive=node.mode_directive,
+                active_usage_limits=active_usage_limits,
+                substitutions=substitutions,
+                out=out,
+                max_items=max_items,
+                group_counter=group_counter,
+            )
+            continue
+
+        if isinstance(node, _UsageLimitNode):
+            _expand_nodes(
+                node.children,
+                active_branch=active_branch,
+                active_parallel_group_id=active_parallel_group_id,
+                active_parallel_limit=active_parallel_limit,
+                active_mode_directive=active_mode_directive,
+                active_usage_limits=(*active_usage_limits, node.spec),
                 substitutions=substitutions,
                 out=out,
                 max_items=max_items,
@@ -782,6 +871,7 @@ def _expand_nodes(
                     active_parallel_group_id=active_parallel_group_id,
                     active_parallel_limit=active_parallel_limit,
                     active_mode_directive=active_mode_directive,
+                    active_usage_limits=active_usage_limits,
                     substitutions=next_substitutions,
                     out=out,
                     max_items=max_items,
@@ -917,9 +1007,7 @@ def _parse_parenthesized_block_marker(
     return _parse_block_marker_part(parts[0], line)
 
 
-def _parse_block_marker_part(
-    body: str, original_token: Optional[str] = None
-) -> tuple[str, str | int] | tuple[str] | None:
+def _parse_block_marker_part(body: str, original_token: Optional[str] = None) -> _Marker | None:
     """Parse one block marker from a directive body fragment."""
     lowered = body.lower()
     line = original_token or f"({body})"
@@ -950,6 +1038,10 @@ def _parse_block_marker_part(
         return _parse_milestone_marker_value(body[len("milestone ") :], marker_type="milestone")
     if lowered.startswith("mode:"):
         return _parse_mode_marker_value(body[len("mode:") :], marker_type="mode_start")
+    if lowered.startswith("limit:"):
+        return _parse_usage_limit_marker_value(
+            body[len("limit:") :], line, marker_type="usage_limit_start"
+        )
     return None
 
 
@@ -978,6 +1070,7 @@ def _looks_like_queue_directive_part(body: str) -> bool:
         or lowered.startswith("branch ")
         or lowered.startswith("milestone ")
         or lowered.startswith("mode:")
+        or lowered.startswith("limit:")
         or lowered.startswith("loop")
         or lowered.startswith("parallel")
     )
@@ -1055,6 +1148,55 @@ def _parse_milestone_marker_value(name_text: str, marker_type: str) -> tuple[str
     if not milestone_name:
         raise QueuePlanError("Milestone marker must include a milestone name.")
     return marker_type, milestone_name
+
+
+def _parse_usage_limit_marker_value(
+    limit_text: str, line: str, marker_type: str
+) -> tuple[str, float, str, str]:
+    """Parse and validate usage-limit marker payload."""
+    parts = limit_text.split()
+    if len(parts) < 2 or len(parts) > 3:
+        raise QueuePlanError(
+            f"Invalid usage-limit marker `{line}`. Use `(limit: 10% pause)` or "
+            "`(limit: 2.5% 5h queue-only)`."
+        )
+
+    percent_text = parts[0].strip()
+    if not percent_text.endswith("%"):
+        raise QueuePlanError(f"Invalid usage-limit marker `{line}`. Percentage must end with `%`.")
+    try:
+        percent = float(percent_text[:-1])
+    except ValueError as exc:
+        raise QueuePlanError(
+            f"Invalid usage-limit percentage `{percent_text}` in marker `{line}`."
+        ) from exc
+    if percent <= 0 or percent > 100:
+        raise QueuePlanError(
+            f"Invalid usage-limit percentage `{percent_text}` in marker `{line}`. "
+            "Percent must be > 0 and <= 100."
+        )
+
+    window = "weekly"
+    action_text = ""
+    if len(parts) == 2:
+        action_text = parts[1]
+    else:
+        window = parts[1].strip().lower()
+        action_text = parts[2]
+
+    if window not in {"weekly", "5h"}:
+        raise QueuePlanError(
+            f"Invalid usage-limit window `{window}` in marker `{line}`. " "Use `weekly` or `5h`."
+        )
+
+    action = action_text.strip().lower()
+    if action not in {"pause", "queue-only"}:
+        raise QueuePlanError(
+            f"Invalid usage-limit action `{action}` in marker `{line}`. "
+            "Use `pause` or `queue-only`."
+        )
+
+    return marker_type, percent, window, action
 
 
 def _parse_parallel_marker_value(limit_text: Optional[str], line: str) -> tuple[str, Optional[int]]:

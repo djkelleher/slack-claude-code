@@ -45,6 +45,32 @@ def _automation_prefix(item: Any) -> str:
     return ""
 
 
+def _usage_limit_prefix(item: Any) -> str:
+    """Return a short queue label prefix for attached usage limits."""
+    raw_meta = item.automation_meta
+    if not isinstance(raw_meta, dict):
+        return ""
+    raw_limits = raw_meta.get("usage_limits")
+    if not isinstance(raw_limits, list) or not raw_limits:
+        return ""
+    first_limit = raw_limits[0]
+    if not isinstance(first_limit, dict):
+        return ""
+    try:
+        percent = float(first_limit.get("percent"))
+    except (TypeError, ValueError):
+        percent = None
+    window = str(first_limit.get("window") or "weekly").strip().lower()
+    action = str(first_limit.get("action") or "").strip().lower()
+    if percent is None or action not in {"pause", "queue-only"}:
+        return ""
+    window_label = "5h" if window == "5h" else "weekly"
+    prefix = f"[limit {percent:g}% {window_label} {action}"
+    if len(raw_limits) > 1:
+        prefix = f"{prefix} +{len(raw_limits) - 1}"
+    return f"{prefix}] "
+
+
 def _pending_item_text(item: Any, displayed_position: int) -> str:
     """Render one pending queue line."""
     parallel_suffix = ""
@@ -52,7 +78,7 @@ def _pending_item_text(item: Any, displayed_position: int) -> str:
         parallel_suffix = f", parallel max {item.parallel_limit or 'all'}"
     return (
         f"*#{item.id}* (pos {displayed_position}{parallel_suffix})\n> "
-        f"{_escaped_preview(_automation_prefix(item) + item.prompt, 100)}"
+        f"{_escaped_preview(_automation_prefix(item) + _usage_limit_prefix(item) + item.prompt, 100)}"
     )
 
 
@@ -89,7 +115,7 @@ def queue_status(pending: list, running: Any, scheduled_events: list | None = No
             label = _running_item_label(item)
             running_lines.append(
                 f":arrow_forward: *Running:* {label}\n> "
-                f"{_escaped_preview(_automation_prefix(item) + item.prompt, 100)}"
+                f"{_escaped_preview(_automation_prefix(item) + _usage_limit_prefix(item) + item.prompt, 100)}"
             )
         blocks.append(
             {
@@ -138,6 +164,7 @@ def queue_status(pending: list, running: Any, scheduled_events: list | None = No
 
 def queue_item_running(item: Any, sequence_number: str) -> list[dict]:
     """Format running queue item status."""
+    preview = _automation_prefix(item) + _usage_limit_prefix(item) + " ".join(item.prompt.split())
     return [
         {
             "type": "section",
@@ -145,7 +172,7 @@ def queue_item_running(item: Any, sequence_number: str) -> list[dict]:
                 "type": "mrkdwn",
                 "text": (
                     f":arrow_forward: *Processing queue item {sequence_number}:*\n> "
-                    f"{_escaped_preview(_automation_prefix(item) + ' '.join(item.prompt.split()), 200)}"
+                    f"{_escaped_preview(preview, 200)}"
                 ),
             },
         },
@@ -170,7 +197,9 @@ def queue_item_complete(item: Any, result: Any) -> list[dict]:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"> {_escaped_preview(_automation_prefix(item) + item.prompt, 100)}",
+                "text": (
+                    f"> {_escaped_preview(_automation_prefix(item) + _usage_limit_prefix(item) + item.prompt, 100)}"
+                ),
             },
         },
         {"type": "divider"},

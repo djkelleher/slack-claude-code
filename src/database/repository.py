@@ -72,6 +72,8 @@ class DatabaseRepository:
                              current_head_commit, target_commit, preview_key, preview_diff,
                              checkpoint_name, checkpoint_ref, status, applied, created_at,
                              applied_at"""
+    _QUEUE_CONTROL_SELECT = """id, channel_id, thread_ts, state, created_at, updated_at,
+                            auto_finish_pending, usage_limit_state"""
 
     def __init__(self, db_path: str, timeout: float = DB_TIMEOUT):
         self.db_path = db_path
@@ -1482,10 +1484,9 @@ class DatabaseRepository:
         normalized_thread_ts = self._normalize_thread_ts(thread_ts)
         async with self._get_connection() as db:
             cursor = await db.execute(
-                """SELECT id, channel_id, thread_ts, state, created_at, updated_at,
-                          auto_finish_pending
-                   FROM queue_controls
-                   WHERE """
+                f"""SELECT {self._QUEUE_CONTROL_SELECT}
+                    FROM queue_controls
+                    WHERE """
                 + self._QUEUE_SCOPE_WHERE
                 + """
                    ORDER BY updated_at DESC, id DESC
@@ -1568,6 +1569,43 @@ class DatabaseRepository:
                        (channel_id, thread_ts, state, auto_finish_pending)
                        VALUES (?, ?, 'running', ?)""",
                     (channel_id, normalized_thread_ts, pending_value),
+                )
+        return await self.get_queue_control(channel_id, normalized_thread_ts)
+
+    async def set_queue_usage_limit_state(
+        self, channel_id: str, thread_ts: Optional[str], usage_limit_state: dict[str, object]
+    ) -> QueueControl:
+        """Persist queue-scope usage-limit runtime state."""
+        normalized_thread_ts = self._normalize_thread_ts(thread_ts)
+        encoded_state = json.dumps(usage_limit_state or {})
+        async with self._transact() as db:
+            cursor = await db.execute(
+                """SELECT id FROM queue_controls
+                   WHERE """
+                + self._QUEUE_SCOPE_WHERE
+                + """
+                   ORDER BY updated_at DESC, id DESC
+                   LIMIT 1""",
+                self._queue_scope_params(channel_id, normalized_thread_ts),
+            )
+            row = await cursor.fetchone()
+            if row:
+                await db.execute(
+                    """UPDATE queue_controls
+                       SET usage_limit_state = ?, updated_at = CURRENT_TIMESTAMP
+                       WHERE """
+                    + self._QUEUE_SCOPE_WHERE,
+                    (
+                        encoded_state,
+                        *self._queue_scope_params(channel_id, normalized_thread_ts),
+                    ),
+                )
+            else:
+                await db.execute(
+                    """INSERT INTO queue_controls
+                       (channel_id, thread_ts, state, usage_limit_state)
+                       VALUES (?, ?, 'running', ?)""",
+                    (channel_id, normalized_thread_ts, encoded_state),
                 )
         return await self.get_queue_control(channel_id, normalized_thread_ts)
 

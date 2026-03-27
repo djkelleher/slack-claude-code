@@ -367,17 +367,27 @@ class QueueControl:
     thread_ts: Optional[str] = None
     state: str = "running"
     auto_finish_pending: bool = False
+    usage_limit_state: dict[str, object] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
 
     @classmethod
     def from_row(cls, row: tuple) -> "QueueControl":
+        usage_limit_state: dict[str, object] = {}
+        if len(row) > 7 and row[7]:
+            try:
+                parsed_usage_state = json.loads(row[7])
+            except (TypeError, json.JSONDecodeError):
+                parsed_usage_state = None
+            if isinstance(parsed_usage_state, dict):
+                usage_limit_state = parsed_usage_state
         return cls(
             id=row[0],
             channel_id=row[1],
             thread_ts=row[2],
             state=row[3] or "running",
             auto_finish_pending=bool(row[6]) if len(row) > 6 else False,
+            usage_limit_state=usage_limit_state,
             created_at=datetime.fromisoformat(row[4]) if row[4] else datetime.now(),
             updated_at=datetime.fromisoformat(row[5]) if row[5] else datetime.now(),
         )
@@ -390,6 +400,7 @@ class QueueControl:
             thread_ts=thread_ts,
             state="running",
             auto_finish_pending=False,
+            usage_limit_state={},
         )
 
 
