@@ -1,5 +1,6 @@
 """Traceability, lineage, rollback, and reporting orchestration."""
 
+import asyncio
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -85,6 +86,30 @@ class TraceService:
         """Disable tracing for a scope."""
         return await self.db.upsert_trace_config(channel_id, thread_ts, enabled=False)
 
+    async def start_explicit_milestone(
+        self,
+        *,
+        session_id: int,
+        channel_id: str,
+        thread_ts: Optional[str],
+        name: str,
+    ) -> TraceMilestone:
+        """Close any current explicit milestone and open a new one for the scope."""
+        active_milestone = await self.db.get_active_explicit_trace_milestone(channel_id, thread_ts)
+        if active_milestone is not None:
+            await self.db.complete_trace_milestone(
+                active_milestone.id,
+                summary="Closed by explicit milestone change",
+            )
+        return await self.db.create_trace_milestone(
+            session_id=session_id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            name=name,
+            mode="explicit",
+            root_key=None,
+        )
+
     async def start_run(
         self,
         *,
@@ -109,18 +134,22 @@ class TraceService:
         backend = session.get_backend()
         model = session.model
         git_base_commit = None
+        git_base_is_clean = None
         git_branch = None
         remote_name = None
         remote_url = None
         if await self._is_git_repo(working_directory):
             try:
                 git_base_commit = await self.git_service.get_head_commit_hash(working_directory)
+                git_base_status = await self.git_service.get_status(working_directory)
+                git_base_is_clean = git_base_status.is_clean
                 git_branch = await self.git_service.get_current_branch(working_directory)
                 remote_name, remote_url = await self.git_service.get_preferred_remote(
                     working_directory
                 )
             except GitError:
                 git_base_commit = None
+                git_base_is_clean = None
                 git_branch = None
                 remote_name = None
                 remote_url = None
@@ -150,6 +179,7 @@ class TraceService:
             working_directory=working_directory,
             prompt=prompt,
             git_base_commit=git_base_commit,
+            git_base_is_clean=git_base_is_clean,
             git_branch=git_branch,
             remote_name=remote_name,
             remote_url=remote_url,
@@ -168,7 +198,7 @@ class TraceService:
                 "root_key": root_key,
             },
         )
-        await self._emit_openlineage(trace_config, trace_run, event_type="START")
+        self._schedule_openlineage_export(trace_config, trace_run, event_type="START")
         refreshed = await self.db.get_trace_run(trace_run.id)
         if refreshed is None:
             raise RuntimeError("Trace run disappeared immediately after creation")
@@ -184,6 +214,24 @@ class TraceService:
         git_tool_events: list[dict[str, Any]],
     ) -> FinalizedTraceRun:
         """Finalize a trace run, capturing commits and managed fallback commits."""
+        return await self.finalize_run_with_status(
+            trace_run_id=trace_run_id,
+            final_status="completed" if success else "failed",
+            output=output,
+            error=error,
+            git_tool_events=git_tool_events,
+        )
+
+    async def finalize_run_with_status(
+        self,
+        *,
+        trace_run_id: int,
+        final_status: str,
+        output: str,
+        error: Optional[str],
+        git_tool_events: list[dict[str, Any]],
+    ) -> FinalizedTraceRun:
+        """Finalize a trace run with an explicit terminal status."""
         trace_run = await self.db.get_trace_run(trace_run_id)
         if trace_run is None:
             raise RuntimeError(f"Trace run {trace_run_id} not found")
@@ -191,8 +239,14 @@ class TraceService:
         trace_config = await self.get_config(trace_run.channel_id, trace_run.thread_ts)
         working_directory = trace_run.working_directory
         fallback_commit_hash: Optional[str] = None
+        success = final_status == "completed"
 
-        if trace_config.auto_commit and success and await self._is_git_repo(working_directory):
+        if (
+            trace_config.auto_commit
+            and success
+            and trace_run.git_base_is_clean
+            and await self._is_git_repo(working_directory)
+        ):
             commit_diffs = await self.git_service.get_commit_diffs_since(
                 working_directory,
                 trace_run.git_base_commit,
@@ -227,11 +281,11 @@ class TraceService:
         )
         await self.db.update_trace_run(
             trace_run_id,
-            status="completed" if success else "failed",
+            status=final_status,
             git_head_commit=head_commit,
             summary=summary,
         )
-        if not success and await self._is_git_repo(working_directory):
+        if final_status in {"failed", "cancelled"} and await self._is_git_repo(working_directory):
             try:
                 status = await self.git_service.get_status(working_directory)
             except GitError:
@@ -270,6 +324,7 @@ class TraceService:
             event_type="run_finished",
             payload={
                 "success": success,
+                "final_status": final_status,
                 "commit_count": len(commits),
                 "fallback_commit_hash": fallback_commit_hash,
                 "summary": summary,
@@ -279,10 +334,15 @@ class TraceService:
         if refreshed is None:
             raise RuntimeError("Trace run disappeared after finalize")
         await self._complete_milestone_if_ready(refreshed)
-        await self._emit_openlineage(
+        openlineage_event_type = "COMPLETE"
+        if final_status == "failed":
+            openlineage_event_type = "FAIL"
+        elif final_status == "cancelled":
+            openlineage_event_type = "ABORT"
+        self._schedule_openlineage_export(
             trace_config,
             refreshed,
-            event_type="COMPLETE" if success else "FAIL",
+            event_type=openlineage_event_type,
             commits=commits,
         )
         return FinalizedTraceRun(run=refreshed, commits=commits)
@@ -294,17 +354,18 @@ class TraceService:
         channel_id: str,
         thread_ts: Optional[str],
         status_counts: dict[str, int],
+        queue_item_ids: list[int],
     ) -> Optional[TraceQueueSummary]:
         """Create an aggregated queue summary when trace reporting is enabled."""
         trace_config = await self.get_config(channel_id, thread_ts)
         if not trace_config.enabled or not trace_config.report_queue_end:
             return None
 
-        runs = [
-            run
-            for run in await self.db.list_recent_trace_runs(channel_id, thread_ts, limit=50)
-            if run.queue_item_id is not None
-        ]
+        runs: list[TraceRun] = []
+        for queue_item_id in dict.fromkeys(queue_item_ids):
+            run = await self.db.get_trace_run_by_queue_item(queue_item_id)
+            if run is not None:
+                runs.append(run)
         commit_count = 0
         milestone_names: list[str] = []
         for run in runs:
@@ -450,22 +511,17 @@ class TraceService:
     ) -> Optional[TraceMilestone]:
         if not config_obj.report_milestone:
             return None
+        active_explicit = await self.db.get_active_explicit_trace_milestone(channel_id, thread_ts)
         if milestone_name:
-            existing = await self.db.get_open_trace_milestone(
-                channel_id, thread_ts, root_key=root_key
-            )
-            if existing is not None:
-                await self.db.complete_trace_milestone(
-                    existing.id, summary="Closed by explicit marker"
-                )
-            return await self.db.create_trace_milestone(
+            return await self.start_explicit_milestone(
                 session_id=session_id,
                 channel_id=channel_id,
                 thread_ts=thread_ts,
                 name=milestone_name,
-                mode="explicit",
-                root_key=root_key,
             )
+
+        if active_explicit is not None:
+            return active_explicit
 
         if config_obj.milestone_mode == "explicit":
             return await self.db.get_open_trace_milestone(channel_id, thread_ts, root_key=root_key)
@@ -625,6 +681,27 @@ class TraceService:
             await self.db.complete_trace_milestone(
                 trace_run.milestone_id, summary=trace_run.summary
             )
+
+    def _schedule_openlineage_export(
+        self,
+        trace_config: TraceConfig,
+        trace_run: TraceRun,
+        *,
+        event_type: str,
+        commits: Optional[list[TraceCommit]] = None,
+    ) -> None:
+        """Dispatch OpenLineage export without blocking the caller."""
+        try:
+            asyncio.create_task(
+                self._emit_openlineage(
+                    trace_config,
+                    trace_run,
+                    event_type=event_type,
+                    commits=commits,
+                )
+            )
+        except RuntimeError as exc:
+            logger.error(f"Failed to schedule OpenLineage export for run {trace_run.id}: {exc}")
 
     async def _emit_openlineage(
         self,

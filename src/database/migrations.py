@@ -215,6 +215,7 @@ CREATE TABLE IF NOT EXISTS trace_runs (
     prompt TEXT NOT NULL,
     status TEXT DEFAULT 'running',
     git_base_commit TEXT DEFAULT NULL,
+    git_base_is_clean INTEGER DEFAULT NULL,
     git_head_commit TEXT DEFAULT NULL,
     git_branch TEXT DEFAULT NULL,
     remote_name TEXT DEFAULT NULL,
@@ -471,6 +472,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                prompt TEXT NOT NULL,
                status TEXT DEFAULT 'running',
                git_base_commit TEXT DEFAULT NULL,
+               git_base_is_clean INTEGER DEFAULT NULL,
                git_head_commit TEXT DEFAULT NULL,
                git_branch TEXT DEFAULT NULL,
                remote_name TEXT DEFAULT NULL,
@@ -614,6 +616,16 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         column_names,
         "approval_mode",
         "ALTER TABLE sessions ADD COLUMN approval_mode TEXT DEFAULT 'on-request'",
+    )
+
+    cursor = await db.execute("PRAGMA table_info(trace_runs)")
+    trace_run_columns = await cursor.fetchall()
+    trace_run_column_names = [col[1] for col in trace_run_columns]
+    await _add_column_if_missing(
+        db,
+        trace_run_column_names,
+        "git_base_is_clean",
+        "ALTER TABLE trace_runs ADD COLUMN git_base_is_clean INTEGER DEFAULT NULL",
     )
 
     history_cursor = await db.execute("PRAGMA table_info(command_history)")

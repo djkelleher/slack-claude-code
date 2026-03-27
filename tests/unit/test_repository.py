@@ -319,6 +319,7 @@ class TestTraceOperations:
             working_directory="/repo",
             prompt="Implement tracing",
             git_base_commit="abc123",
+            git_base_is_clean=True,
             git_branch="main",
             remote_name="origin",
             remote_url="git@github.com:org/repo.git",
@@ -389,6 +390,7 @@ class TestTraceOperations:
 
         assert loaded_run is not None
         assert loaded_run.status == "completed"
+        assert loaded_run.git_base_is_clean is True
         assert loaded_run.git_head_commit == "def456"
         assert loaded_run.summary == "completed: 1 commit(s), verification mentioned"
         assert len(commits) == 1

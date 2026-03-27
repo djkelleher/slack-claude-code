@@ -641,13 +641,11 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
             milestone_name = ctx.text[len("milestone") :].strip()
             if not milestone_name:
                 raise ValueError("Usage: /trace milestone <name>")
-            milestone = await deps.db.create_trace_milestone(
+            milestone = await trace_service.start_explicit_milestone(
                 session_id=session.id,
                 channel_id=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
                 name=milestone_name,
-                mode="explicit",
-                root_key=f"manual:{session.id}:{milestone_name}",
             )
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,

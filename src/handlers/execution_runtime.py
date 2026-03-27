@@ -73,6 +73,7 @@ async def execute_prompt_with_runtime(
     smart_concat, terminal_style = streaming_flags_for_session(session)
     execution_id = str(uuid.uuid4())
     started_trace_run = None
+    trace_run_finalized = False
     trace_service = getattr(deps, "trace_service", None)
 
     async def on_streaming_error(error_msg: str) -> None:
@@ -178,6 +179,7 @@ async def execute_prompt_with_runtime(
             )
             result.git_diff_summary = git_diff_summary
             result.git_diff_output = git_diff_output
+            trace_run_finalized = True
 
         if result.success:
             await deps.db.update_command_status(cmd_history.id, "completed", result.output)
@@ -240,6 +242,14 @@ async def execute_prompt_with_runtime(
 
     except asyncio.CancelledError:
         logger.info("Command execution was cancelled")
+        if started_trace_run is not None and not trace_run_finalized:
+            await trace_service.finalize_run_with_status(
+                trace_run_id=started_trace_run.run.id,
+                final_status="cancelled",
+                output="",
+                error="Cancelled",
+                git_tool_events=[],
+            )
         await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
         await deps.db.update_command_status(cmd_history.id, "cancelled", error_message="Cancelled")
         await client.chat_update(
@@ -251,6 +261,14 @@ async def execute_prompt_with_runtime(
         raise
     except SlackApiError as e:
         logger.error(f"Slack API error executing command: {e}")
+        if started_trace_run is not None and not trace_run_finalized:
+            await trace_service.finalize_run_with_status(
+                trace_run_id=started_trace_run.run.id,
+                final_status="failed",
+                output="",
+                error=str(e),
+                git_tool_events=[],
+            )
         await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
         await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         try:
@@ -265,6 +283,14 @@ async def execute_prompt_with_runtime(
         raise
     except (OSError, IOError) as e:
         logger.error(f"I/O error executing command: {e}")
+        if started_trace_run is not None and not trace_run_finalized:
+            await trace_service.finalize_run_with_status(
+                trace_run_id=started_trace_run.run.id,
+                final_status="failed",
+                output="",
+                error=str(e),
+                git_tool_events=[],
+            )
         await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
         await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         await client.chat_update(
@@ -276,6 +302,14 @@ async def execute_prompt_with_runtime(
         raise
     except Exception as e:
         logger.error(f"Unexpected error executing command: {type(e).__name__}: {e}")
+        if started_trace_run is not None and not trace_run_finalized:
+            await trace_service.finalize_run_with_status(
+                trace_run_id=started_trace_run.run.id,
+                final_status="failed",
+                output="",
+                error=str(e),
+                git_tool_events=[],
+            )
         await _cleanup_runtime_state(streaming_state=streaming_state, session_id=str(session.id))
         await deps.db.update_command_status(cmd_history.id, "failed", error_message=str(e))
         await client.chat_update(

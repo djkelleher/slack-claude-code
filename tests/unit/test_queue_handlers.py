@@ -516,6 +516,64 @@ async def test_execute_queue_item_routes_known_slash_command_through_router():
 
 
 @pytest.mark.asyncio
+async def test_execute_queue_item_traces_known_slash_command_when_trace_enabled():
+    """Queued slash commands should still create and finalize trace runs."""
+    item = _queue_item(173, "/clear")
+    session = Session(id=1, channel_id="C123", model="opus")
+    slash_router = SimpleNamespace(
+        has_command=MagicMock(return_value=True),
+        dispatch=AsyncMock(return_value=True),
+    )
+    trace_run = SimpleNamespace(id=21)
+    finalized_run = SimpleNamespace(
+        run=SimpleNamespace(id=21, root_run_id=21, milestone_id=None), commits=[]
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            update_queue_item_status=AsyncMock(side_effect=[True, None]),
+        ),
+        codex_executor=None,
+        slash_command_router=slash_router,
+        trace_service=SimpleNamespace(
+            start_run=AsyncMock(
+                return_value=SimpleNamespace(
+                    run=trace_run,
+                    config=SimpleNamespace(report_step=False),
+                )
+            ),
+            finalize_run_with_status=AsyncMock(return_value=finalized_run),
+        ),
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(),
+        chat_update=AsyncMock(),
+    )
+
+    result = await _execute_queue_item(
+        item,
+        channel_id="C123",
+        thread_ts="123.456",
+        scope="C123:123.456",
+        deps=deps,
+        client=client,
+        log=MagicMock(),
+        base_session=session,
+        sequence_label="1",
+        override_resume_ids={},
+    )
+
+    assert result == "completed"
+    deps.trace_service.start_run.assert_awaited_once()
+    deps.trace_service.finalize_run_with_status.assert_awaited_once_with(
+        trace_run_id=21,
+        final_status="completed",
+        output="Executed slash command /clear",
+        error=None,
+        git_tool_events=[],
+    )
+
+
+@pytest.mark.asyncio
 async def test_execute_queue_item_applies_mode_directive_from_metadata():
     """Queue item metadata mode directives should override runtime session modes."""
     item = _queue_item(74, "Run static analysis")

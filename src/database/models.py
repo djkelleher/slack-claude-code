@@ -519,6 +519,7 @@ class TraceRun:
     prompt: str = ""
     status: str = "running"  # running, completed, failed, cancelled
     git_base_commit: Optional[str] = None
+    git_base_is_clean: Optional[bool] = None
     git_head_commit: Optional[str] = None
     git_branch: Optional[str] = None
     remote_name: Optional[str] = None
@@ -546,13 +547,14 @@ class TraceRun:
             prompt=row[13] or "",
             status=row[14] or "running",
             git_base_commit=row[15],
-            git_head_commit=row[16],
-            git_branch=row[17],
-            remote_name=row[18],
-            remote_url=row[19],
-            summary=row[20],
-            created_at=datetime.fromisoformat(row[21]) if row[21] else datetime.now(),
-            completed_at=datetime.fromisoformat(row[22]) if row[22] else None,
+            git_base_is_clean=None if row[16] is None else bool(row[16]),
+            git_head_commit=row[17],
+            git_branch=row[18],
+            remote_name=row[19],
+            remote_url=row[20],
+            summary=row[21],
+            created_at=datetime.fromisoformat(row[22]) if row[22] else datetime.now(),
+            completed_at=datetime.fromisoformat(row[23]) if row[23] else None,
         )
 
 

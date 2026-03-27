@@ -1116,6 +1116,7 @@ async def _execute_queue_item(
     base_session: Session,
     sequence_label: str,
     override_resume_ids: dict[str, dict[str, str]],
+    processed_queue_item_ids: Optional[list[int]] = None,
     trace_lineage_state: Optional[dict[str, tuple[int, int]]] = None,
     parallel_config: Optional[_ParallelExecutionConfig] = None,
 ) -> Optional[str]:
@@ -1123,6 +1124,8 @@ async def _execute_queue_item(
     trace_service = getattr(deps, "trace_service", None)
     if trace_lineage_state is None:
         trace_lineage_state = {}
+    if processed_queue_item_ids is None:
+        processed_queue_item_ids = []
     claimed = await deps.db.update_queue_item_status(item.id, "running")
     if not claimed:
         log.info(f"Queue item #{item.id} no longer pending in scope {scope}, skipping")
@@ -1136,19 +1139,28 @@ async def _execute_queue_item(
             thread_ts=thread_ts,
             default_cwd=config.DEFAULT_WORKING_DIR,
         )
-        await deps.db.create_trace_milestone(
-            session_id=session.id,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            name=milestone_marker,
-            mode="explicit",
-            root_key=f"queue-milestone:{item.id}",
-        )
+        if trace_service is not None:
+            await trace_service.start_explicit_milestone(
+                session_id=session.id,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                name=milestone_marker,
+            )
+        else:
+            await deps.db.create_trace_milestone(
+                session_id=session.id,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                name=milestone_marker,
+                mode="explicit",
+                root_key=None,
+            )
         await deps.db.update_queue_item_status(
             item.id,
             "completed",
             output=f"Recorded milestone `{milestone_marker}`",
         )
+        processed_queue_item_ids.append(item.id)
         await client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
@@ -1177,26 +1189,86 @@ async def _execute_queue_item(
         and slash_command_router
         and slash_command_router.has_command(slash_command.name)
     ):
+        started_trace_run = None
+        root_token = str(initial_meta.get("root_token") or f"queue-item:{item.id}")
+        if trace_service is not None:
+            lineage_entry = trace_lineage_state.get(root_token)
+            root_run_id = None
+            parent_run_id = None
+            if lineage_entry is not None:
+                root_run_id, parent_run_id = lineage_entry
+            started_trace_run = await trace_service.start_run(
+                session=base_session,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                command_id=None,
+                queue_item_id=item.id,
+                execution_id=f"queue_{item.id}",
+                prompt=item.prompt,
+                parent_run_id=parent_run_id,
+                root_run_id=root_run_id,
+                root_key=root_token,
+            )
         queue_user_id = f"{_QUEUE_COMMAND_USER_ID_PREFIX}-{item.id}"
         log.info(
             f"Routing queue item #{item.id} to slash command handler {slash_command.name} "
             f"(scope={scope})"
         )
-        await slash_command_router.dispatch(
-            command_name=slash_command.name,
-            command_text=slash_command.text,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            user_id=queue_user_id,
-            client=client,
-            logger=log,
-        )
-        await deps.db.update_queue_item_status(
-            item.id,
-            "completed",
-            output=f"Executed slash command {slash_command.name}",
-        )
-        return "completed"
+        try:
+            await slash_command_router.dispatch(
+                command_name=slash_command.name,
+                command_text=slash_command.text,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                user_id=queue_user_id,
+                client=client,
+                logger=log,
+            )
+            await deps.db.update_queue_item_status(
+                item.id,
+                "completed",
+                output=f"Executed slash command {slash_command.name}",
+            )
+            processed_queue_item_ids.append(item.id)
+            if started_trace_run is not None:
+                finalized_trace_run = await trace_service.finalize_run_with_status(
+                    trace_run_id=started_trace_run.run.id,
+                    final_status="completed",
+                    output=f"Executed slash command {slash_command.name}",
+                    error=None,
+                    git_tool_events=[],
+                )
+                root_run_id = finalized_trace_run.run.root_run_id or finalized_trace_run.run.id
+                trace_lineage_state[root_token] = (root_run_id, finalized_trace_run.run.id)
+                if started_trace_run.config.report_step:
+                    milestone = None
+                    if finalized_trace_run.run.milestone_id is not None:
+                        milestone = await deps.db.get_trace_milestone(
+                            finalized_trace_run.run.milestone_id
+                        )
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text="Trace step report",
+                        blocks=trace_step_report_blocks(
+                            finalized_trace_run.run,
+                            finalized_trace_run.commits,
+                            milestone=milestone,
+                        ),
+                    )
+            return "completed"
+        except Exception as exc:
+            if started_trace_run is not None:
+                await trace_service.finalize_run_with_status(
+                    trace_run_id=started_trace_run.run.id,
+                    final_status="failed",
+                    output="",
+                    error=str(exc),
+                    git_tool_events=[],
+                )
+            await deps.db.update_queue_item_status(item.id, "failed", error_message=str(exc))
+            processed_queue_item_ids.append(item.id)
+            raise
 
     processing_log_line = (
         _parallel_processing_log_line(item.id, parallel_config.group_id, item.prompt)
@@ -1211,6 +1283,8 @@ async def _execute_queue_item(
 
     message_ts = None
     streaming_state = None
+    started_trace_run = None
+    trace_run_finalized = False
     try:
 
         def _create_streaming_state(message_timestamp: str) -> StreamingMessageState:
@@ -1391,6 +1465,7 @@ async def _execute_queue_item(
             )
             result.git_diff_summary = git_diff_summary
             result.git_diff_output = git_diff_output
+            trace_run_finalized = True
             root_run_id = finalized_trace_run.run.root_run_id or finalized_trace_run.run.id
             trace_lineage_state[root_token] = (root_run_id, finalized_trace_run.run.id)
         route_backend = "claude"
@@ -1443,6 +1518,7 @@ async def _execute_queue_item(
         if result.success:
             await deps.db.update_queue_item_status(item.id, "completed", output=result.output)
             final_status = "completed"
+            processed_queue_item_ids.append(item.id)
 
             automation_meta = _normalize_automation_meta(item.automation_meta)
             if automation_meta.get("auto_each"):
@@ -1513,6 +1589,7 @@ async def _execute_queue_item(
                     result_error=result.error,
                 )
             final_status = "failed"
+            processed_queue_item_ids.append(item.id)
         final_output = result.output or result.error or "No output"
         if automation_notices:
             notice_block = "\n".join(f"- {note}" for note in automation_notices)
@@ -1541,11 +1618,20 @@ async def _execute_queue_item(
         return final_status
 
     except asyncio.CancelledError:
+        if started_trace_run is not None and not trace_run_finalized:
+            await trace_service.finalize_run_with_status(
+                trace_run_id=started_trace_run.run.id,
+                final_status="cancelled",
+                output="",
+                error="Queue processor cancelled",
+                git_tool_events=[],
+            )
         await deps.db.update_queue_item_status(
             item.id,
             "cancelled",
             error_message="Queue processor cancelled",
         )
+        processed_queue_item_ids.append(item.id)
         if streaming_state:
             if not streaming_state.accumulated_output.strip():
                 streaming_state.accumulated_output = "Queue item cancelled while processing."
@@ -1560,7 +1646,16 @@ async def _execute_queue_item(
         raise
     except Exception as e:
         log.error(f"Queue item {item.id} failed in scope {scope}: {e}")
+        if started_trace_run is not None and not trace_run_finalized:
+            await trace_service.finalize_run_with_status(
+                trace_run_id=started_trace_run.run.id,
+                final_status="failed",
+                output="",
+                error=str(e),
+                git_tool_events=[],
+            )
         await deps.db.update_queue_item_status(item.id, "failed", error_message=str(e))
+        processed_queue_item_ids.append(item.id)
         if streaming_state:
             if not streaming_state.accumulated_output.strip():
                 streaming_state.accumulated_output = f"Queue item failed: {e}"
@@ -1594,6 +1689,7 @@ async def _run_parallel_group(
     log,
     session: Session,
     items: list,
+    processed_queue_item_ids: list[int],
     trace_lineage_state: dict[str, tuple[int, int]],
 ) -> list[str]:
     """Execute a queue parallel group with bounded concurrency."""
@@ -1632,6 +1728,7 @@ async def _run_parallel_group(
                 base_session=session,
                 sequence_label=f"{queue_item.id} · parallel {group_id}",
                 override_resume_ids={},
+                processed_queue_item_ids=processed_queue_item_ids,
                 trace_lineage_state=trace_lineage_state,
                 parallel_config=parallel_config,
             )
@@ -2958,6 +3055,7 @@ async def _process_queue(
     task_id = _queue_task_id(channel_id, thread_ts)
     override_resume_ids: dict[str, dict[str, str]] = {}
     trace_lineage_state: dict[str, tuple[int, int]] = {}
+    processed_queue_item_ids: list[int] = []
     processed_count = 0
     status_counts = {"completed": 0, "failed": 0, "cancelled": 0}
     final_queue_state = "running"
@@ -3121,6 +3219,7 @@ async def _process_queue(
                         log=log,
                         session=session,
                         items=group_items,
+                        processed_queue_item_ids=processed_queue_item_ids,
                         trace_lineage_state=trace_lineage_state,
                     )
                     for status in group_statuses:
@@ -3138,6 +3237,7 @@ async def _process_queue(
                         base_session=session,
                         sequence_label=str(processed_count),
                         override_resume_ids=override_resume_ids,
+                        processed_queue_item_ids=processed_queue_item_ids,
                         trace_lineage_state=trace_lineage_state,
                     )
                     if status:
@@ -3201,6 +3301,7 @@ async def _process_queue(
                     channel_id=channel_id,
                     thread_ts=thread_ts,
                     status_counts=status_counts,
+                    queue_item_ids=processed_queue_item_ids,
                 )
                 if queue_trace_summary is not None:
                     try:

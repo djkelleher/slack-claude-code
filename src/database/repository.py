@@ -58,8 +58,9 @@ class DatabaseRepository:
                               root_key, summary, created_at, completed_at"""
     _TRACE_RUN_SELECT = """id, session_id, channel_id, thread_ts, command_id, queue_item_id,
                         parent_run_id, root_run_id, milestone_id, execution_id, backend, model,
-                        working_directory, prompt, status, git_base_commit, git_head_commit,
-                        git_branch, remote_name, remote_url, summary, created_at, completed_at"""
+                        working_directory, prompt, status, git_base_commit, git_base_is_clean,
+                        git_head_commit, git_branch, remote_name, remote_url, summary, created_at,
+                        completed_at"""
     _TRACE_COMMIT_SELECT = """id, trace_run_id, commit_hash, parent_hash, short_hash, subject,
                            author_name, authored_at, commit_url, compare_url, origin, diff,
                            created_at"""
@@ -2048,6 +2049,22 @@ class DatabaseRepository:
                 raise RuntimeError("Failed to load created trace milestone")
             return TraceMilestone.from_row(row)
 
+    async def get_active_explicit_trace_milestone(
+        self, channel_id: str, thread_ts: Optional[str]
+    ) -> Optional[TraceMilestone]:
+        """Return the latest open explicit milestone for a scope."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_MILESTONE_SELECT}
+                   FROM trace_milestones
+                   WHERE {self._SESSION_SCOPE_WHERE} AND status = 'open' AND mode = 'explicit'
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1""",
+                self._scope_params(channel_id, thread_ts),
+            )
+            row = await cursor.fetchone()
+            return TraceMilestone.from_row(row) if row else None
+
     async def get_open_trace_milestone(
         self,
         channel_id: str,
@@ -2135,6 +2152,7 @@ class DatabaseRepository:
         working_directory: str,
         prompt: str,
         git_base_commit: Optional[str],
+        git_base_is_clean: Optional[bool],
         git_branch: Optional[str],
         remote_name: Optional[str],
         remote_url: Optional[str],
@@ -2145,8 +2163,9 @@ class DatabaseRepository:
                 """INSERT INTO trace_runs
                    (session_id, channel_id, thread_ts, command_id, queue_item_id, parent_run_id,
                     root_run_id, milestone_id, execution_id, backend, model, working_directory,
-                    prompt, status, git_base_commit, git_branch, remote_name, remote_url)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)""",
+                    prompt, status, git_base_commit, git_base_is_clean, git_branch, remote_name,
+                    remote_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     channel_id,
@@ -2162,6 +2181,7 @@ class DatabaseRepository:
                     working_directory,
                     prompt,
                     git_base_commit,
+                    None if git_base_is_clean is None else (1 if git_base_is_clean else 0),
                     git_branch,
                     remote_name,
                     remote_url,
