@@ -1032,8 +1032,12 @@ def _parse_block_marker_part(body: str, original_token: Optional[str] = None) ->
         count_text = lowered[len("loop") :].strip()
         if count_text.isdigit():
             return _parse_loop_marker_value(count_text, line, marker_type="loop_start")
+    if lowered == "branch":
+        return _parse_branch_marker_value("", marker_type="branch_start")
     if lowered.startswith("branch "):
         return _parse_branch_marker_value(body[len("branch ") :], marker_type="branch_start")
+    if lowered == "milestone":
+        return _parse_milestone_marker_value("", marker_type="milestone")
     if lowered.startswith("milestone "):
         return _parse_milestone_marker_value(body[len("milestone ") :], marker_type="milestone")
     if lowered.startswith("mode:"):
@@ -1067,7 +1071,9 @@ def _looks_like_queue_directive_part(body: str) -> bool:
         or lowered.startswith("at ")
         or lowered.startswith("clear")
         or lowered.startswith("replace")
+        or lowered == "branch"
         or lowered.startswith("branch ")
+        or lowered == "milestone"
         or lowered.startswith("milestone ")
         or lowered.startswith("mode:")
         or lowered.startswith("limit:")

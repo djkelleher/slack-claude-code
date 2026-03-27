@@ -27,6 +27,11 @@ def test_parse_parenthesized_mode_directive_line_returns_none_for_other_directiv
     assert parse_parenthesized_mode_directive_line("plain text") is None
 
 
+def test_parse_parenthesized_mode_directive_line_rejects_empty_double_paren_value() -> None:
+    with pytest.raises(ModeDirectiveError, match="Mode directive must include a mode value"):
+        parse_parenthesized_mode_directive_line("((mode: ))")
+
+
 def test_map_codex_alias_to_permission_mode() -> None:
     assert map_codex_alias_to_permission_mode("bypass") == "bypassPermissions"
     assert map_codex_alias_to_permission_mode("plan") == "plan"
@@ -67,6 +72,17 @@ def test_resolve_runtime_mode_directives_supports_semicolon_subdirectives() -> N
     assert resolved.plan_mode.models == ("claude-sonnet-4-6-high", "gpt-5.4-high")
     assert resolved.overrides.approval_mode == "on-request"
     assert resolved.overrides.sandbox_mode == "workspace-write"
+
+
+def test_resolve_runtime_mode_directives_supports_real_semicolon_mix_in_queue_context() -> None:
+    resolved = resolve_runtime_mode_directives(
+        "plan; approval: never; sandbox: read-only",
+        backend="codex",
+    )
+    assert resolved.plan_mode is None
+    assert resolved.overrides.permission_mode == "plan"
+    assert resolved.overrides.approval_mode == "never"
+    assert resolved.overrides.sandbox_mode == "read-only"
 
 
 def test_resolve_runtime_mode_directives_rejects_legacy_adversary_keys() -> None:

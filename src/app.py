@@ -19,6 +19,7 @@ from dataclasses import replace
 from datetime import timezone
 from pathlib import Path
 from typing import Any, Optional
+from uuid import uuid4
 
 from loguru import logger
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -40,6 +41,7 @@ from src.gemini.subprocess_executor import SubprocessExecutor as GeminiExecutor
 from src.handlers import register_commands
 from src.handlers.actions import register_actions
 from src.handlers.claude.queue import (
+    _usage_limit_specs_to_meta,
     ensure_queue_processor,
     ensure_queue_schedule_dispatcher,
 )
@@ -90,6 +92,8 @@ _TEXT_FILE_EXTENSIONS_FOR_QUEUE_PLAN = {
     ".yml",
 }
 _RUNTIME_MODE_DIRECTIVE_META_KEY = "runtime_mode_directive"
+_MILESTONE_MARKER_META_KEY = "milestone_marker"
+_USAGE_LIMITS_META_KEY = "usage_limits"
 _COMPACT_DIFF_COMMAND_RE = re.compile(r"^/diff(?P<selection>\d+(?::\d+)?)$", re.IGNORECASE)
 
 
@@ -907,18 +911,42 @@ async def _queue_structured_plan_message(
         return True
 
     try:
+        submission_backend = get_backend_for_model(_result_field(session, "model", None))
+        submission_token = f"qsub-{uuid4().hex[:8]}"
+
+        def build_entry_metadata(
+            item,
+            *,
+            base_meta: Optional[dict[str, object]] = None,
+        ) -> Optional[dict[str, object]]:
+            merged: dict[str, object] = dict(base_meta or {})
+            mode_directive = _result_field(item, "mode_directive", None)
+            if isinstance(mode_directive, str) and mode_directive.strip():
+                merged[_RUNTIME_MODE_DIRECTIVE_META_KEY] = mode_directive.strip()
+            milestone_name = _result_field(item, "milestone_name", None)
+            if isinstance(milestone_name, str) and milestone_name.strip():
+                merged[_MILESTONE_MARKER_META_KEY] = milestone_name.strip()
+            usage_limits = _result_field(item, "usage_limits", ())
+            if usage_limits:
+                merged[_USAGE_LIMITS_META_KEY] = _usage_limit_specs_to_meta(
+                    usage_limits,
+                    backend=submission_backend,
+                    submission_token=submission_token,
+                )
+            return merged or None
+
         if auto_after_each_prompt:
             queue_entries = []
             for item in materialized_prompts:
-                entry_meta: dict[str, object] = {
-                    "origin": "manual",
-                    "auto_each": True,
-                    "continue_round": 0,
-                    "check_round": 0,
-                }
-                mode_directive = _result_field(item, "mode_directive", None)
-                if isinstance(mode_directive, str) and mode_directive.strip():
-                    entry_meta[_RUNTIME_MODE_DIRECTIVE_META_KEY] = mode_directive.strip()
+                entry_meta = build_entry_metadata(
+                    item,
+                    base_meta={
+                        "origin": "manual",
+                        "auto_each": True,
+                        "continue_round": 0,
+                        "check_round": 0,
+                    },
+                )
                 queue_entries.append(
                     (
                         item.prompt,
@@ -931,17 +959,15 @@ async def _queue_structured_plan_message(
         else:
             queue_entries = []
             for item in materialized_prompts:
-                mode_directive = _result_field(item, "mode_directive", None)
-                if isinstance(mode_directive, str) and mode_directive.strip():
+                entry_meta = build_entry_metadata(item)
+                if entry_meta is not None:
                     queue_entries.append(
                         (
                             item.prompt,
                             item.working_directory_override,
                             item.parallel_group_id,
                             item.parallel_limit,
-                            {
-                                _RUNTIME_MODE_DIRECTIVE_META_KEY: mode_directive.strip(),
-                            },
+                            entry_meta,
                         )
                     )
                 else:

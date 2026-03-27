@@ -12,6 +12,7 @@ Required environment variables:
 Run with: pytest tests/integration/test_dsl_live.py --live -v
 """
 
+from datetime import datetime, timedelta
 import uuid
 
 import pytest
@@ -60,7 +61,7 @@ async def test_queue_plan_prompt_parenthesized(
     slack_user_client: AsyncWebClient,
     slack_test_channel: str,
 ):
-    """``(prompt)`` marker separates prompts in a queue plan."""
+    """``(prompt)`` is rejected as an unknown queue-plan marker."""
     marker = uuid.uuid4().hex[:8]
     text = f"[DSL {marker}] first prompt\n(prompt)\nsecond prompt"
     bot_msg, cleanup = await send_and_expect(
@@ -68,12 +69,11 @@ async def test_queue_plan_prompt_parenthesized(
         slack_user_client,
         slack_test_channel,
         text,
-        text_contains_any("item(s) from structured plan", "Unknown queue-plan marker"),
+        text_contains_any("Unknown queue-plan marker", "Invalid structured queue plan"),
     )
     try:
-        # Either it queues 2 items or rejects (prompt) as unknown — both confirm DSL routing
         body = bot_msg.get("text", "")
-        assert "structured" in body or "queue" in body.lower()
+        assert "Unknown queue-plan marker" in body or "Invalid structured queue plan" in body
     finally:
         await cleanup.cleanup()
 
@@ -220,6 +220,64 @@ async def test_queue_plan_mode_scoped_block(
 
 @pytest.mark.live
 @pytest.mark.asyncio
+async def test_queue_plan_milestone_directive(
+    slack_client: AsyncWebClient,
+    slack_user_client: AsyncWebClient,
+    slack_test_channel: str,
+):
+    """``(milestone <name>)`` records a milestone entry in the structured plan."""
+    marker = uuid.uuid4().hex[:8]
+    text = f"(milestone alpha-{marker})\n[DSL {marker}] milestone prompt"
+    bot_msg, cleanup = await send_and_expect(
+        slack_client,
+        slack_user_client,
+        slack_test_channel,
+        text,
+        text_contains("2"),
+    )
+    try:
+        body = bot_msg.get("text", "")
+        assert "item(s) from structured plan" in body
+        assert "2" in body
+    finally:
+        await cleanup.cleanup()
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_queue_plan_usage_limit_directive(
+    slack_client: AsyncWebClient,
+    slack_user_client: AsyncWebClient,
+    slack_test_channel: str,
+):
+    """``(limit: ...)`` is routed through structured-plan handling."""
+    marker = uuid.uuid4().hex[:8]
+    text = f"(limit: 2.5% 5h pause)\n[DSL {marker}] limited prompt\n(end)"
+    bot_msg, cleanup = await send_and_expect(
+        slack_client,
+        slack_user_client,
+        slack_test_channel,
+        text,
+        text_contains_any(
+            "item(s) from structured plan",
+            "usage-limit",
+            "not supported yet",
+            "Percentage-based queue usage limits",
+        ),
+    )
+    try:
+        body = bot_msg.get("text", "")
+        assert (
+            "structured" in body.lower()
+            or "usage-limit" in body.lower()
+            or "not supported" in body.lower()
+        )
+    finally:
+        await cleanup.cleanup()
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
 async def test_queue_plan_end_marker(
     slack_client: AsyncWebClient,
     slack_user_client: AsyncWebClient,
@@ -301,6 +359,31 @@ async def test_queue_plan_nested_blocks(
         # 2 iterations × 2 parallel = 4 items
         assert "item(s) from structured plan" in body
         assert "4" in body
+    finally:
+        await cleanup.cleanup()
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_queue_plan_nested_numeric_loops(
+    slack_client: AsyncWebClient,
+    slack_user_client: AsyncWebClient,
+    slack_test_channel: str,
+):
+    """Nested numeric loops expand multiplicatively."""
+    marker = uuid.uuid4().hex[:8]
+    text = f"(loop 2)\n" f"(loop 3)\n" f"[DSL {marker}] nested numeric prompt\n" f"(end)\n" f"(end)"
+    bot_msg, cleanup = await send_and_expect(
+        slack_client,
+        slack_user_client,
+        slack_test_channel,
+        text,
+        text_contains("6"),
+    )
+    try:
+        body = bot_msg.get("text", "")
+        assert "item(s) from structured plan" in body
+        assert "6" in body
     finally:
         await cleanup.cleanup()
 
@@ -470,6 +553,31 @@ async def test_submission_combined_prepend_auto(
     try:
         body = bot_msg.get("text", "")
         assert "Prepended" in body
+    finally:
+        await cleanup.cleanup()
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_submission_timer_directive(
+    slack_client: AsyncWebClient,
+    slack_user_client: AsyncWebClient,
+    slack_test_channel: str,
+):
+    """``(at HH:MM pause)`` persists scheduled controls in the queue flow."""
+    marker = uuid.uuid4().hex[:8]
+    hhmm = (datetime.now().astimezone() + timedelta(minutes=10)).strftime("%H:%M")
+    text = f"(at {hhmm} pause)\n[DSL {marker}] scheduled prompt"
+    bot_msg, cleanup = await send_and_expect(
+        slack_client,
+        slack_user_client,
+        slack_test_channel,
+        text,
+        text_contains_any("Scheduled controls:", "scheduled", "pause"),
+    )
+    try:
+        body = bot_msg.get("text", "")
+        assert "Scheduled controls:" in body or "scheduled" in body.lower()
     finally:
         await cleanup.cleanup()
 
@@ -694,10 +802,9 @@ async def test_queue_plan_mode_with_semicolons(
 ):
     """Semicolons in ``(mode: ...)`` separate multiple sub-directives in queue DSL."""
     marker = uuid.uuid4().hex[:8]
-    # bypass + mode in a scoped block
     text = (
-        f"(mode: bypass)\n"
-        f"[DSL {marker}] prompt with bypass scope\n"
+        f"(mode: plan; ask)\n"
+        f"[DSL {marker}] prompt with semicolon mode scope\n"
         f"***\n"
         f"[DSL {marker}] second prompt\n"
         f"(end)"

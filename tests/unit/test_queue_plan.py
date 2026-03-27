@@ -93,6 +93,13 @@ def test_parse_queue_plan_nested_mode_block_overrides_parent() -> None:
     ]
 
 
+def test_parse_queue_plan_nested_branch_and_mode_preserve_both_contexts() -> None:
+    prompts = parse_queue_plan_text("(branch feature/a)\n(mode: plan)\nrun\n(end2)")
+    assert [item.prompt for item in prompts] == ["run"]
+    assert [item.branch_name for item in prompts] == ["feature/a"]
+    assert [item.mode_directive for item in prompts] == ["plan"]
+
+
 def test_parse_queue_plan_usage_limit_block_scopes_prompts() -> None:
     prompts = parse_queue_plan_text("(limit: 2.5% 5h pause)\nfirst\n***\nsecond\n(end)\noutside")
     assert [item.prompt for item in prompts] == ["first", "second", "outside"]
@@ -126,6 +133,23 @@ def test_parse_queue_plan_loop_supports_single_line_statement() -> None:
     assert [item.prompt for item in prompts] == ["continue", "continue", "continue"]
 
 
+def test_parse_queue_plan_nested_numeric_loops_expand_multiplicatively() -> None:
+    prompts = parse_queue_plan_text("(loop2)\n(loop3)\nrun\n(end)\n(end)")
+    assert [item.prompt for item in prompts] == ["run"] * 6
+
+
+def test_parse_queue_plan_nested_numeric_loops_with_outer_and_inner_content() -> None:
+    prompts = parse_queue_plan_text("(loop2)\nouter\n(loop2)\ninner\n(end)\n(end)")
+    assert [item.prompt for item in prompts] == [
+        "outer",
+        "inner",
+        "inner",
+        "outer",
+        "inner",
+        "inner",
+    ]
+
+
 def test_parse_queue_plan_substitution_loop_expands_cartesian_product() -> None:
     prompts = parse_queue_plan_text(
         "FOR model IN (c56m, c46l)\n"
@@ -146,6 +170,18 @@ def test_parse_queue_plan_substitution_loop_expands_cartesian_product() -> None:
 def test_parse_queue_plan_substitution_loop_supports_single_line_statement() -> None:
     prompts = parse_queue_plan_text("FOR name IN (joe, tod) say hi to (name)")
     assert [item.prompt for item in prompts] == ["say hi to joe", "say hi to tod"]
+
+
+def test_parse_queue_plan_nested_for_and_loop_expand_correctly() -> None:
+    prompts = parse_queue_plan_text(
+        "FOR env IN (dev, prod)\n" "(loop2)\n" "deploy (env)\n" "(end)\n" "(end)"
+    )
+    assert [item.prompt for item in prompts] == [
+        "deploy dev",
+        "deploy dev",
+        "deploy prod",
+        "deploy prod",
+    ]
 
 
 def test_parse_queue_plan_substitution_loop_preserves_runtime_references() -> None:
@@ -249,6 +285,21 @@ def test_parse_queue_plan_rejects_empty_mode_marker() -> None:
         parse_queue_plan_text("(mode:)\nrun")
 
 
+def test_parse_queue_plan_rejects_empty_branch_marker() -> None:
+    with pytest.raises(QueuePlanError, match="Branch marker must include a branch name"):
+        parse_queue_plan_text("(branch)\nrun")
+
+
+def test_parse_queue_plan_rejects_empty_milestone_marker() -> None:
+    with pytest.raises(QueuePlanError, match="Milestone marker must include a milestone name"):
+        parse_queue_plan_text("(milestone)\nrun")
+
+
+def test_parse_queue_plan_rejects_inline_prompt_on_milestone_marker() -> None:
+    with pytest.raises(QueuePlanError, match="inline prompt is not supported on milestone"):
+        parse_queue_plan_text("(milestone alpha) run")
+
+
 def test_parse_queue_plan_end_closes_innermost_open_block() -> None:
     prompts = parse_queue_plan_text("(loop2)\n(branch f2)\nrun\n(end)")
     assert [item.prompt for item in prompts] == ["run", "run"]
@@ -264,6 +315,16 @@ def test_parse_queue_plan_end_with_count_closes_multiple_open_blocks() -> None:
 def test_parse_queue_plan_rejects_non_positive_loop_count() -> None:
     with pytest.raises(QueuePlanError, match="must be >= 1"):
         parse_queue_plan_text("(loop0)\nrun\n(end)")
+
+
+def test_parse_queue_plan_rejects_non_positive_parallel_width() -> None:
+    with pytest.raises(QueuePlanError, match="Width must be >= 1"):
+        parse_queue_plan_text("(parallel0)\nrun\n(end)")
+
+
+def test_parse_queue_plan_rejects_non_positive_end_count() -> None:
+    with pytest.raises(QueuePlanError, match="Count must be >= 1"):
+        parse_queue_plan_text("(loop2)\nrun\n(end0)")
 
 
 def test_parse_queue_plan_rejects_legacy_loop_marker() -> None:
@@ -408,6 +469,19 @@ def test_parse_queue_plan_submission_parses_timer_directives_with_hhmm_time() ->
     assert options.scheduled_controls[0].execute_at > now_utc
 
 
+@pytest.mark.parametrize("action", ["resume", "stop"])
+def test_parse_queue_plan_submission_supports_resume_and_stop_actions(action: str) -> None:
+    now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
+    options, body = parse_queue_plan_submission(
+        f"(at 2026-03-13T18:30:00+00:00 {action})\nfirst task",
+        now_utc=now,
+    )
+
+    assert body == "first task"
+    assert len(options.scheduled_controls) == 1
+    assert options.scheduled_controls[0].action == action
+
+
 def test_parse_queue_plan_submission_rejects_past_timer_directive() -> None:
     now = datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)
     with pytest.raises(QueuePlanError, match="in the past"):
@@ -424,6 +498,29 @@ def test_parse_queue_plan_submission_rejects_iso_time_without_timezone() -> None
             "(at 2026-03-13T18:30:00)\nfirst task",
             now_utc=now,
         )
+
+
+def test_parse_queue_plan_rejects_invalid_usage_limit_window() -> None:
+    with pytest.raises(QueuePlanError, match="Invalid usage-limit window"):
+        parse_queue_plan_text("(limit: 10% daily pause)\nrun")
+
+
+def test_parse_queue_plan_rejects_invalid_usage_limit_action() -> None:
+    with pytest.raises(QueuePlanError, match="Invalid usage-limit action"):
+        parse_queue_plan_text("(limit: 10% 5h stop)\nrun")
+
+
+@pytest.mark.parametrize("percent_text", ["0%", "101%"])
+def test_parse_queue_plan_rejects_invalid_usage_limit_percentage_bounds(
+    percent_text: str,
+) -> None:
+    with pytest.raises(QueuePlanError, match="Percent must be > 0 and <= 100"):
+        parse_queue_plan_text(f"(limit: {percent_text} pause)\nrun")
+
+
+def test_parse_queue_plan_rejects_invalid_usage_limit_percentage_format() -> None:
+    with pytest.raises(QueuePlanError, match="Invalid usage-limit percentage"):
+        parse_queue_plan_text("(limit: abc% pause)\nrun")
 
 
 @pytest.mark.asyncio
@@ -517,6 +614,38 @@ async def test_materialize_queue_plan_creates_missing_worktree() -> None:
     )
 
     assert materialized[0].working_directory_override == "/repo-worktrees/feature/new"
+    git_service.add_worktree.assert_awaited_once_with("/repo", "feature/new", from_ref=None)
+
+
+@pytest.mark.asyncio
+async def test_materialize_queue_plan_multiple_branch_sections_reuse_and_create_worktrees() -> None:
+    git_service = SimpleNamespace(
+        validate_git_repo=AsyncMock(return_value=True),
+        list_worktrees=AsyncMock(
+            return_value=[
+                SimpleNamespace(branch="main", path="/repo"),
+                SimpleNamespace(branch="feature/existing", path="/repo-worktrees/feature/existing"),
+            ]
+        ),
+        add_worktree=AsyncMock(return_value="/repo-worktrees/feature/new"),
+    )
+    materialized = await materialize_queue_plan_text(
+        text=(
+            "(branch feature/existing)\n"
+            "first\n"
+            "(end)\n"
+            "(branch feature/new)\n"
+            "second\n"
+            "(end)"
+        ),
+        working_directory="/repo",
+        git_service=git_service,
+    )
+
+    assert [item.working_directory_override for item in materialized] == [
+        "/repo-worktrees/feature/existing",
+        "/repo-worktrees/feature/new",
+    ]
     git_service.add_worktree.assert_awaited_once_with("/repo", "feature/new", from_ref=None)
 
 

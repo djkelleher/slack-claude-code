@@ -2612,6 +2612,55 @@ async def test_q_structured_auto_directives_add_metadata_and_finish_flag():
 
 
 @pytest.mark.asyncio
+async def test_q_structured_plan_persists_milestone_metadata():
+    """Structured `/q` should preserve milestone markers on queued items."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=9, position=9)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/q"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
+        with patch(
+            "src.handlers.claude.queue.materialize_queue_plan_text",
+            new=AsyncMock(
+                return_value=[
+                    SimpleNamespace(
+                        prompt="",
+                        milestone_name="alpha",
+                        working_directory_override=None,
+                        parallel_group_id=None,
+                        parallel_limit=None,
+                    )
+                ]
+            ),
+        ):
+            with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
+                await handler(
+                    ack=AsyncMock(),
+                    command={
+                        "channel_id": "C123",
+                        "user_id": "U123",
+                        "text": "(milestone alpha)",
+                        "command": "/q",
+                    },
+                    client=client,
+                    logger=MagicMock(),
+                )
+
+    deps.db.add_many_to_queue.assert_awaited_once()
+    queued_entries = deps.db.add_many_to_queue.await_args.kwargs["queue_entries"]
+    assert queued_entries == [("", None, None, None, {"milestone_marker": "alpha"})]
+
+
+@pytest.mark.asyncio
 async def test_q_structured_usage_limits_receive_submission_scoped_ids():
     """Separate structured submissions should namespace identical parsed limit ids."""
     app = _FakeApp()
@@ -2695,6 +2744,60 @@ async def test_q_structured_usage_limits_receive_submission_scoped_ids():
     assert first_limit["id"] != second_limit["id"]
     assert first_limit["id"].endswith(":limit-1")
     assert second_limit["id"].endswith(":limit-1")
+
+
+@pytest.mark.asyncio
+async def test_q_structured_plan_preserves_multiple_usage_limit_metadata():
+    """Structured `/q` should persist all usage-limit specs attached to one item."""
+    app = _FakeApp()
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(
+                return_value=Session(id=1, working_directory="/repo", model="gpt-5.4")
+            ),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=10, position=10)]),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/q"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    item = SimpleNamespace(
+        prompt="run",
+        working_directory_override=None,
+        parallel_group_id=None,
+        parallel_limit=None,
+        usage_limits=(
+            QueueUsageLimitSpec(limit_id="limit-1", percent=5.0, window="weekly", action="pause"),
+            QueueUsageLimitSpec(limit_id="limit-2", percent=2.5, window="5h", action="queue-only"),
+        ),
+    )
+    with patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True):
+        with patch(
+            "src.handlers.claude.queue.materialize_queue_plan_text",
+            new=AsyncMock(return_value=[item]),
+        ):
+            with patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()):
+                await handler(
+                    ack=AsyncMock(),
+                    command={
+                        "channel_id": "C123",
+                        "user_id": "U123",
+                        "text": "(limit: 5% pause)\n(limit: 2.5% 5h queue-only)\nrun\n(end2)",
+                        "command": "/q",
+                    },
+                    client=client,
+                    logger=MagicMock(),
+                )
+
+    queued_entries = deps.db.add_many_to_queue.await_args.kwargs["queue_entries"]
+    usage_limits = queued_entries[0][4]["usage_limits"]
+    assert len(usage_limits) == 2
+    assert [limit["window"] for limit in usage_limits] == ["weekly", "5h"]
+    assert [limit["action"] for limit in usage_limits] == ["pause", "queue-only"]
+    assert all(limit["backend"] == "codex" for limit in usage_limits)
 
 
 @pytest.mark.asyncio
@@ -2784,6 +2887,88 @@ async def test_q_add_structured_plan_rejects_clear_directive():
 
     deps.db.add_many_to_queue.assert_not_awaited()
     assert "handled by `/qc clear`" in client.chat_postMessage.await_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_q_add_structured_plan_persists_multiple_scheduled_controls():
+    """Structured `/q` should persist every parsed scheduled control."""
+    app = _FakeApp()
+    scheduled_start = datetime.now(timezone.utc) + timedelta(minutes=30)
+    scheduled_pause = scheduled_start + timedelta(minutes=15)
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=Session(id=1, working_directory="/repo")),
+            add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=4, position=4)]),
+            add_queue_scheduled_events=AsyncMock(
+                return_value=[SimpleNamespace(id=501), SimpleNamespace(id=502)]
+            ),
+            get_running_queue_items=AsyncMock(return_value=[]),
+            get_queue_control=AsyncMock(return_value=_queue_control()),
+            update_queue_control_state=AsyncMock(return_value=_queue_control("paused")),
+        )
+    )
+    register_queue_commands(app, deps)
+
+    handler = app.handlers["/q"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    with (
+        patch("src.handlers.claude.queue.contains_queue_plan_markers", return_value=True),
+        patch(
+            "src.handlers.claude.queue.parse_queue_plan_submission",
+            return_value=(
+                SimpleNamespace(
+                    replace_pending=True,
+                    directive_explicit=False,
+                    insertion_mode="append",
+                    insert_at=None,
+                    scheduled_controls=[
+                        SimpleNamespace(action="start", execute_at=scheduled_start),
+                        SimpleNamespace(action="pause", execute_at=scheduled_pause),
+                    ],
+                    auto_after_each_prompt=False,
+                    auto_after_queue_finish=False,
+                ),
+                "next",
+            ),
+        ),
+        patch(
+            "src.handlers.claude.queue.materialize_queue_plan_text",
+            new=AsyncMock(
+                return_value=[
+                    SimpleNamespace(
+                        prompt="next",
+                        working_directory_override=None,
+                        parallel_group_id=None,
+                        parallel_limit=None,
+                    )
+                ]
+            ),
+        ),
+        patch("src.handlers.claude.queue.ensure_queue_processor", new=AsyncMock()),
+        patch(
+            "src.handlers.claude.queue.ensure_queue_schedule_dispatcher",
+            new=AsyncMock(),
+        ) as mock_ensure_scheduler,
+    ):
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "(at 19:30 start)\n(at 19:45 pause)\nnext",
+                "command": "/q",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
+
+    deps.db.add_queue_scheduled_events.assert_awaited_once_with(
+        channel_id="C123",
+        thread_ts=None,
+        events=[("start", scheduled_start), ("pause", scheduled_pause)],
+    )
+    deps.db.update_queue_control_state.assert_awaited_once_with("C123", None, "paused")
+    mock_ensure_scheduler.assert_awaited_once()
 
 
 @pytest.mark.asyncio

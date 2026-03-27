@@ -26,6 +26,7 @@ from src.app import (
     configure_logging,
     slack_api_with_retry,
 )
+from src.tasks.queue_plan import QueueUsageLimitSpec
 
 
 class TestSlackApiRetry:
@@ -803,6 +804,125 @@ class TestStructuredQueuePlanRouting:
         )
 
     @pytest.mark.asyncio
+    async def test_queues_structured_plan_milestone_into_item_metadata(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
+                get_running_queue_items=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="running")),
+            )
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.materialize_queue_plan_text",
+                new=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(
+                            prompt="",
+                            milestone_name="alpha",
+                            working_directory_override=None,
+                            parallel_group_id=None,
+                            parallel_limit=None,
+                        )
+                    ]
+                ),
+            ):
+                with patch("src.app.ensure_queue_processor", new=AsyncMock()):
+                    handled = await _queue_structured_plan_message(
+                        client=client,
+                        deps=deps,
+                        session=session,
+                        channel_id="C123",
+                        thread_ts="123.456",
+                        prompt="(milestone alpha)",
+                        logger=MagicMock(),
+                    )
+
+        assert handled is True
+        deps.db.add_many_to_queue.assert_awaited_once_with(
+            session_id=1,
+            channel_id="C123",
+            thread_ts="123.456",
+            queue_entries=[
+                (
+                    "",
+                    None,
+                    None,
+                    None,
+                    {"milestone_marker": "alpha"},
+                )
+            ],
+            replace_pending=False,
+            insertion_mode="append",
+            insert_at=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_queues_structured_plan_usage_limits_into_item_metadata(self):
+        session = SimpleNamespace(id=1, working_directory="/repo", model="gpt-5.4")
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
+                get_running_queue_items=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="running")),
+            )
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.materialize_queue_plan_text",
+                new=AsyncMock(
+                    return_value=[
+                        SimpleNamespace(
+                            prompt="first",
+                            working_directory_override=None,
+                            parallel_group_id=None,
+                            parallel_limit=None,
+                            usage_limits=(
+                                QueueUsageLimitSpec(
+                                    limit_id="limit-1",
+                                    percent=5.0,
+                                    window="weekly",
+                                    action="pause",
+                                ),
+                                QueueUsageLimitSpec(
+                                    limit_id="limit-2",
+                                    percent=2.5,
+                                    window="5h",
+                                    action="queue-only",
+                                ),
+                            ),
+                        )
+                    ]
+                ),
+            ):
+                with patch("src.app.ensure_queue_processor", new=AsyncMock()):
+                    handled = await _queue_structured_plan_message(
+                        client=client,
+                        deps=deps,
+                        session=session,
+                        channel_id="C123",
+                        thread_ts="123.456",
+                        prompt="(limit: 5% pause)\n(limit: 2.5% 5h queue-only)\nfirst\n(end2)",
+                        logger=MagicMock(),
+                    )
+
+        assert handled is True
+        deps.db.add_many_to_queue.assert_awaited_once()
+        queued_entries = deps.db.add_many_to_queue.await_args.kwargs["queue_entries"]
+        usage_limits = queued_entries[0][4]["usage_limits"]
+        assert len(usage_limits) == 2
+        assert [limit["window"] for limit in usage_limits] == ["weekly", "5h"]
+        assert [limit["action"] for limit in usage_limits] == ["pause", "queue-only"]
+        assert all(limit["backend"] == "codex" for limit in usage_limits)
+
+    @pytest.mark.asyncio
     async def test_appended_structured_plan_message_keeps_pending_queue_when_directed(
         self,
     ):
@@ -946,6 +1066,78 @@ class TestStructuredQueuePlanRouting:
         )
         mock_scheduler.assert_awaited_once()
         assert "Scheduled controls:" in client.chat_postMessage.await_args.kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_structured_plan_message_persists_multiple_scheduled_controls(self):
+        session = SimpleNamespace(id=1, working_directory="/repo")
+        scheduled_start = datetime.now(timezone.utc) + timedelta(minutes=30)
+        scheduled_pause = scheduled_start + timedelta(minutes=15)
+        deps = SimpleNamespace(
+            db=SimpleNamespace(
+                add_many_to_queue=AsyncMock(return_value=[SimpleNamespace(id=1, position=1)]),
+                add_queue_scheduled_events=AsyncMock(
+                    return_value=[SimpleNamespace(id=900), SimpleNamespace(id=901)]
+                ),
+                get_running_queue_items=AsyncMock(return_value=[]),
+                get_queue_control=AsyncMock(return_value=SimpleNamespace(state="running")),
+                update_queue_control_state=AsyncMock(return_value=SimpleNamespace(state="paused")),
+            )
+        )
+        client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+        with patch("src.app.contains_queue_plan_markers", return_value=True):
+            with patch(
+                "src.app.parse_queue_plan_submission",
+                return_value=(
+                    SimpleNamespace(
+                        replace_pending=True,
+                        insertion_mode="append",
+                        insert_at=None,
+                        scheduled_controls=[
+                            SimpleNamespace(action="start", execute_at=scheduled_start),
+                            SimpleNamespace(action="pause", execute_at=scheduled_pause),
+                        ],
+                        auto_after_each_prompt=False,
+                        auto_after_queue_finish=False,
+                    ),
+                    "first",
+                ),
+            ):
+                with patch(
+                    "src.app.materialize_queue_plan_text",
+                    new=AsyncMock(
+                        return_value=[
+                            SimpleNamespace(
+                                prompt="first",
+                                working_directory_override=None,
+                                parallel_group_id=None,
+                                parallel_limit=None,
+                            )
+                        ]
+                    ),
+                ):
+                    with patch("src.app.ensure_queue_processor", new=AsyncMock()):
+                        with patch(
+                            "src.app.ensure_queue_schedule_dispatcher", new=AsyncMock()
+                        ) as mock_scheduler:
+                            handled = await _queue_structured_plan_message(
+                                client=client,
+                                deps=deps,
+                                session=session,
+                                channel_id="C123",
+                                thread_ts="123.456",
+                                prompt="(at 19:00 start)\n(at 19:15 pause)\nfirst",
+                                logger=MagicMock(),
+                            )
+
+        assert handled is True
+        deps.db.update_queue_control_state.assert_awaited_once_with("C123", "123.456", "paused")
+        deps.db.add_queue_scheduled_events.assert_awaited_once_with(
+            channel_id="C123",
+            thread_ts="123.456",
+            events=[("start", scheduled_start), ("pause", scheduled_pause)],
+        )
+        mock_scheduler.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_structured_plan_queue_restarts_when_replacing_paused_queue(self):
