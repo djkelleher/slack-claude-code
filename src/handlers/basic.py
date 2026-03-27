@@ -15,6 +15,7 @@ from src.utils.formatters.command import error_message, git_init_prompt
 from src.utils.formatters.directory import cwd_updated, directory_listing
 from src.utils.formatters.streaming import processing_message
 from src.utils.formatters.trace import (
+    queue_trace_summary_blocks,
     rollback_preview_blocks,
     trace_config_blocks,
     trace_lineage_blocks,
@@ -719,12 +720,7 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     channel=ctx.channel_id,
                     thread_ts=ctx.thread_ts,
                     text=summary.summary_text,
-                    blocks=[
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": summary.summary_text},
-                        }
-                    ],
+                    blocks=queue_trace_summary_blocks(summary),
                 )
                 return
 

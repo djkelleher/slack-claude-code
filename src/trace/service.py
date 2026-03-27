@@ -12,6 +12,7 @@ from loguru import logger
 
 from src.config import config
 from src.database.models import (
+    TraceEvent,
     RollbackEvent,
     TraceCommit,
     TraceConfig,
@@ -36,6 +37,7 @@ class FinalizedTraceRun:
 
     run: TraceRun
     commits: list[TraceCommit]
+    tool_events: list[TraceEvent]
     queue_summary_text: Optional[str] = None
 
 
@@ -263,6 +265,7 @@ class TraceService:
                     )
 
         commits = await self._capture_trace_commits(trace_run, fallback_commit_hash)
+        tool_events = await self._capture_git_tool_events(trace_run, git_tool_events)
         head_commit = None
         if commits:
             head_commit = commits[-1].commit_hash
@@ -345,7 +348,7 @@ class TraceService:
             event_type=openlineage_event_type,
             commits=commits,
         )
-        return FinalizedTraceRun(run=refreshed, commits=commits)
+        return FinalizedTraceRun(run=refreshed, commits=commits, tool_events=tool_events)
 
     async def build_queue_summary(
         self,
@@ -362,16 +365,17 @@ class TraceService:
         if not trace_config.enabled or not trace_config.report_queue_end:
             return None
 
-        runs: list[TraceRun] = []
-        for queue_item_id in dict.fromkeys(queue_item_ids):
-            run = await self.db.get_trace_run_by_queue_item(queue_item_id)
-            if run is not None:
-                runs.append(run)
+        runs = await self.db.list_trace_runs_by_queue_items(queue_item_ids)
         commit_count = 0
+        tool_event_count = 0
         milestone_names: list[str] = []
         milestones_by_id: dict[int, TraceMilestone] = {}
         for run in runs:
             commit_count += len(await self.db.list_trace_commits(run.id))
+            run_events = await self.db.list_trace_events(trace_run_id=run.id, limit=500)
+            tool_event_count += sum(
+                1 for event in run_events if event.event_type == "git_tool_event"
+            )
             if run.milestone_id:
                 milestone = await self.db.get_trace_milestone(run.milestone_id)
                 if milestone is not None:
@@ -386,7 +390,7 @@ class TraceService:
             f"Queue trace summary: {status_counts.get('completed', 0)} completed, "
             f"{status_counts.get('failed', 0)} failed, "
             f"{status_counts.get('cancelled', 0)} cancelled, "
-            f"{commit_count} commit(s) captured."
+            f"{commit_count} commit(s) captured across {len(runs)} traced run(s)."
         )
         return await self.db.create_trace_queue_summary(
             session_id=session_id,
@@ -396,8 +400,10 @@ class TraceService:
             payload={
                 "status_counts": status_counts,
                 "run_ids": [run.id for run in runs],
+                "run_count": len(runs),
                 "milestones": milestone_names,
                 "commit_count": commit_count,
+                "tool_event_count": tool_event_count,
             },
         )
 
@@ -523,8 +529,6 @@ class TraceService:
         root_key: Optional[str],
         milestone_name: Optional[str],
     ) -> Optional[TraceMilestone]:
-        if not config_obj.report_milestone:
-            return None
         active_explicit = await self.db.get_active_explicit_trace_milestone(channel_id, thread_ts)
         if milestone_name:
             return await self.start_explicit_milestone(
@@ -602,6 +606,33 @@ class TraceService:
                 }
             )
         return await self.db.replace_trace_commits(trace_run.id, commit_rows)
+
+    async def _capture_git_tool_events(
+        self,
+        trace_run: TraceRun,
+        git_tool_events: list[dict[str, Any]],
+    ) -> list[TraceEvent]:
+        """Persist captured git-capable tool activity as trace events."""
+        persisted_events: list[TraceEvent] = []
+        for event in git_tool_events:
+            tool_name = str(event.get("tool_name") or "").strip()
+            if not tool_name:
+                continue
+            persisted_events.append(
+                await self.db.create_trace_event(
+                    trace_run_id=trace_run.id,
+                    channel_id=trace_run.channel_id,
+                    thread_ts=trace_run.thread_ts,
+                    event_type="git_tool_event",
+                    payload={
+                        "tool_name": tool_name,
+                        "summary": str(event.get("summary") or "").strip(),
+                        "file_path": event.get("file_path"),
+                        "commit_hash": event.get("commit_hash"),
+                    },
+                )
+            )
+        return persisted_events
 
     async def _create_managed_commit(
         self,

@@ -1,11 +1,19 @@
 """Unit tests for trace service orchestration."""
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.database.models import RollbackEvent, TraceCommit, TraceConfig, TraceMilestone, TraceRun
+from src.database.models import (
+    RollbackEvent,
+    TraceCommit,
+    TraceConfig,
+    TraceEvent,
+    TraceMilestone,
+    TraceRun,
+)
 from src.git.models import GitStatus
 from src.trace.service import TraceService
 
@@ -267,12 +275,13 @@ class TestTraceService:
         )
 
         assert finalized.run.status == "completed"
+        assert finalized.tool_events == []
         git_service.get_commit_diffs_since.assert_awaited_once_with("/repo", "abc123")
         git_service.stage_all_changes.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_build_queue_summary_uses_only_processed_queue_items(self):
-        """Queue summaries should aggregate only the queue items from the drained queue."""
+    async def test_build_queue_summary_aggregates_all_runs_for_processed_queue_items(self):
+        """Queue summaries should aggregate full lineage for the processed queue items."""
         config = TraceConfig(
             channel_id="CTRACE",
             thread_ts="123.456",
@@ -281,6 +290,9 @@ class TestTraceService:
         )
         run_one = TraceRun(
             id=1, session_id=1, channel_id="CTRACE", thread_ts="123.456", queue_item_id=10
+        )
+        run_one_retry = TraceRun(
+            id=3, session_id=1, channel_id="CTRACE", thread_ts="123.456", queue_item_id=10
         )
         run_two = TraceRun(
             id=2,
@@ -293,8 +305,19 @@ class TestTraceService:
         summary_row = SimpleNamespace(id=99, summary_text="Queue trace summary")
         db = SimpleNamespace(
             get_trace_config=AsyncMock(return_value=config),
-            get_trace_run_by_queue_item=AsyncMock(side_effect=[run_one, run_two]),
-            list_trace_commits=AsyncMock(side_effect=[[TraceCommit(trace_run_id=1)], []]),
+            list_trace_runs_by_queue_items=AsyncMock(
+                return_value=[run_one, run_one_retry, run_two]
+            ),
+            list_trace_commits=AsyncMock(
+                side_effect=[[TraceCommit(trace_run_id=1)], [TraceCommit(trace_run_id=3)], []]
+            ),
+            list_trace_events=AsyncMock(
+                side_effect=[
+                    [TraceEvent(event_type="git_tool_event")],
+                    [TraceEvent(event_type="run_started")],
+                    [],
+                ]
+            ),
             get_trace_milestone=AsyncMock(
                 return_value=TraceMilestone(id=3, session_id=1, channel_id="CTRACE", name="M1")
             ),
@@ -312,8 +335,13 @@ class TestTraceService:
         )
 
         assert summary is summary_row
-        assert db.get_trace_run_by_queue_item.await_count == 2
+        db.list_trace_runs_by_queue_items.assert_awaited_once_with([10, 11, 10])
         db.create_trace_queue_summary.assert_awaited_once()
+        payload = db.create_trace_queue_summary.await_args.kwargs["payload"]
+        assert payload["run_ids"] == [1, 3, 2]
+        assert payload["run_count"] == 3
+        assert payload["commit_count"] == 2
+        assert payload["tool_event_count"] == 1
 
     @pytest.mark.asyncio
     async def test_build_queue_summary_closes_non_explicit_milestones_when_queue_drains(self):
@@ -343,8 +371,9 @@ class TestTraceService:
         )
         db = SimpleNamespace(
             get_trace_config=AsyncMock(return_value=config),
-            get_trace_run_by_queue_item=AsyncMock(return_value=run),
+            list_trace_runs_by_queue_items=AsyncMock(return_value=[run]),
             list_trace_commits=AsyncMock(return_value=[]),
+            list_trace_events=AsyncMock(return_value=[]),
             get_trace_milestone=AsyncMock(return_value=milestone),
             complete_trace_milestone=AsyncMock(return_value=True),
             create_trace_queue_summary=AsyncMock(return_value=SimpleNamespace(id=1)),
@@ -361,3 +390,128 @@ class TestTraceService:
         )
 
         db.complete_trace_milestone.assert_awaited_once_with(8, summary="Queue drained")
+
+    @pytest.mark.asyncio
+    async def test_finalize_run_persists_git_tool_events(self):
+        """Finalized runs should persist git tool activity for later reporting."""
+        trace_run = TraceRun(
+            id=21,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            execution_id="exec-21",
+            backend="codex",
+            working_directory="/repo",
+            prompt="Update docs",
+            status="running",
+            git_base_commit="abc123",
+            git_base_is_clean=True,
+        )
+        refreshed = TraceRun(
+            **{
+                **trace_run.__dict__,
+                "status": "completed",
+                "summary": "completed: 1 commit(s), no verification noted",
+                "completed_at": datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc),
+            }
+        )
+        tool_event = TraceEvent(
+            id=8,
+            trace_run_id=21,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            event_type="git_tool_event",
+            payload={"tool_name": "Edit", "summary": "Modified README.md"},
+        )
+        db = SimpleNamespace(
+            get_trace_run=AsyncMock(side_effect=[trace_run, refreshed]),
+            get_trace_config=AsyncMock(
+                return_value=TraceConfig(channel_id="CTRACE", thread_ts="123.456", enabled=True)
+            ),
+            replace_trace_commits=AsyncMock(
+                return_value=[TraceCommit(trace_run_id=21, short_hash="def456")]
+            ),
+            create_trace_event=AsyncMock(
+                side_effect=[tool_event, TraceEvent(event_type="run_finished")]
+            ),
+            update_trace_run=AsyncMock(return_value=True),
+            complete_trace_milestone=AsyncMock(),
+        )
+        git_service = SimpleNamespace(
+            get_commit_diffs_since=AsyncMock(
+                return_value=[
+                    TraceCommit(
+                        trace_run_id=21,
+                        commit_hash="def456",
+                        short_hash="def456",
+                        subject="Update docs",
+                    )
+                ]
+            ),
+        )
+        service = TraceService(db, git_service=git_service)
+        service._is_git_repo = AsyncMock(return_value=False)
+        service._schedule_openlineage_export = MagicMock()
+        service._capture_trace_commits = AsyncMock(
+            return_value=[
+                TraceCommit(
+                    trace_run_id=21,
+                    commit_hash="def456",
+                    short_hash="def456",
+                    subject="Update docs",
+                )
+            ]
+        )
+
+        finalized = await service.finalize_run_with_status(
+            trace_run_id=21,
+            final_status="completed",
+            output="done",
+            error=None,
+            git_tool_events=[
+                {
+                    "tool_name": "Edit",
+                    "summary": "Modified README.md",
+                    "file_path": "/repo/README.md",
+                }
+            ],
+        )
+
+        assert [event.event_type for event in finalized.tool_events] == ["git_tool_event"]
+        create_calls = db.create_trace_event.await_args_list
+        assert create_calls[0].kwargs["event_type"] == "git_tool_event"
+        assert create_calls[0].kwargs["payload"]["tool_name"] == "Edit"
+
+    @pytest.mark.asyncio
+    async def test_resolve_milestone_still_captures_when_milestone_reporting_disabled(self):
+        """Milestone grouping should still exist even if milestone notifications are disabled."""
+        config = TraceConfig(channel_id="CTRACE", thread_ts="123.456", report_milestone=False)
+        created = TraceMilestone(
+            id=9,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            name="Ship release",
+            mode="inferred",
+            root_key="prompt:abcd1234",
+        )
+        db = SimpleNamespace(
+            get_active_explicit_trace_milestone=AsyncMock(return_value=None),
+            get_open_trace_milestone=AsyncMock(return_value=None),
+            create_trace_milestone=AsyncMock(return_value=created),
+        )
+        service = TraceService(db, git_service=SimpleNamespace())
+
+        milestone = await service._resolve_milestone(
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            prompt="Ship release",
+            config_obj=config,
+            queue_item_id=None,
+            root_key=None,
+            milestone_name=None,
+        )
+
+        assert milestone is created
+        db.create_trace_milestone.assert_awaited_once()

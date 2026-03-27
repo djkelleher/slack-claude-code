@@ -2284,6 +2284,24 @@ class DatabaseRepository:
             row = await cursor.fetchone()
             return TraceRun.from_row(row) if row else None
 
+    async def list_trace_runs_by_queue_items(self, queue_item_ids: list[int]) -> list[TraceRun]:
+        """Return all trace runs attached to the provided queue items."""
+        normalized_ids = [int(queue_item_id) for queue_item_id in dict.fromkeys(queue_item_ids)]
+        if not normalized_ids:
+            return []
+
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""SELECT {self._TRACE_RUN_SELECT}
+                   FROM trace_runs
+                   WHERE queue_item_id IN ({placeholders})
+                   ORDER BY created_at ASC, id ASC""",
+                tuple(normalized_ids),
+            )
+            rows = await cursor.fetchall()
+            return [TraceRun.from_row(row) for row in rows]
+
     async def get_trace_run_by_execution_id(self, execution_id: str) -> Optional[TraceRun]:
         """Return one trace run by execution id."""
         async with self._get_connection() as db:

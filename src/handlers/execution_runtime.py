@@ -233,6 +233,11 @@ async def execute_prompt_with_runtime(
                     blocks=trace_step_report_blocks(
                         finalized_trace_run.run,
                         finalized_trace_run.commits,
+                        tool_events=(
+                            finalized_trace_run.tool_events
+                            if started_trace_run.config.report_tool
+                            else []
+                        ),
                         milestone=milestone,
                     ),
                 )

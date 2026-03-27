@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.database.models import CommandHistory, Session, TraceRun
+from src.database.models import CommandHistory, Session, TraceQueueSummary, TraceRun
 from src.handlers.basic import _parse_history_selection, register_basic_commands
 
 
@@ -551,3 +551,52 @@ async def test_trace_lineage_rejects_run_from_different_scope():
 
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == "No matching trace run found."
+
+
+@pytest.mark.asyncio
+async def test_trace_report_queue_uses_structured_summary_blocks():
+    """`/trace report queue` should render the stored queue summary payload."""
+    app = _FakeApp()
+    session = Session(id=17, working_directory="/workspace")
+    summary = TraceQueueSummary(
+        id=5,
+        session_id=17,
+        channel_id="C123",
+        thread_ts="123.456",
+        summary_text="Queue trace summary: 2 completed, 0 failed, 0 cancelled, 3 commit(s) captured across 3 traced run(s).",
+        payload={
+            "run_ids": [1, 2, 3],
+            "run_count": 3,
+            "commit_count": 3,
+            "tool_event_count": 2,
+            "milestones": ["Release"],
+        },
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=session),
+            list_trace_queue_summaries=AsyncMock(return_value=[summary]),
+        ),
+        executor=SimpleNamespace(),
+        trace_service=SimpleNamespace(get_config=AsyncMock()),
+    )
+    register_basic_commands(app, deps)
+
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    handler = app.handlers["/trace"]
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "report queue",
+            "command": "/trace",
+            "thread_ts": "123.456",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == summary.summary_text
+    assert "*Runs:* 3 | *Commits:* 3 | *Git Tool Events:* 2" in kwargs["blocks"][0]["text"]["text"]

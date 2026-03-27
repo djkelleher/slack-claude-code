@@ -6,6 +6,7 @@ from src.database.models import (
     RollbackEvent,
     TraceCommit,
     TraceConfig,
+    TraceEvent,
     TraceMilestone,
     TraceQueueSummary,
     TraceRun,
@@ -51,6 +52,7 @@ def trace_config_blocks(config: TraceConfig) -> list[dict]:
 def trace_step_report_blocks(
     run: TraceRun,
     commits: list[TraceCommit],
+    tool_events: Optional[list[TraceEvent]] = None,
     milestone: Optional[TraceMilestone] = None,
 ) -> list[dict]:
     """Render one step-level trace report."""
@@ -67,6 +69,17 @@ def trace_step_report_blocks(
     milestone_text = ""
     if milestone is not None:
         milestone_text = f"\n*Milestone:* {escape_markdown(milestone.name)}"
+    tool_lines: list[str] = []
+    for event in tool_events or []:
+        summary = str(event.payload.get("summary") or "").strip()
+        tool_name = str(event.payload.get("tool_name") or "git").strip()
+        file_path = str(event.payload.get("file_path") or "").strip()
+        line = f"`{escape_markdown(tool_name)}`"
+        if summary:
+            line += f" {escape_markdown(summary)}"
+        if file_path:
+            line += f" ({escape_markdown(file_path)})"
+        tool_lines.append(line)
     return [
         {
             "type": "section",
@@ -85,6 +98,19 @@ def trace_step_report_blocks(
             "type": "section",
             "text": {"type": "mrkdwn", "text": "*Commits:*\n" + "\n".join(commit_lines)},
         },
+        *(
+            [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "*Git Tool Activity:*\n" + "\n".join(tool_lines[:8]),
+                    },
+                }
+            ]
+            if tool_lines
+            else []
+        ),
     ]
 
 
@@ -163,6 +189,9 @@ def queue_trace_summary_blocks(summary: TraceQueueSummary) -> list[dict]:
     payload = summary.payload or {}
     milestones = payload.get("milestones") or []
     milestone_text = ", ".join(str(item) for item in milestones[:8]) if milestones else "none"
+    run_count = int(payload.get("run_count") or len(payload.get("run_ids") or []))
+    commit_count = int(payload.get("commit_count") or 0)
+    tool_event_count = int(payload.get("tool_event_count") or 0)
     return [
         {
             "type": "section",
@@ -170,6 +199,8 @@ def queue_trace_summary_blocks(summary: TraceQueueSummary) -> list[dict]:
                 "type": "mrkdwn",
                 "text": (
                     f"*Queue Trace Summary*\n{escape_markdown(summary.summary_text)}\n"
+                    f"*Runs:* {run_count} | *Commits:* {commit_count} | "
+                    f"*Git Tool Events:* {tool_event_count}\n"
                     f"*Milestones:* {escape_markdown(milestone_text)}"
                 ),
             },
