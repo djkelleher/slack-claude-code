@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.database.models import CommandHistory, Session, TraceQueueSummary, TraceRun
+from src.database.models import CommandHistory, Session, TraceMilestone, TraceQueueSummary, TraceRun
 from src.handlers.basic import _parse_history_selection, register_basic_commands
 
 
@@ -600,3 +600,85 @@ async def test_trace_report_queue_uses_structured_summary_blocks():
     kwargs = client.chat_postMessage.await_args.kwargs
     assert kwargs["text"] == summary.summary_text
     assert "*Runs:* 3 | *Commits:* 3 | *Git Tool Events:* 2" in kwargs["blocks"][0]["text"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_trace_lineage_shows_all_attempts_for_logical_run():
+    """`/trace lineage` should include all attempts for the same logical run."""
+    app = _FakeApp()
+    session = Session(id=18, working_directory="/workspace")
+    selected_run = TraceRun(
+        id=50,
+        session_id=18,
+        channel_id="C123",
+        thread_ts="123.456",
+        milestone_id=9,
+        logical_run_id="queue-item:9",
+        attempt_number=2,
+        execution_id="exec-50",
+        backend="codex",
+        working_directory="/workspace",
+        prompt="retry item",
+        status="completed",
+    )
+    first_attempt = TraceRun(
+        **{
+            **selected_run.__dict__,
+            "id": 49,
+            "attempt_number": 1,
+            "execution_id": "exec-49",
+            "status": "failed",
+        }
+    )
+    milestone = TraceMilestone(
+        id=9,
+        session_id=18,
+        channel_id="C123",
+        thread_ts="123.456",
+        name="Release",
+    )
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            get_or_create_session=AsyncMock(return_value=session),
+            get_trace_run=AsyncMock(return_value=selected_run),
+            list_trace_runs_for_logical_run=AsyncMock(return_value=[first_attempt, selected_run]),
+            list_trace_commits=AsyncMock(
+                side_effect=[
+                    [SimpleNamespace(short_hash="def456", subject="Retry success")],
+                    [],
+                    [SimpleNamespace(short_hash="def456", subject="Retry success")],
+                ]
+            ),
+            list_trace_events=AsyncMock(
+                side_effect=[
+                    [SimpleNamespace(event_type="run_finished")],
+                    [SimpleNamespace(event_type="run_finished")],
+                ]
+            ),
+            get_trace_milestone=AsyncMock(return_value=milestone),
+        ),
+        executor=SimpleNamespace(),
+        trace_service=SimpleNamespace(),
+    )
+    register_basic_commands(app, deps)
+
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+    handler = app.handlers["/trace"]
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "lineage run 50",
+            "command": "/trace",
+            "thread_ts": "123.456",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    attempts_block = kwargs["blocks"][2]["text"]["text"]
+    assert "*Attempts:*" in attempts_block
+    assert "attempt `1` | status `failed` | execution `exec-49`" in attempts_block
+    assert "attempt `2` | status `completed` | execution `exec-50`" in attempts_block

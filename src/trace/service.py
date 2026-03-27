@@ -531,6 +531,19 @@ class TraceService:
                 applied=True,
                 current_head_commit=current_head,
             )
+            await self.db.create_trace_event(
+                trace_run_id=trace_run_id,
+                channel_id=channel_id,
+                thread_ts=rollback_event.thread_ts,
+                event_type="rollback_applied",
+                payload={
+                    "target_commit": rollback_event.target_commit,
+                    "rollback_event_id": rollback_event_id,
+                    "checkpoint_name": None,
+                    "checkpoint_ref": None,
+                    "already_at_target": True,
+                },
+            )
             refreshed = await self.db.get_rollback_event(rollback_event_id)
             if refreshed is None:
                 raise RuntimeError("Rollback event disappeared after idempotent apply")
@@ -799,15 +812,45 @@ class TraceService:
     ) -> Optional[MilestoneReport]:
         if trace_run.milestone_id is None:
             return None
-        if trace_run.queue_item_id is None and trace_run.parent_run_id is None:
-            completed = await self.db.complete_trace_milestone(
-                trace_run.milestone_id, summary=trace_run.summary
-            )
-            if completed and trace_config.report_milestone:
-                milestone = await self.db.get_trace_milestone(trace_run.milestone_id)
-                if milestone is not None:
-                    return await self._build_milestone_report(milestone)
+        milestone = await self.db.get_trace_milestone(trace_run.milestone_id)
+        if milestone is None:
+            return None
+        if not await self._should_complete_milestone(trace_config, trace_run, milestone):
+            return None
+
+        completed = await self.db.complete_trace_milestone(
+            trace_run.milestone_id,
+            summary=trace_run.summary,
+        )
+        if completed and trace_config.report_milestone:
+            refreshed = await self.db.get_trace_milestone(trace_run.milestone_id)
+            if refreshed is not None:
+                return await self._build_milestone_report(refreshed)
         return None
+
+    async def _should_complete_milestone(
+        self,
+        trace_config: TraceConfig,
+        trace_run: TraceRun,
+        milestone: TraceMilestone,
+    ) -> bool:
+        """Return True when a finalized run should close its attached milestone."""
+        if trace_run.parent_run_id is not None:
+            return False
+        if milestone.mode == "explicit":
+            return False
+        if milestone.mode == "inferred":
+            return trace_run.queue_item_id is None
+        if milestone.mode != "fixed":
+            return False
+
+        if not trace_config.milestone_batch_size:
+            return False
+        runs = await self.db.list_trace_runs_for_milestone(milestone.id)
+        logical_runs = {
+            run.logical_run_id or run.execution_id for run in runs if run.parent_run_id is None
+        }
+        return len(logical_runs) >= trace_config.milestone_batch_size
 
     async def _build_milestone_report(self, milestone: TraceMilestone) -> MilestoneReport:
         list_runs = getattr(self.db, "list_trace_runs_for_milestone", None)

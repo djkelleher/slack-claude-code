@@ -120,6 +120,9 @@ def trace_lineage_blocks(
     commits: list[TraceCommit],
     events_count: int,
     milestone: Optional[TraceMilestone] = None,
+    related_runs: Optional[list[TraceRun]] = None,
+    related_run_commit_counts: Optional[dict[int, int]] = None,
+    related_run_event_counts: Optional[dict[int, int]] = None,
 ) -> list[dict]:
     """Render lineage details for one run."""
     lines = [
@@ -152,7 +155,41 @@ def trace_lineage_blocks(
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
         {"type": "section", "text": {"type": "mrkdwn", "text": "*Commits:*\n" + commit_text}},
+        *(
+            [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "*Attempts:*\n"
+                        + "\n".join(
+                            _format_related_run_line(
+                                related_run,
+                                related_run_commit_counts or {},
+                                related_run_event_counts or {},
+                            )
+                            for related_run in related_runs[:12]
+                        ),
+                    },
+                }
+            ]
+            if related_runs and len(related_runs) > 1
+            else []
+        ),
     ]
+
+
+def _format_related_run_line(
+    run: TraceRun,
+    commit_counts: dict[int, int],
+    event_counts: dict[int, int],
+) -> str:
+    """Render one attempt summary line for lineage views."""
+    return (
+        f"- attempt `{run.attempt_number}` | status `{run.status}` | "
+        f"execution `{run.execution_id}` | commits {commit_counts.get(run.id or 0, 0)} | "
+        f"events {event_counts.get(run.id or 0, 0)}"
+    )
 
 
 def rollback_preview_blocks(event: RollbackEvent, preview: RollbackPreview) -> list[dict]:

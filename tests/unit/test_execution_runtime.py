@@ -129,3 +129,51 @@ async def test_execute_prompt_with_runtime_finalizes_trace_run_on_cancellation()
         error="Cancelled",
         git_tool_events=[],
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_prompt_with_runtime_aborts_for_trace_git_init_preflight():
+    """Direct traced prompts should stop early when auto-commit needs git initialization."""
+    session = Session(id=1, channel_id="C123", model="gpt-5.4", working_directory="/repo")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(
+            add_command=AsyncMock(return_value=SimpleNamespace(id=11)),
+            update_command_status=AsyncMock(),
+        ),
+        trace_service=SimpleNamespace(
+            get_config=AsyncMock(return_value=SimpleNamespace(enabled=True, auto_commit=True)),
+            git_service=SimpleNamespace(
+                validate_git_repo=AsyncMock(return_value=False),
+                has_git_metadata_directory=MagicMock(return_value=False),
+            ),
+        ),
+    )
+    client = SimpleNamespace(
+        chat_postMessage=AsyncMock(return_value={"ts": "123.456"}),
+        chat_update=AsyncMock(),
+    )
+
+    with patch(
+        "src.handlers.execution_runtime.execute_for_session",
+        new=AsyncMock(),
+    ) as mock_execute:
+        result = await execute_prompt_with_runtime(
+            deps=deps,
+            session=session,
+            prompt="run tracing",
+            channel_id="C123",
+            thread_ts="123.456",
+            client=client,
+            logger=MagicMock(),
+        )
+
+    assert result.command_id == 11
+    mock_execute.assert_not_awaited()
+    deps.db.update_command_status.assert_any_await(
+        11,
+        "cancelled",
+        None,
+        "Trace auto-commit requires a git repository.",
+    )
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert "does not contain a `.git` directory" in kwargs["text"]

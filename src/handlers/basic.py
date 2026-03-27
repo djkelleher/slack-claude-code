@@ -311,6 +311,46 @@ def _trace_scope_matches(
     )
 
 
+async def _trace_lineage_context(
+    *,
+    db: object,
+    run: object,
+    channel_id: str,
+    thread_ts: str | None,
+) -> tuple[list[object], dict[int, int], dict[int, int]]:
+    """Load related attempts plus per-run commit/event counts for lineage rendering."""
+    related_runs = [run]
+    logical_run_id = str(run.logical_run_id or "").strip()
+    if logical_run_id:
+        try:
+            candidate_runs = await db.list_trace_runs_for_logical_run(logical_run_id)
+        except AttributeError:
+            candidate_runs = [run]
+        scoped_runs = [
+            candidate_run
+            for candidate_run in candidate_runs
+            if _trace_scope_matches(
+                current_channel_id=channel_id,
+                current_thread_ts=thread_ts,
+                run_channel_id=candidate_run.channel_id,
+                run_thread_ts=candidate_run.thread_ts,
+            )
+        ]
+        if scoped_runs:
+            related_runs = scoped_runs
+
+    commit_counts: dict[int, int] = {}
+    event_counts: dict[int, int] = {}
+    for related_run in related_runs:
+        if related_run.id is None:
+            continue
+        commit_counts[related_run.id] = len(await db.list_trace_commits(related_run.id))
+        event_counts[related_run.id] = len(
+            await db.list_trace_events(trace_run_id=related_run.id, limit=100)
+        )
+    return related_runs, commit_counts, event_counts
+
+
 def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
     """Register basic command handlers.
 
@@ -778,11 +818,16 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                     text="No matching trace run found.",
                 )
                 return
+            related_runs, commit_counts, event_counts = await _trace_lineage_context(
+                db=deps.db,
+                run=run,
+                channel_id=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+            )
             commits = await deps.db.list_trace_commits(run.id)
             milestone = (
                 await deps.db.get_trace_milestone(run.milestone_id) if run.milestone_id else None
             )
-            events = await deps.db.list_trace_events(trace_run_id=run.id, limit=100)
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
@@ -790,8 +835,11 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
                 blocks=trace_lineage_blocks(
                     run,
                     commits,
-                    events_count=len(events),
+                    events_count=event_counts.get(run.id, 0),
                     milestone=milestone,
+                    related_runs=related_runs,
+                    related_run_commit_counts=commit_counts,
+                    related_run_event_counts=event_counts,
                 ),
             )
             return

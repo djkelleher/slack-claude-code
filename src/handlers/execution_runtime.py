@@ -3,6 +3,7 @@
 import asyncio
 import uuid
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Optional
 
 from slack_sdk.errors import SlackApiError
@@ -11,7 +12,7 @@ from src.handlers.command_router import CommandRouteResult, execute_for_session
 from src.handlers.response_delivery import deliver_command_response
 from src.question.manager import QuestionManager
 from src.trace.service import TraceService
-from src.utils.formatters.command import error_message
+from src.utils.formatters.command import error_message, git_init_prompt
 from src.utils.formatters.streaming import processing_fallback_text, processing_message
 from src.utils.formatters.trace import milestone_report_blocks, trace_step_report_blocks
 from src.utils.mode_directives import PlanModeDirective
@@ -43,6 +44,67 @@ async def _cleanup_runtime_state(
     await QuestionManager.cancel_for_session(session_id)
 
 
+async def _maybe_abort_for_trace_git_setup(
+    *,
+    deps: Any,
+    session: Any,
+    channel_id: str,
+    thread_ts: Optional[str],
+    client: Any,
+    cmd_history_id: int,
+) -> Optional[ExecutionDeliveryResult]:
+    """Stop traced direct execution early when auto-commit needs repository setup."""
+    try:
+        trace_service = deps.trace_service
+    except AttributeError:
+        return None
+    if trace_service is None:
+        return None
+
+    try:
+        trace_config = await trace_service.get_config(channel_id, thread_ts)
+        git_service = trace_service.git_service
+    except AttributeError:
+        return None
+
+    if not trace_config.enabled or not trace_config.auto_commit:
+        return None
+    working_directory = session.working_directory
+    if await git_service.validate_git_repo(working_directory):
+        return None
+    if git_service.has_git_metadata_directory(working_directory):
+        return None
+
+    intro_text = (
+        f"Trace auto-commit is enabled, but `{working_directory}` does not contain a `.git` "
+        "directory. Initialize a repository, then rerun the prompt."
+    )
+    response = await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=intro_text,
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": intro_text}},
+            {"type": "divider"},
+            *git_init_prompt(working_directory),
+        ],
+    )
+    await deps.db.update_command_status(
+        cmd_history_id,
+        "cancelled",
+        None,
+        "Trace auto-commit requires a git repository.",
+    )
+    return ExecutionDeliveryResult(
+        route=CommandRouteResult(
+            backend=session.get_backend(),
+            result=SimpleNamespace(success=False, error="Trace auto-commit requires git init"),
+        ),
+        command_id=cmd_history_id,
+        message_ts=response["ts"],
+    )
+
+
 async def execute_prompt_with_runtime(
     *,
     deps: Any,
@@ -60,6 +122,16 @@ async def execute_prompt_with_runtime(
     """Execute a prompt through backend router and deliver final Slack output."""
     cmd_history = await deps.db.add_command(session.id, prompt)
     await deps.db.update_command_status(cmd_history.id, "running")
+    preflight_result = await _maybe_abort_for_trace_git_setup(
+        deps=deps,
+        session=session,
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        client=client,
+        cmd_history_id=cmd_history.id,
+    )
+    if preflight_result is not None:
+        return preflight_result
 
     initial_text = processing_text or processing_fallback_text(prompt)
     response = await client.chat_postMessage(

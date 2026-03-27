@@ -136,6 +136,48 @@ class TestTraceService:
         )
         db.create_trace_event.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_apply_rollback_records_event_when_already_at_target(self):
+        """Idempotent rollback applies should still emit an audit event."""
+        preview_event = RollbackEvent(
+            id=4,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            working_directory="/repo",
+            target_commit="abc123def456",
+            preview_diff="",
+        )
+        applied_event = RollbackEvent(
+            id=4,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            working_directory="/repo",
+            target_commit="abc123def456",
+            preview_diff="",
+            status="applied",
+            applied=True,
+        )
+        db = SimpleNamespace(
+            get_rollback_event=AsyncMock(side_effect=[preview_event, applied_event]),
+            update_rollback_event=AsyncMock(return_value=True),
+            create_trace_event=AsyncMock(),
+        )
+        git_service = SimpleNamespace(get_head_commit_hash=AsyncMock(return_value="abc123def456"))
+        service = TraceService(db, git_service=git_service)
+        service._is_git_repo = AsyncMock(return_value=True)
+
+        result = await service.apply_rollback(
+            rollback_event_id=4,
+            working_directory="/repo",
+            session_id=11,
+            channel_id="CTRACE",
+            trace_run_id=22,
+        )
+
+        assert result.applied is True
+        db.create_trace_event.assert_awaited_once()
+        assert db.create_trace_event.await_args.kwargs["payload"]["already_at_target"] is True
+
     def test_format_commit_snapshot_renders_lineage_metadata(self):
         """Commit snapshot formatting should preserve parent and origin metadata."""
         summary, content = TraceService.format_commit_snapshot(
@@ -400,6 +442,126 @@ class TestTraceService:
         )
 
         db.complete_trace_milestone.assert_awaited_once_with(8, summary="Queue drained")
+
+    @pytest.mark.asyncio
+    async def test_complete_milestone_if_ready_keeps_explicit_milestones_open(self):
+        """Explicit milestones should stay open across direct traced prompts."""
+        trace_run = TraceRun(
+            id=30,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            milestone_id=6,
+            logical_run_id="command:30",
+            execution_id="exec-30",
+            backend="codex",
+            prompt="Ship release",
+            status="completed",
+            summary="completed: 1 commit(s), no verification noted",
+        )
+        milestone = TraceMilestone(
+            id=6,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            name="Release",
+            mode="explicit",
+            status="open",
+        )
+        db = SimpleNamespace(
+            get_trace_milestone=AsyncMock(return_value=milestone),
+            complete_trace_milestone=AsyncMock(return_value=False),
+        )
+        service = TraceService(db, git_service=SimpleNamespace())
+
+        report = await service._complete_milestone_if_ready(
+            TraceConfig(channel_id="CTRACE", thread_ts="123.456"),
+            trace_run,
+        )
+
+        assert report is None
+        db.complete_trace_milestone.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_complete_milestone_if_ready_closes_fixed_batch_on_threshold(self):
+        """Fixed milestones should close once the configured logical batch size is reached."""
+        trace_run = TraceRun(
+            id=31,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            milestone_id=7,
+            logical_run_id="command:31",
+            execution_id="exec-31",
+            backend="codex",
+            prompt="Ship release",
+            status="completed",
+            summary="completed: 1 commit(s), no verification noted",
+        )
+        milestone = TraceMilestone(
+            id=7,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            name="Batch 1",
+            mode="fixed",
+            status="open",
+        )
+        prior_attempt = TraceRun(
+            id=29,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            milestone_id=7,
+            logical_run_id="command:29",
+            execution_id="exec-29",
+            backend="codex",
+            prompt="Prep release",
+            status="completed",
+        )
+        current_attempt_retry = TraceRun(
+            id=32,
+            session_id=1,
+            channel_id="CTRACE",
+            thread_ts="123.456",
+            milestone_id=7,
+            logical_run_id="command:31",
+            attempt_number=2,
+            execution_id="exec-31b",
+            backend="codex",
+            prompt="Ship release",
+            status="completed",
+        )
+        completed_milestone = TraceMilestone(
+            **{
+                **milestone.__dict__,
+                "status": "completed",
+                "summary": trace_run.summary,
+            }
+        )
+        db = SimpleNamespace(
+            get_trace_milestone=AsyncMock(side_effect=[milestone, completed_milestone]),
+            list_trace_runs_for_milestone=AsyncMock(
+                return_value=[prior_attempt, trace_run, current_attempt_retry]
+            ),
+            complete_trace_milestone=AsyncMock(return_value=True),
+            list_trace_commits=AsyncMock(return_value=[]),
+        )
+        service = TraceService(db, git_service=SimpleNamespace())
+
+        report = await service._complete_milestone_if_ready(
+            TraceConfig(
+                channel_id="CTRACE",
+                thread_ts="123.456",
+                report_milestone=True,
+                milestone_mode="fixed",
+                milestone_batch_size=2,
+            ),
+            trace_run,
+        )
+
+        assert report is not None
+        db.complete_trace_milestone.assert_awaited_once_with(7, summary=trace_run.summary)
 
     @pytest.mark.asyncio
     async def test_finalize_run_persists_git_tool_events(self):
