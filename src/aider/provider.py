@@ -3,6 +3,11 @@
 Aider is a multi-model AI coding assistant CLI (https://aider.chat).
 It supports 30+ model providers and operates on git repositories
 with automatic commits, repo mapping, and multi-file editing.
+
+Only models that aren't already reachable through the Claude or Codex
+backends are registered here. Aider's value is access to providers
+like DeepSeek, Ollama (local models), and OpenRouter that the other
+backends don't support.
 """
 
 from typing import Any, Optional
@@ -13,10 +18,9 @@ from src.backends.models import ModelDefinition, ModelTier
 class AiderBackendProvider:
     """Backend provider for Aider CLI.
 
-    Aider supports many models from different providers (OpenAI, Anthropic,
-    Google, DeepSeek, etc.). The models registered here are the ones that
-    perform best on Aider's coding benchmarks. Users can specify any
-    model supported by Aider via ``--model``.
+    Registers only models from providers not covered by Claude or Codex
+    backends. Users can still specify any Aider-supported model via the
+    full ``--model`` syntax (e.g., ``/model aider/openrouter/meta-llama/...``).
     """
 
     def __init__(self, executor: Any) -> None:
@@ -36,76 +40,40 @@ class AiderBackendProvider:
     def get_models(self) -> list[ModelDefinition]:
         return [
             ModelDefinition(
-                id="aider/sonnet",
-                backend_id="aider",
-                display_name="Aider (Sonnet)",
-                aliases=("aider", "aider-sonnet"),
-                description="Aider with Claude Sonnet - top coding benchmark performer",
-                tier=ModelTier.COMPLEX,
-                quality_score=4,
-                is_default=True,
-                cli_value="sonnet",
-                capability_reasoning=True,
-                capability_code=True,
-            ),
-            ModelDefinition(
-                id="aider/opus",
-                backend_id="aider",
-                display_name="Aider (Opus)",
-                aliases=("aider-opus",),
-                description="Aider with Claude Opus for complex reasoning tasks",
-                tier=ModelTier.REASONING,
-                quality_score=5,
-                cli_value="opus",
-                capability_reasoning=True,
-                capability_code=True,
-            ),
-            ModelDefinition(
                 id="aider/deepseek",
                 backend_id="aider",
                 display_name="Aider (DeepSeek)",
-                aliases=("aider-deepseek",),
-                description="Aider with DeepSeek Chat V3 - strong open-source model",
+                aliases=("aider", "aider-deepseek"),
+                description="Aider with DeepSeek V3 - strong open-source coding model",
                 tier=ModelTier.STANDARD,
                 quality_score=3,
+                is_default=True,
                 cli_value="deepseek",
                 capability_reasoning=True,
                 capability_code=True,
             ),
             ModelDefinition(
-                id="aider/gpt-4o",
+                id="aider/ollama",
                 backend_id="aider",
-                display_name="Aider (GPT-4o)",
-                aliases=("aider-gpt4o", "aider-4o"),
-                description="Aider with OpenAI GPT-4o",
-                tier=ModelTier.COMPLEX,
-                quality_score=4,
-                cli_value="gpt-4o",
-                capability_reasoning=True,
-                capability_code=True,
-            ),
-            ModelDefinition(
-                id="aider/gemini",
-                backend_id="aider",
-                display_name="Aider (Gemini Pro)",
-                aliases=("aider-gemini",),
-                description="Aider with Google Gemini 2.5 Pro",
-                tier=ModelTier.COMPLEX,
-                quality_score=4,
-                cli_value="gemini/gemini-2.5-pro-preview-05-06",
-                capability_reasoning=True,
-                capability_code=True,
-            ),
-            ModelDefinition(
-                id="aider/haiku",
-                backend_id="aider",
-                display_name="Aider (Haiku)",
-                aliases=("aider-haiku",),
-                description="Aider with Claude Haiku for fast lightweight tasks",
-                tier=ModelTier.FAST,
+                display_name="Aider (Ollama)",
+                aliases=("aider-ollama", "aider-local"),
+                description="Aider with local Ollama models",
+                tier=ModelTier.STANDARD,
                 quality_score=2,
-                cli_value="haiku",
+                cli_value="ollama/qwen2.5-coder:32b",
                 capability_reasoning=False,
+                capability_code=True,
+            ),
+            ModelDefinition(
+                id="aider/openrouter",
+                backend_id="aider",
+                display_name="Aider (OpenRouter)",
+                aliases=("aider-openrouter", "aider-or"),
+                description="Aider via OpenRouter - access 300+ models",
+                tier=ModelTier.COMPLEX,
+                quality_score=4,
+                cli_value="openrouter/anthropic/claude-sonnet-4",
+                capability_reasoning=True,
                 capability_code=True,
             ),
         ]
