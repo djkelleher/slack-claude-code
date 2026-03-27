@@ -94,7 +94,10 @@ async def test_command_shows_usage_when_subcommand_missing():
 async def test_command_reports_not_git_repo():
     session = Session(working_directory="/not-a-repo")
     deps = _deps_for_session(session)
-    git_service = SimpleNamespace(validate_git_repo=AsyncMock(return_value=False))
+    git_service = SimpleNamespace(
+        validate_git_repo=AsyncMock(return_value=False),
+        has_git_metadata_directory=MagicMock(return_value=True),
+    )
     app = _FakeApp()
 
     with patch("src.handlers.claude.worktree.GitService", return_value=git_service):
@@ -116,6 +119,39 @@ async def test_command_reports_not_git_repo():
     )
 
     assert client.chat_postMessage.await_args.kwargs["text"] == "Not a git repository"
+
+
+@pytest.mark.asyncio
+async def test_command_offers_git_init_when_git_directory_is_missing():
+    session = Session(working_directory="/not-a-repo")
+    deps = _deps_for_session(session)
+    git_service = SimpleNamespace(
+        validate_git_repo=AsyncMock(return_value=False),
+        has_git_metadata_directory=MagicMock(return_value=False),
+    )
+    app = _FakeApp()
+
+    with patch("src.handlers.claude.worktree.GitService", return_value=git_service):
+        register_worktree_commands(app, deps)
+
+    handler = app.handlers["/worktree"]
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+    await handler(
+        ack=AsyncMock(),
+        command={
+            "channel_id": "C123",
+            "user_id": "U123",
+            "text": "list",
+            "command": "/worktree",
+        },
+        client=client,
+        logger=MagicMock(),
+    )
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Initialize a git repository"
+    assert kwargs["blocks"][2]["elements"][0]["action_id"] == "git_init_repo"
 
 
 @pytest.mark.asyncio

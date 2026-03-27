@@ -22,7 +22,7 @@ from src.tasks.manager import TaskManager
 from src.utils.detail_cache import DetailCache
 from src.utils.execution_scope import build_session_scope
 from src.utils.formatters.base import markdown_to_mrkdwn
-from src.utils.formatters.command import error_message
+from src.utils.formatters.command import error_message, git_init_success
 from src.utils.formatters.job import parallel_job_status, sequential_job_status
 from src.utils.formatters.tool_blocks import format_tool_detail_blocks
 from src.utils.model_selection import (
@@ -701,6 +701,46 @@ def register_actions(app: AsyncApp, deps: HandlerDependencies) -> None:
             )
 
         await _run_worktree_action(_handler, body, action, client, logger)
+
+    @app.action("git_init_repo")
+    async def handle_git_init_repo(ack, action, body, client, logger):
+        """Initialize a git repository for the selected working directory."""
+        await ack()
+
+        try:
+            action_value = action["value"]
+            max_size = config.timeouts.limits.max_action_value_size
+            if len(action_value) > max_size:
+                logger.error(f"Action value too large: {len(action_value)} bytes")
+                return
+            payload = json.loads(action_value)
+            working_directory = str(payload["cwd"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            logger.error(f"Invalid git init action payload: {e}")
+            return
+
+        channel_id = body["channel"]["id"]
+        message_ts = body.get("message", {}).get("ts")
+        user_id = body["user"]["id"]
+
+        git_service = GitService()
+        try:
+            branch_name = await git_service.initialize_repo(working_directory)
+        except GitError as e:
+            await client.chat_postEphemeral(
+                channel=channel_id,
+                user=user_id,
+                text=f"Git error: {e}",
+            )
+            return
+
+        if message_ts:
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text="Git repository created",
+                blocks=git_init_success(working_directory, branch_name),
+            )
 
     # -------------------------------------------------------------------------
     # Permission approval handlers

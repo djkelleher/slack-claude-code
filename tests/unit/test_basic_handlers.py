@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -415,3 +415,41 @@ async def test_diff_reports_when_selected_prompts_have_no_commits():
         "No new commits recorded for this prompt."
         in client.chat_postMessage.await_args.kwargs["blocks"][2]["text"]["text"]
     )
+
+
+@pytest.mark.asyncio
+async def test_rollback_offers_git_init_when_git_directory_is_missing():
+    """`/rollback` should offer repository initialization when `.git` is absent."""
+    app = _FakeApp()
+    session = Session(id=14, working_directory="/workspace")
+    deps = SimpleNamespace(
+        db=SimpleNamespace(get_or_create_session=AsyncMock(return_value=session)),
+        executor=SimpleNamespace(),
+        trace_service=SimpleNamespace(),
+    )
+    register_basic_commands(app, deps)
+
+    git_service = SimpleNamespace(
+        validate_git_repo=AsyncMock(return_value=False),
+        has_git_metadata_directory=MagicMock(return_value=False),
+    )
+    client = SimpleNamespace(chat_postMessage=AsyncMock())
+
+    handler = app.handlers["/rollback"]
+    with patch("src.handlers.basic.GitService", return_value=git_service):
+        await handler(
+            ack=AsyncMock(),
+            command={
+                "channel_id": "C123",
+                "user_id": "U123",
+                "text": "HEAD~1",
+                "command": "/rollback",
+                "thread_ts": "123.456",
+            },
+            client=client,
+            logger=MagicMock(),
+        )
+
+    kwargs = client.chat_postMessage.await_args.kwargs
+    assert kwargs["text"] == "Initialize a git repository"
+    assert kwargs["blocks"][2]["elements"][0]["action_id"] == "git_init_repo"

@@ -1,5 +1,7 @@
 """Command response formatting."""
 
+import json
+
 from typing import Optional
 
 from src.config import config
@@ -174,6 +176,82 @@ def error_message(error: str) -> list[dict]:
                 "text": f":x: *Error*\n```{sanitized}```",
             },
         }
+    ]
+
+
+def git_init_prompt(working_directory: str) -> list[dict]:
+    """Build a Slack prompt offering to initialize a git repository."""
+    payload = json.dumps({"cwd": working_directory}, separators=(",", ":"))
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    "*Git repository required*\n"
+                    f"`{escape_markdown(working_directory)}` does not contain a `.git` directory."
+                ),
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "Initialize a new repository here to enable git-backed features.",
+                }
+            ],
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Create git repo"},
+                    "style": "primary",
+                    "action_id": "git_init_repo",
+                    "value": payload,
+                    "confirm": {
+                        "title": {"type": "plain_text", "text": "Create git repo?"},
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"This will run `git init -b main` in "
+                                f"`{escape_markdown(working_directory)}`."
+                            ),
+                        },
+                        "confirm": {"type": "plain_text", "text": "Create"},
+                        "deny": {"type": "plain_text", "text": "Cancel"},
+                    },
+                }
+            ],
+        },
+    ]
+
+
+def git_init_success(working_directory: str, branch_name: str) -> list[dict]:
+    """Build a Slack success state after repository initialization."""
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    ":white_check_mark: *Git repository created*\n"
+                    f"`{escape_markdown(working_directory)}` is now initialized on "
+                    f"branch `{escape_markdown(branch_name)}`."
+                ),
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "Git commands can run here now. Worktree operations still need a first commit.",
+                }
+            ],
+        },
     ]
 
 

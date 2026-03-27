@@ -67,6 +67,16 @@ class GitService:
         if len(message) > 10000:
             raise GitError("Commit message too long (max 10000 characters)")
 
+    def has_git_metadata_directory(self, working_directory: str) -> bool:
+        """Return True when the directory contains a local `.git` entry."""
+        try:
+            path = Path(working_directory).expanduser().resolve()
+        except OSError:
+            return False
+        if not path.exists() or not path.is_dir():
+            return False
+        return (path / ".git").exists()
+
     async def _run_git_command(self, working_directory: str, *args: str) -> tuple[str, str, int]:
         """Run a git command and return (stdout, stderr, returncode)."""
         self._validate_working_directory(working_directory)
@@ -116,6 +126,49 @@ class GitService:
             return returncode == 0
         except Exception:
             return False
+
+    async def initialize_repo(
+        self, working_directory: str, initial_branch: str = "main"
+    ) -> str:
+        """Initialize a new git repository in the working directory."""
+        self._validate_working_directory(working_directory)
+        self._validate_branch_name(initial_branch)
+
+        if await self.validate_git_repo(working_directory):
+            raise GitError("Git repository already exists")
+        if self.has_git_metadata_directory(working_directory):
+            raise GitError(
+                "Found `.git` in the working directory, but it is not a valid git repository"
+            )
+
+        stdout, stderr, returncode = await self._run_git_command(
+            working_directory, "init", "-b", initial_branch
+        )
+        if returncode != 0:
+            combined_output = f"{stdout}\n{stderr}".strip().lower()
+            if (
+                "unknown switch" in combined_output
+                or "unknown option" in combined_output
+                or "invalid option" in combined_output
+            ) and "b" in combined_output:
+                stdout, stderr, returncode = await self._run_git_command(working_directory, "init")
+                if returncode != 0:
+                    raise GitError(f"Failed to initialize git repository: {stderr or stdout}")
+                _, symbolic_ref_stderr, symbolic_ref_code = await self._run_git_command(
+                    working_directory, "symbolic-ref", "HEAD", f"refs/heads/{initial_branch}"
+                )
+                if symbolic_ref_code != 0:
+                    raise GitError(
+                        "Initialized git repository, but failed to set the default branch: "
+                        f"{symbolic_ref_stderr}"
+                    )
+            else:
+                raise GitError(f"Failed to initialize git repository: {stderr or stdout}")
+
+        if not await self.validate_git_repo(working_directory):
+            raise GitError("Git initialization completed, but repository validation still failed")
+
+        return initial_branch
 
     async def get_status(self, working_directory: str) -> GitStatus:
         """Get git status."""

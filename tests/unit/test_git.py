@@ -241,6 +241,36 @@ class TestGitServiceAsync:
             result = await service.validate_git_repo(str(tmp_path))
             assert result is False
 
+    def test_has_git_metadata_directory(self, tmp_path):
+        """has_git_metadata_directory checks for a local `.git` entry."""
+        service = GitService()
+        assert service.has_git_metadata_directory(str(tmp_path)) is False
+
+        (tmp_path / ".git").mkdir()
+        assert service.has_git_metadata_directory(str(tmp_path)) is True
+
+    @pytest.mark.asyncio
+    async def test_initialize_repo_runs_git_init(self, tmp_path):
+        """initialize_repo creates a new repository on the requested branch."""
+        service = GitService()
+        with patch.object(service, "validate_git_repo", new=AsyncMock(side_effect=[False, True])):
+            with patch.object(service, "_run_git_command", new=AsyncMock()) as mock_cmd:
+                mock_cmd.return_value = ("Initialized empty Git repository", "", 0)
+                branch = await service.initialize_repo(str(tmp_path))
+
+        assert branch == "main"
+        mock_cmd.assert_awaited_once_with(str(tmp_path), "init", "-b", "main")
+
+    @pytest.mark.asyncio
+    async def test_initialize_repo_rejects_invalid_existing_git_metadata(self, tmp_path):
+        """initialize_repo refuses to overwrite an existing `.git` entry."""
+        service = GitService()
+        (tmp_path / ".git").mkdir()
+
+        with patch.object(service, "validate_git_repo", new=AsyncMock(return_value=False)):
+            with pytest.raises(GitError, match="Found `.git` in the working directory"):
+                await service.initialize_repo(str(tmp_path))
+
     @pytest.mark.asyncio
     async def test_get_diff_not_git_repo(self, tmp_path):
         """get_diff raises GitError for non-repos."""

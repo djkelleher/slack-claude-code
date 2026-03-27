@@ -17,7 +17,7 @@ from src.handlers.worktree_ops import (
     switch_session_to_worktree,
     worktree_is_clean,
 )
-from src.utils.formatters.command import error_message
+from src.utils.formatters.command import error_message, git_init_prompt
 
 from ..base import CommandContext, HandlerDependencies, slack_command
 
@@ -214,11 +214,18 @@ def register_worktree_commands(app: AsyncApp, deps: HandlerDependencies) -> None
                 )
 
             if not await git_service.validate_git_repo(session.working_directory):
-                await ctx.client.chat_postMessage(
-                    channel=ctx.channel_id,
-                    text="Not a git repository",
-                    blocks=error_message(f"Not a git repository: {session.working_directory}"),
-                )
+                if not git_service.has_git_metadata_directory(session.working_directory):
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        text="Initialize a git repository",
+                        blocks=git_init_prompt(session.working_directory),
+                    )
+                else:
+                    await ctx.client.chat_postMessage(
+                        channel=ctx.channel_id,
+                        text="Not a git repository",
+                        blocks=error_message(f"Not a git repository: {session.working_directory}"),
+                    )
                 return
 
             if not ctx.text:

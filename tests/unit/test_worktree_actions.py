@@ -48,9 +48,39 @@ async def test_registers_worktree_action_handlers():
 
     register_actions(app, deps)
 
+    assert "git_init_repo" in app.actions
     assert "worktree_switch" in app.actions
     assert "worktree_merge_current" in app.actions
     assert "worktree_remove" in app.actions
+
+
+@pytest.mark.asyncio
+async def test_git_init_action_initializes_repository_and_updates_message():
+    app = _FakeApp()
+    deps = SimpleNamespace(db=SimpleNamespace())
+    register_actions(app, deps)
+
+    git_service = SimpleNamespace(initialize_repo=AsyncMock(return_value="main"))
+    client = SimpleNamespace(
+        chat_update=AsyncMock(),
+        chat_postMessage=AsyncMock(),
+        chat_postEphemeral=AsyncMock(),
+    )
+
+    with patch("src.handlers.actions.GitService", return_value=git_service):
+        await app.actions["git_init_repo"](
+            ack=AsyncMock(),
+            action={"value": json.dumps({"cwd": "/repo"})},
+            body=_base_body(),
+            client=client,
+            logger=MagicMock(),
+        )
+
+    git_service.initialize_repo.assert_awaited_once_with("/repo")
+    client.chat_update.assert_awaited_once()
+    kwargs = client.chat_update.await_args.kwargs
+    assert kwargs["text"] == "Git repository created"
+    assert "Git repository created" in kwargs["blocks"][0]["text"]["text"]
 
 
 @pytest.mark.asyncio

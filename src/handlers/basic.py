@@ -11,7 +11,7 @@ from src.config import config
 from src.database.models import CommandHistory
 from src.git.service import GitService
 from src.handlers.response_delivery import deliver_command_response
-from src.utils.formatters.command import error_message
+from src.utils.formatters.command import error_message, git_init_prompt
 from src.utils.formatters.directory import cwd_updated, directory_listing
 from src.utils.formatters.streaming import processing_message
 from src.utils.formatters.trace import (
@@ -776,6 +776,14 @@ def register_basic_commands(app: AsyncApp, deps: HandlerDependencies) -> None:
         )
         git_service = GitService()
         if not await git_service.validate_git_repo(session.working_directory):
+            if not git_service.has_git_metadata_directory(session.working_directory):
+                await ctx.client.chat_postMessage(
+                    channel=ctx.channel_id,
+                    thread_ts=ctx.thread_ts,
+                    text="Initialize a git repository",
+                    blocks=git_init_prompt(session.working_directory),
+                )
+                return
             await ctx.client.chat_postMessage(
                 channel=ctx.channel_id,
                 thread_ts=ctx.thread_ts,
